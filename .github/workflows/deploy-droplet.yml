@@ -15,11 +15,7 @@ jobs:
       - name: Create deployment archive
         run: |
           set -euo pipefail
-          tar \
-            --exclude=.git \
-            --exclude=node_modules \
-            -czf polymarket-signals.tar.gz \
-            .
+          git archive --format=tar.gz --output=polymarket-signals.tar.gz HEAD
 
       - name: Upload archive to droplet
         uses: appleboy/scp-action@v0.1.7
