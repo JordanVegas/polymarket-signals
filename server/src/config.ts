@@ -21,4 +21,13 @@ export const config = {
   maxSignals: parseNumber(process.env.MAX_SIGNALS, 75),
   marketRefreshMs: parseNumber(process.env.MARKET_REFRESH_MS, 10 * 60_000),
   tradePollMs: parseNumber(process.env.TRADE_POLL_MS, 2_500),
+  historicalBackfillLimit: parseNumber(process.env.HISTORICAL_BACKFILL_LIMIT, 2_000),
+  historicalBackfillLookbackHours: parseNumber(
+    process.env.HISTORICAL_BACKFILL_LOOKBACK_HOURS,
+    168,
+  ),
+  historicalBackfillTargetSignals: parseNumber(
+    process.env.HISTORICAL_BACKFILL_TARGET_SIGNALS,
+    25,
+  ),
 };

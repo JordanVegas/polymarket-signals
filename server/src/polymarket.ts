@@ -400,7 +400,7 @@ export class PolymarketSignalService {
   }
 
   private async backfillHistoricalSignals(): Promise<void> {
-    const limit = Math.max(0, Math.min(config.historicalBackfillLimit, 2_000));
+    const limit = Math.max(0, Math.min(config.historicalBackfillLimit, 50_000));
     if (limit === 0) {
       return;
     }
@@ -409,6 +409,7 @@ export class PolymarketSignalService {
       Math.floor(Date.now() / 1000) - config.historicalBackfillLookbackHours * 60 * 60;
     const batchSize = 500;
     const trades: TradeRecord[] = [];
+    let emittedSignals = 0;
 
     for (let offset = 0; offset < limit; offset += batchSize) {
       const url = new URL(`${DATA_API_URL}/trades`);
@@ -427,7 +428,11 @@ export class PolymarketSignalService {
 
       trades.push(...batch);
       const oldestTrade = batch[batch.length - 1];
-      if (!oldestTrade || oldestTrade.timestamp < lookbackCutoffSec) {
+      if (
+        !oldestTrade ||
+        oldestTrade.timestamp < lookbackCutoffSec ||
+        emittedSignals >= config.historicalBackfillTargetSignals
+      ) {
         break;
       }
     }
@@ -452,19 +457,25 @@ export class PolymarketSignalService {
       }
 
       this.lastTradeTimestampSec = Math.max(this.lastTradeTimestampSec, trade.timestamp);
-      await this.ingestTrade(trade);
+      const emitted = await this.ingestTrade(trade);
+      if (emitted) {
+        emittedSignals += 1;
+        if (emittedSignals >= config.historicalBackfillTargetSignals) {
+          break;
+        }
+      }
     }
   }
 
-  private async ingestTrade(trade: TradeRecord): Promise<void> {
+  private async ingestTrade(trade: TradeRecord): Promise<boolean> {
     const market = this.marketsByAssetId.get(trade.asset);
     if (!market) {
-      return;
+      return false;
     }
 
     const totalUsd = trade.price * trade.size;
     if (!Number.isFinite(totalUsd) || totalUsd <= 0) {
-      return;
+      return false;
     }
 
     const accumulatorKey = `${trade.proxyWallet}:${trade.asset}:${trade.side}`;
@@ -486,8 +497,7 @@ export class PolymarketSignalService {
       existing.weightedPriceSum += trade.size * trade.price;
       existing.fillCount += 1;
       await this.storage.saveCluster(this.toPersistedCluster(existing));
-      await this.tryEmitSignal(existing);
-      return;
+      return this.tryEmitSignal(existing);
     }
 
     const nextAccumulator: SignalAccumulator = {
@@ -511,15 +521,17 @@ export class PolymarketSignalService {
 
     this.accumulators.set(accumulatorKey, nextAccumulator);
     await this.storage.saveCluster(this.toPersistedCluster(nextAccumulator));
-    await this.tryEmitSignal(nextAccumulator);
+    const emitted = await this.tryEmitSignal(nextAccumulator);
     this.pruneAccumulators();
+    return emitted;
   }
 
-  private async tryEmitSignal(accumulator: SignalAccumulator): Promise<void> {
+  private async tryEmitSignal(accumulator: SignalAccumulator): Promise<boolean> {
     if (!accumulator.emitted && accumulator.totalUsd < config.whaleThresholdUsd) {
-      return;
+      return false;
     }
 
+    const wasAlreadyEmitted = accumulator.emitted;
     const trader = await this.getTraderSummary(accumulator.wallet, accumulator.displayName, accumulator.profileImage);
     const signalId = accumulator.signalId ?? `${accumulator.wallet}:${accumulator.assetId}:${accumulator.startedAt}`;
     const signalLabel = buildSignalLabel(trader.tier, accumulator.side);
@@ -553,6 +565,8 @@ export class PolymarketSignalService {
     for (const listener of this.listeners) {
       listener(signal);
     }
+
+    return !wasAlreadyEmitted;
   }
 
   private pruneAccumulators(): void {
