@@ -1,5 +1,6 @@
 import { config } from "./config.js";
 import WebSocket from "ws";
+import { SignalStorage } from "./storage.js";
 import type { MarketRecord, TradeRecord, TraderSummary, WhaleSignal } from "./types.js";
 
 const GAMMA_MARKETS_URL = "https://gamma-api.polymarket.com/markets";
@@ -87,6 +88,7 @@ export class PolymarketSignalService {
   private readonly recentTradeIds = new Set<string>();
   private readonly accumulators = new Map<string, SignalAccumulator>();
   private readonly traderCache = new Map<string, { summary: TraderSummary; fetchedAt: number }>();
+  private readonly storage = new SignalStorage();
   private ws: WebSocket | null = null;
   private marketSyncTimer: NodeJS.Timeout | null = null;
   private tradePollTimer: NodeJS.Timeout | null = null;
@@ -98,6 +100,16 @@ export class PolymarketSignalService {
   private listeners = new Set<(payload: WhaleSignal) => void>();
 
   async start(): Promise<void> {
+    try {
+      const storageEnabled = await this.storage.connect();
+      if (storageEnabled) {
+        const persistedSignals = await this.storage.loadRecentSignals(config.maxSignals);
+        this.signals.splice(0, this.signals.length, ...persistedSignals);
+      }
+    } catch (error) {
+      console.error("Failed to initialize Mongo storage", error);
+    }
+
     await this.syncMarkets();
     this.connectMarketSocket();
     this.startTradePolling();
@@ -431,6 +443,12 @@ export class PolymarketSignalService {
     this.signals.unshift(signal);
     if (this.signals.length > config.maxSignals) {
       this.signals.length = config.maxSignals;
+    }
+
+    try {
+      await this.storage.saveSignal(signal);
+    } catch (error) {
+      console.error("Failed to persist signal", error);
     }
 
     for (const listener of this.listeners) {

@@ -9,6 +9,9 @@ const parseNumber = (value: string | undefined, fallback: number): number => {
 
 export const config = {
   port: parseNumber(process.env.PORT, 3001),
+  mongoUri: process.env.MONGO_URI || "",
+  mongoDbName: process.env.MONGO_DB_NAME || "polymarket_signals",
+  mongoSignalsCollection: process.env.MONGO_SIGNALS_COLLECTION || "signals",
   whaleThresholdUsd: parseNumber(process.env.WHALE_THRESHOLD_USD, 200_000),
   profitableWhaleThresholdUsd: parseNumber(
     process.env.PROFITABLE_WHALE_THRESHOLD_USD,
@@ -19,4 +22,3 @@ export const config = {
   marketRefreshMs: parseNumber(process.env.MARKET_REFRESH_MS, 10 * 60_000),
   tradePollMs: parseNumber(process.env.TRADE_POLL_MS, 2_500),
 };
-

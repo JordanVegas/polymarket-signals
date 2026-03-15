@@ -22,6 +22,9 @@ Backend: `http://localhost:3001`
 ## Optional environment variables
 
 ```bash
+MONGO_URI=mongodb://127.0.0.1:27017
+MONGO_DB_NAME=polymarket_signals
+MONGO_SIGNALS_COLLECTION=signals
 WHALE_THRESHOLD_USD=200000
 PROFITABLE_WHALE_THRESHOLD_USD=50000
 TRADE_WINDOW_MS=60000
@@ -35,3 +38,4 @@ MAX_SIGNALS=75
 - Whale clusters are grouped per wallet, asset, and side inside a rolling time window.
 - Profitability is estimated from Polymarket's public positions, closed positions, and value endpoints.
 - The profitability threshold is configurable because "very profitable" is product-specific.
+- If `MONGO_URI` is set, emitted whale signals are persisted and restored on startup.
