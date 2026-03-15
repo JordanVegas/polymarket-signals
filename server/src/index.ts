@@ -32,8 +32,8 @@ app.get("/health", (_request, response) => {
   response.json({ ok: true });
 });
 
-app.get("/api/snapshot", (_request, response) => {
-  response.json(service.getSnapshot());
+app.get("/api/snapshot", async (_request, response) => {
+  response.json(await service.getSnapshot());
 });
 
 if (process.env.NODE_ENV === "production") {
@@ -53,11 +53,15 @@ const server = createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
 
 wss.on("connection", (socket) => {
-  socket.send(JSON.stringify({ type: "snapshot", payload: service.getSnapshot() }));
+  let unsubscribe = () => {};
 
-  const unsubscribe = service.onSignal((signal) => {
-    socket.send(JSON.stringify({ type: "signal", payload: signal }));
-  });
+  void (async () => {
+    socket.send(JSON.stringify({ type: "snapshot", payload: await service.getSnapshot() }));
+
+    unsubscribe = service.onSignal((signal) => {
+      socket.send(JSON.stringify({ type: "signal", payload: signal }));
+    });
+  })();
 
   socket.on("close", () => {
     unsubscribe();

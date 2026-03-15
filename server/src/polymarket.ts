@@ -84,7 +84,6 @@ const dedupeTrades = (trades: TradeRecord[]): TradeRecord[] => {
 export class PolymarketSignalService {
   private readonly marketsByAssetId = new Map<string, MarketRecord>();
   private readonly activeAssetIds = new Set<string>();
-  private readonly signals: WhaleSignal[] = [];
   private readonly recentTradeIds = new Set<string>();
   private readonly accumulators = new Map<string, SignalAccumulator>();
   private readonly traderCache = new Map<string, { summary: TraderSummary; fetchedAt: number }>();
@@ -100,17 +99,9 @@ export class PolymarketSignalService {
   private listeners = new Set<(payload: WhaleSignal) => void>();
 
   async start(): Promise<void> {
-    try {
-      const storageEnabled = await this.storage.connect();
-      if (storageEnabled) {
-        const persistedSignals = await this.storage.loadRecentSignals(config.maxSignals);
-        this.signals.splice(0, this.signals.length, ...persistedSignals);
-      }
-    } catch (error) {
-      console.error("Failed to initialize Mongo storage", error);
-    }
-
+    await this.storage.connect();
     await this.syncMarkets();
+    await this.backfillHistoricalSignals();
     this.connectMarketSocket();
     this.startTradePolling();
     this.marketSyncTimer = setInterval(() => {
@@ -138,7 +129,7 @@ export class PolymarketSignalService {
     };
   }
 
-  getSnapshot() {
+  async getSnapshot() {
     return {
       status: {
         marketCount: this.activeAssetIds.size,
@@ -146,7 +137,7 @@ export class PolymarketSignalService {
         lastMarketSyncAt: this.lastMarketSyncAt,
         lastTradeAt: this.lastTradeAt,
       },
-      signals: this.signals,
+      signals: await this.storage.loadRecentSignals(config.maxSignals),
     };
   }
 
@@ -348,6 +339,50 @@ export class PolymarketSignalService {
     }
   }
 
+  private async backfillHistoricalSignals(): Promise<void> {
+    const limit = Math.max(0, Math.min(config.historicalBackfillLimit, 2_000));
+    if (limit === 0) {
+      return;
+    }
+
+    const lookbackCutoffSec =
+      Math.floor(Date.now() / 1000) - config.historicalBackfillLookbackHours * 60 * 60;
+    const batchSize = 500;
+    const trades: TradeRecord[] = [];
+
+    for (let offset = 0; offset < limit; offset += batchSize) {
+      const url = new URL(`${DATA_API_URL}/trades`);
+      url.searchParams.set("limit", String(Math.min(batchSize, limit - offset)));
+      url.searchParams.set("offset", String(offset));
+
+      const response = await fetch(url);
+      if (!response.ok) {
+        break;
+      }
+
+      const batch = (await response.json()) as TradeRecord[];
+      if (batch.length === 0) {
+        break;
+      }
+
+      trades.push(...batch);
+      const oldestTrade = batch[batch.length - 1];
+      if (!oldestTrade || oldestTrade.timestamp < lookbackCutoffSec) {
+        break;
+      }
+    }
+
+    const historicalTrades = dedupeTrades(trades)
+      .filter((trade) => trade.timestamp >= lookbackCutoffSec)
+      .filter((trade) => this.activeAssetIds.has(trade.asset))
+      .sort((left, right) => left.timestamp - right.timestamp);
+
+    for (const trade of historicalTrades) {
+      this.lastTradeTimestampSec = Math.max(this.lastTradeTimestampSec, trade.timestamp);
+      await this.ingestTrade(trade);
+    }
+  }
+
   private async ingestTrade(trade: TradeRecord): Promise<void> {
     const market = this.marketsByAssetId.get(trade.asset);
     if (!market) {
@@ -365,14 +400,14 @@ export class PolymarketSignalService {
       trade.name && !trade.name.startsWith("0x") ? trade.name : trade.pseudonym || trade.proxyWallet;
 
     const existing = this.accumulators.get(accumulatorKey);
-    const now = Date.now();
+    const tradeTimestampMs = trade.timestamp * 1000;
 
     if (
       existing &&
-      now - existing.updatedAt <= config.tradeWindowMs &&
+      tradeTimestampMs - existing.updatedAt <= config.tradeWindowMs &&
       existing.outcome === outcome
     ) {
-      existing.updatedAt = now;
+      existing.updatedAt = tradeTimestampMs;
       existing.totalUsd += totalUsd;
       existing.totalShares += trade.size;
       existing.weightedPriceSum += trade.size * trade.price;
@@ -390,8 +425,8 @@ export class PolymarketSignalService {
       displayName,
       profileImage: trade.profileImage,
       profileUrl: `https://polymarket.com/profile/${trade.proxyWallet}`,
-      startedAt: now,
-      updatedAt: now,
+      startedAt: tradeTimestampMs,
+      updatedAt: tradeTimestampMs,
       totalUsd,
       totalShares: trade.size,
       weightedPriceSum: trade.size * trade.price,
@@ -435,21 +470,7 @@ export class PolymarketSignalService {
 
     accumulator.emitted = true;
     accumulator.signalId = signalId;
-
-    const existingIndex = this.signals.findIndex((entry) => entry.id === signal.id);
-    if (existingIndex >= 0) {
-      this.signals.splice(existingIndex, 1);
-    }
-    this.signals.unshift(signal);
-    if (this.signals.length > config.maxSignals) {
-      this.signals.length = config.maxSignals;
-    }
-
-    try {
-      await this.storage.saveSignal(signal);
-    } catch (error) {
-      console.error("Failed to persist signal", error);
-    }
+    await this.storage.saveSignal(signal);
 
     for (const listener of this.listeners) {
       listener(signal);

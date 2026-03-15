@@ -9,23 +9,18 @@ type PersistedSignal = WhaleSignal & {
 export class SignalStorage {
   private client: MongoClient | null = null;
 
-  async connect(): Promise<boolean> {
+  async connect(): Promise<void> {
     if (!config.mongoUri) {
-      return false;
+      throw new Error("MONGO_URI is required for Polymarket Signals");
     }
 
     this.client = new MongoClient(config.mongoUri);
     await this.client.connect();
     await this.collection().createIndex({ id: 1 }, { unique: true });
     await this.collection().createIndex({ timestamp: -1 });
-    return true;
   }
 
   async loadRecentSignals(limit: number): Promise<WhaleSignal[]> {
-    if (!this.client) {
-      return [];
-    }
-
     const rows = await this.collection()
       .find({}, { sort: { timestamp: -1 }, limit })
       .toArray();
@@ -34,10 +29,6 @@ export class SignalStorage {
   }
 
   async saveSignal(signal: WhaleSignal): Promise<void> {
-    if (!this.client) {
-      return;
-    }
-
     const payload: PersistedSignal = {
       ...signal,
       updatedAt: new Date(),
