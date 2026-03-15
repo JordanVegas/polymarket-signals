@@ -22,7 +22,11 @@ TRADE_WINDOW_MS=60000
 MARKET_REFRESH_MS=600000
 TRADE_POLL_MS=2500
 MAX_SIGNALS=75
+HISTORICAL_BACKFILL_LIMIT=2000
+HISTORICAL_BACKFILL_LOOKBACK_HOURS=24
 ```
+
+`MONGO_URI` is required because the app stores signal history, processed trades, and active aggregation windows in MongoDB.
 
 ## Update flow
 

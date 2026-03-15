@@ -1,6 +1,6 @@
 import { config } from "./config.js";
 import WebSocket from "ws";
-import { SignalStorage } from "./storage.js";
+import { SignalStorage, type PersistedCluster } from "./storage.js";
 import type { MarketRecord, TradeRecord, TraderSummary, WhaleSignal } from "./types.js";
 
 const GAMMA_MARKETS_URL = "https://gamma-api.polymarket.com/markets";
@@ -43,6 +43,7 @@ type MarketTradeMessage = {
 };
 
 type SignalAccumulator = {
+  clusterKey: string;
   wallet: string;
   assetId: string;
   side: "BUY" | "SELL";
@@ -56,7 +57,7 @@ type SignalAccumulator = {
   totalUsd: number;
   totalShares: number;
   weightedPriceSum: number;
-  fills: TradeRecord[];
+  fillCount: number;
   emitted: boolean;
   signalId?: string;
 };
@@ -72,7 +73,7 @@ const chunk = <T,>(items: T[], size: number): T[][] => {
 const dedupeTrades = (trades: TradeRecord[]): TradeRecord[] => {
   const seen = new Set<string>();
   return trades.filter((trade) => {
-    const key = `${trade.transactionHash}:${trade.proxyWallet}:${trade.asset}:${trade.side}:${trade.size}:${trade.price}`;
+    const key = getTradeId(trade);
     if (seen.has(key)) {
       return false;
     }
@@ -81,10 +82,12 @@ const dedupeTrades = (trades: TradeRecord[]): TradeRecord[] => {
   });
 };
 
+const getTradeId = (trade: TradeRecord) =>
+  `${trade.transactionHash}:${trade.proxyWallet}:${trade.asset}:${trade.side}:${trade.size}:${trade.price}`;
+
 export class PolymarketSignalService {
   private readonly marketsByAssetId = new Map<string, MarketRecord>();
   private readonly activeAssetIds = new Set<string>();
-  private readonly recentTradeIds = new Set<string>();
   private readonly accumulators = new Map<string, SignalAccumulator>();
   private readonly traderCache = new Map<string, { summary: TraderSummary; fetchedAt: number }>();
   private readonly storage = new SignalStorage();
@@ -100,6 +103,7 @@ export class PolymarketSignalService {
 
   async start(): Promise<void> {
     await this.storage.connect();
+    await this.restoreActiveClusters();
     await this.syncMarkets();
     await this.backfillHistoricalSignals();
     this.connectMarketSocket();
@@ -107,6 +111,16 @@ export class PolymarketSignalService {
     this.marketSyncTimer = setInterval(() => {
       void this.syncMarkets();
     }, config.marketRefreshMs);
+  }
+
+  private async restoreActiveClusters(): Promise<void> {
+    const cutoffMs = Date.now() - config.tradeWindowMs * 2;
+    const clusters = await this.storage.loadActiveClusters(cutoffMs);
+    this.accumulators.clear();
+
+    for (const cluster of clusters) {
+      this.accumulators.set(cluster.clusterKey, this.fromPersistedCluster(cluster));
+    }
   }
 
   stop(): void {
@@ -322,16 +336,18 @@ export class PolymarketSignalService {
       .sort((left, right) => left.timestamp - right.timestamp);
 
     for (const trade of trades) {
-      const tradeId = `${trade.transactionHash}:${trade.proxyWallet}:${trade.asset}:${trade.side}:${trade.size}`;
-      if (this.recentTradeIds.has(tradeId)) {
+      const tradeId = getTradeId(trade);
+      const inserted = await this.storage.markTradeProcessed({
+        tradeId,
+        proxyWallet: trade.proxyWallet,
+        asset: trade.asset,
+        side: trade.side,
+        timestamp: trade.timestamp,
+        totalUsd: trade.price * trade.size,
+        createdAt: new Date(),
+      });
+      if (!inserted) {
         continue;
-      }
-
-      this.recentTradeIds.add(tradeId);
-      if (this.recentTradeIds.size > 5000) {
-        const recentIds = Array.from(this.recentTradeIds).slice(-2500);
-        this.recentTradeIds.clear();
-        recentIds.forEach((id) => this.recentTradeIds.add(id));
       }
 
       this.lastTradeTimestampSec = Math.max(this.lastTradeTimestampSec, trade.timestamp);
@@ -378,6 +394,19 @@ export class PolymarketSignalService {
       .sort((left, right) => left.timestamp - right.timestamp);
 
     for (const trade of historicalTrades) {
+      const inserted = await this.storage.markTradeProcessed({
+        tradeId: getTradeId(trade),
+        proxyWallet: trade.proxyWallet,
+        asset: trade.asset,
+        side: trade.side,
+        timestamp: trade.timestamp,
+        totalUsd: trade.price * trade.size,
+        createdAt: new Date(),
+      });
+      if (!inserted) {
+        continue;
+      }
+
       this.lastTradeTimestampSec = Math.max(this.lastTradeTimestampSec, trade.timestamp);
       await this.ingestTrade(trade);
     }
@@ -411,12 +440,14 @@ export class PolymarketSignalService {
       existing.totalUsd += totalUsd;
       existing.totalShares += trade.size;
       existing.weightedPriceSum += trade.size * trade.price;
-      existing.fills.push(trade);
+      existing.fillCount += 1;
+      await this.storage.saveCluster(this.toPersistedCluster(existing));
       await this.tryEmitSignal(existing);
       return;
     }
 
     const nextAccumulator: SignalAccumulator = {
+      clusterKey: accumulatorKey,
       wallet: trade.proxyWallet,
       assetId: trade.asset,
       side: trade.side,
@@ -430,11 +461,12 @@ export class PolymarketSignalService {
       totalUsd,
       totalShares: trade.size,
       weightedPriceSum: trade.size * trade.price,
-      fills: [trade],
+      fillCount: 1,
       emitted: false,
     };
 
     this.accumulators.set(accumulatorKey, nextAccumulator);
+    await this.storage.saveCluster(this.toPersistedCluster(nextAccumulator));
     await this.tryEmitSignal(nextAccumulator);
     this.pruneAccumulators();
   }
@@ -459,7 +491,7 @@ export class PolymarketSignalService {
       label: trader.isVeryProfitable ? "Profitable whale buy" : "Whale buy",
       labelTone: trader.isVeryProfitable ? "green" : "blue",
       totalUsd: accumulator.totalUsd,
-      fillCount: accumulator.fills.length,
+      fillCount: accumulator.fillCount,
       totalShares: accumulator.totalShares,
       averagePrice: accumulator.weightedPriceSum / accumulator.totalShares,
       timestamp: accumulator.updatedAt,
@@ -470,6 +502,7 @@ export class PolymarketSignalService {
 
     accumulator.emitted = true;
     accumulator.signalId = signalId;
+    await this.storage.saveCluster(this.toPersistedCluster(accumulator));
     await this.storage.saveSignal(signal);
 
     for (const listener of this.listeners) {
@@ -482,8 +515,54 @@ export class PolymarketSignalService {
     for (const [key, accumulator] of this.accumulators) {
       if (now - accumulator.updatedAt > config.tradeWindowMs * 2) {
         this.accumulators.delete(key);
+        void this.storage.deleteCluster(key);
       }
     }
+  }
+
+  private toPersistedCluster(accumulator: SignalAccumulator): PersistedCluster {
+    return {
+      clusterKey: accumulator.clusterKey,
+      wallet: accumulator.wallet,
+      assetId: accumulator.assetId,
+      side: accumulator.side,
+      outcome: accumulator.outcome,
+      market: accumulator.market,
+      displayName: accumulator.displayName,
+      profileImage: accumulator.profileImage,
+      profileUrl: accumulator.profileUrl,
+      startedAt: accumulator.startedAt,
+      updatedAt: accumulator.updatedAt,
+      totalUsd: accumulator.totalUsd,
+      totalShares: accumulator.totalShares,
+      weightedPriceSum: accumulator.weightedPriceSum,
+      fillCount: accumulator.fillCount,
+      emitted: accumulator.emitted,
+      signalId: accumulator.signalId,
+      expiresAt: new Date(accumulator.updatedAt + config.tradeWindowMs * 2),
+    };
+  }
+
+  private fromPersistedCluster(cluster: PersistedCluster): SignalAccumulator {
+    return {
+      clusterKey: cluster.clusterKey,
+      wallet: cluster.wallet,
+      assetId: cluster.assetId,
+      side: cluster.side,
+      outcome: cluster.outcome,
+      market: cluster.market,
+      displayName: cluster.displayName,
+      profileImage: cluster.profileImage,
+      profileUrl: cluster.profileUrl,
+      startedAt: cluster.startedAt,
+      updatedAt: cluster.updatedAt,
+      totalUsd: cluster.totalUsd,
+      totalShares: cluster.totalShares,
+      weightedPriceSum: cluster.weightedPriceSum,
+      fillCount: cluster.fillCount,
+      emitted: cluster.emitted,
+      signalId: cluster.signalId,
+    };
   }
 
   private async getTraderSummary(
