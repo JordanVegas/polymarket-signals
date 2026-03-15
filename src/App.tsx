@@ -233,8 +233,8 @@ function App() {
               {snapshot.signals.map((signal) => (
                 <article className="signal-card" key={signal.id}>
                   <div className="signal-media">
-                    {signal.marketImage ? (
-                      <img src={signal.marketImage} alt={signal.marketQuestion} />
+                    {normalizeSecureUrl(signal.marketImage) ? (
+                      <img src={normalizeSecureUrl(signal.marketImage)!} alt={signal.marketQuestion} />
                     ) : (
                       <div className="image-fallback">{signal.outcome[0]}</div>
                     )}
@@ -275,10 +275,10 @@ function App() {
                     </div>
 
                     <div className="signal-actions">
-                      <a href={signal.marketUrl} target="_blank" rel="noreferrer">
+                      <a href={normalizeSecureUrl(signal.marketUrl) ?? signal.marketUrl} target="_blank" rel="noreferrer">
                         Open market
                       </a>
-                      <a href={signal.profileUrl} target="_blank" rel="noreferrer">
+                      <a href={normalizeSecureUrl(signal.profileUrl) ?? signal.profileUrl} target="_blank" rel="noreferrer">
                         Open whale profile
                       </a>
                     </div>
@@ -356,6 +356,18 @@ function formatTimestamp(value: number | null) {
 function upsertSignal(signals: WhaleSignal[], nextSignal: WhaleSignal) {
   const remaining = signals.filter((signal) => signal.id !== nextSignal.id);
   return [nextSignal, ...remaining];
+}
+
+function normalizeSecureUrl(value?: string) {
+  if (!value) {
+    return undefined;
+  }
+
+  if (value.startsWith("http://")) {
+    return `https://${value.slice("http://".length)}`;
+  }
+
+  return value;
 }
 
 export default App;
