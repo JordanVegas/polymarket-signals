@@ -41,10 +41,12 @@ jobs:
             APP_DIR="${{ secrets.DROPLET_APP_DIR }}"
             RELEASE_DIR=$(mktemp -d)
             APP_PARENT=$(dirname "$APP_DIR")
+            RUNTIME_ENV_TMP=""
             mkdir -p "$APP_PARENT"
             tar -xzf /tmp/polymarket-signals.tar.gz -C "$RELEASE_DIR"
             if [ -f "$APP_DIR/.env" ]; then
-              cp "$APP_DIR/.env" "$RELEASE_DIR/.env"
+              RUNTIME_ENV_TMP=$(mktemp)
+              cp "$APP_DIR/.env" "$RUNTIME_ENV_TMP"
             fi
             cd "$RELEASE_DIR"
             npm ci
@@ -54,5 +56,8 @@ jobs:
               mv "$APP_DIR" "${APP_DIR}.prev"
             fi
             mv "$RELEASE_DIR" "$APP_DIR"
+            if [ -n "$RUNTIME_ENV_TMP" ]; then
+              mv "$RUNTIME_ENV_TMP" "$APP_DIR/.env"
+            fi
             systemctl restart polysignals
             systemctl status polysignals --no-pager --lines=20
