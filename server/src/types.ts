@@ -1,0 +1,70 @@
+export type MarketRecord = {
+  id: string;
+  question: string;
+  slug: string;
+  image: string;
+  endDate: string;
+  liquidity: number;
+  volume24hr: number;
+  outcomeByAssetId: Record<string, string>;
+};
+
+export type TradeRecord = {
+  proxyWallet: string;
+  side: "BUY" | "SELL";
+  asset: string;
+  size: number;
+  price: number;
+  timestamp: number;
+  title: string;
+  slug: string;
+  icon?: string;
+  outcome: string;
+  pseudonym?: string;
+  name?: string;
+  profileImage?: string;
+  transactionHash: string;
+};
+
+export type TraderSummary = {
+  wallet: string;
+  displayName: string;
+  profileImage?: string;
+  openPnl: number;
+  realizedPnl: number;
+  totalValue: number;
+  totalPnl: number;
+  isVeryProfitable: boolean;
+};
+
+export type WhaleSignal = {
+  id: string;
+  wallet: string;
+  displayName: string;
+  marketQuestion: string;
+  marketSlug: string;
+  marketUrl: string;
+  marketImage: string;
+  outcome: string;
+  side: "BUY" | "SELL";
+  label: "Profitable whale buy" | "Whale buy";
+  labelTone: "green" | "blue";
+  totalUsd: number;
+  fillCount: number;
+  totalShares: number;
+  averagePrice: number;
+  timestamp: number;
+  profileUrl: string;
+  profileImage?: string;
+  trader: TraderSummary;
+};
+
+export type AppSnapshot = {
+  status: {
+    marketCount: number;
+    websocketConnected: boolean;
+    lastMarketSyncAt: number | null;
+    lastTradeAt: number | null;
+  };
+  signals: WhaleSignal[];
+};

@@ -1,0 +1,46 @@
+# Polysignals Deploy To TUF Droplet
+
+- App path: `/opt/polymarket-signals`
+- App port: `3002`
+- Public URL: `https://polysignals.tuf.to`
+- Process manager: systemd
+- Reverse proxy: nginx on the shared TUF droplet
+
+## App env
+
+Create `/opt/polymarket-signals/.env`:
+
+```env
+NODE_ENV=production
+PORT=3002
+WHALE_THRESHOLD_USD=200000
+PROFITABLE_WHALE_THRESHOLD_USD=50000
+TRADE_WINDOW_MS=60000
+MARKET_REFRESH_MS=600000
+TRADE_POLL_MS=2500
+MAX_SIGNALS=75
+```
+
+## Update flow
+
+```bash
+cd /opt/polymarket-signals
+git pull
+npm ci
+npm run build
+sudo systemctl restart polysignals
+```
+
+## GitHub auto deploy
+
+This repo can auto-deploy on every push to `main` using
+[`.github/workflows/deploy-droplet.yml`](C:/Users/Jordan/Documents/polymarket-signals/.github/workflows/deploy-droplet.yml).
+
+Set these GitHub Actions secrets:
+
+- `DROPLET_HOST=129.212.171.226`
+- `DROPLET_USER=root`
+- `DROPLET_PORT=22`
+- `DROPLET_SSH_KEY`
+- `DROPLET_SSH_PASSPHRASE` if your key uses one
+- `DROPLET_APP_DIR=/opt/polymarket-signals`
