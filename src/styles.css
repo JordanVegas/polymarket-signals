@@ -197,7 +197,7 @@ a {
 }
 
 .summary-card-featured h3 {
-  font-size: 0.92rem;
+  font-size: 1.05rem;
   line-height: 1.25;
 }
 
@@ -282,15 +282,6 @@ a {
   margin: 12px 0;
   font-size: 1.55rem;
   line-height: 1.15;
-}
-
-.signal-grid .signal-card:first-child .signal-body {
-  padding: 20px 22px;
-}
-
-.signal-grid .signal-card:first-child h3 {
-  font-size: 1.05rem;
-  line-height: 1.2;
 }
 
 .signal-thesis {
