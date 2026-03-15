@@ -34,7 +34,9 @@ export type TraderSummary = {
   realizedPnl: number;
   totalValue: number;
   totalPnl: number;
-  isVeryProfitable: boolean;
+  tradeCount: number;
+  tier: "whale" | "shark" | "pro" | "none";
+  weight: number;
 };
 
 export type WhaleSignal = {
@@ -47,8 +49,8 @@ export type WhaleSignal = {
   marketImage: string;
   outcome: string;
   side: "BUY" | "SELL";
-  label: "Profitable whale buy" | "Whale buy";
-  labelTone: "green" | "blue";
+  label: string;
+  labelTone: "green" | "blue" | "neutral";
   totalUsd: number;
   fillCount: number;
   totalShares: number;

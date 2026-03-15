@@ -8,7 +8,9 @@ type TraderSummary = {
   realizedPnl: number;
   totalValue: number;
   totalPnl: number;
-  isVeryProfitable: boolean;
+  tradeCount: number;
+  tier: "whale" | "shark" | "pro" | "none";
+  weight: number;
 };
 
 type WhaleSignal = {
@@ -21,8 +23,8 @@ type WhaleSignal = {
   marketImage: string;
   outcome: string;
   side: "BUY" | "SELL";
-  label: "Profitable whale buy" | "Whale buy";
-  labelTone: "green" | "blue";
+  label: string;
+  labelTone: "green" | "blue" | "neutral";
   totalUsd: number;
   fillCount: number;
   totalShares: number;
@@ -133,7 +135,7 @@ function App() {
 
   const headerSignal = snapshot.signals[0];
   const profitableCount = useMemo(
-    () => snapshot.signals.filter((signal) => signal.labelTone === "green").length,
+    () => snapshot.signals.filter((signal) => signal.trader.tier === "whale").length,
     [snapshot.signals],
   );
 
@@ -230,8 +232,11 @@ function App() {
             </div>
           ) : (
             <div className="signal-grid">
-              {snapshot.signals.map((signal) => (
-                <article className="signal-card" key={signal.id}>
+              {snapshot.signals.map((signal) => {
+                const marketStats = getMarketStats(snapshot.signals, signal.marketSlug);
+
+                return (
+                  <article className="signal-card" key={signal.id}>
                   <div className="signal-media">
                     {normalizeSecureUrl(signal.marketImage) ? (
                       <img src={normalizeSecureUrl(signal.marketImage)!} alt={signal.marketQuestion} />
@@ -265,6 +270,24 @@ function App() {
                         value={compactCurrencyFormatter.format(signal.trader.totalPnl)}
                       />
                       <Metric
+                        label="Trades"
+                        value={signal.trader.tradeCount.toLocaleString()}
+                      />
+                      <Metric
+                        label="Tier"
+                        value={`${signal.trader.tier.toUpperCase()} x${signal.trader.weight}`}
+                      />
+                    </div>
+
+                    <div className="metric-row market-stat-row">
+                      <Metric label="Whales" value={marketStats.whales.toString()} />
+                      <Metric label="Sharks" value={marketStats.sharks.toString()} />
+                      <Metric label="Pros" value={marketStats.pros.toString()} />
+                    </div>
+
+                    <div className="metric-row market-stat-row">
+                      <Metric label="Weighted score" value={marketStats.weightedScore.toString()} />
+                      <Metric
                         label="Portfolio value"
                         value={compactCurrencyFormatter.format(signal.trader.totalValue)}
                       />
@@ -284,7 +307,8 @@ function App() {
                     </div>
                   </div>
                 </article>
-              ))}
+                );
+              })}
             </div>
           )}
         </section>
@@ -356,6 +380,40 @@ function formatTimestamp(value: number | null) {
 function upsertSignal(signals: WhaleSignal[], nextSignal: WhaleSignal) {
   const remaining = signals.filter((signal) => signal.id !== nextSignal.id);
   return [nextSignal, ...remaining];
+}
+
+function getMarketStats(signals: WhaleSignal[], marketSlug: string) {
+  const uniqueWallets = new Map<string, TraderSummary>();
+
+  for (const signal of signals) {
+    if (signal.marketSlug !== marketSlug) {
+      continue;
+    }
+
+    const existing = uniqueWallets.get(signal.wallet);
+    if (!existing || signal.trader.weight > existing.weight) {
+      uniqueWallets.set(signal.wallet, signal.trader);
+    }
+  }
+
+  let whales = 0;
+  let sharks = 0;
+  let pros = 0;
+  let weightedScore = 0;
+
+  for (const trader of uniqueWallets.values()) {
+    if (trader.tier === "whale") {
+      whales += 1;
+    } else if (trader.tier === "shark") {
+      sharks += 1;
+    } else if (trader.tier === "pro") {
+      pros += 1;
+    }
+
+    weightedScore += trader.weight;
+  }
+
+  return { whales, sharks, pros, weightedScore };
 }
 
 function normalizeSecureUrl(value?: string) {

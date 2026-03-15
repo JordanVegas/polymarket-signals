@@ -32,6 +32,10 @@ type RawValue = {
   value?: number;
 };
 
+type RawActivity = {
+  type?: string;
+};
+
 type MarketTradeMessage = {
   event_type?: string;
   asset_id?: string;
@@ -84,6 +88,46 @@ const dedupeTrades = (trades: TradeRecord[]): TradeRecord[] => {
 
 const getTradeId = (trade: TradeRecord) =>
   `${trade.transactionHash}:${trade.proxyWallet}:${trade.asset}:${trade.side}:${trade.size}:${trade.price}`;
+
+const classifyTrader = (
+  totalPnl: number,
+  tradeCount: number,
+): Pick<TraderSummary, "tier" | "weight"> => {
+  if (totalPnl >= 100_000 && tradeCount >= 100) {
+    return { tier: "whale", weight: 20 };
+  }
+
+  if (totalPnl >= 10_000 && tradeCount >= 50) {
+    return { tier: "shark", weight: 10 };
+  }
+
+  if (totalPnl >= 2_000 && tradeCount >= 20) {
+    return { tier: "pro", weight: 3 };
+  }
+
+  return { tier: "none", weight: 1 };
+};
+
+const buildSignalLabel = (
+  tier: TraderSummary["tier"],
+  side: "BUY" | "SELL",
+): Pick<WhaleSignal, "label" | "labelTone"> => {
+  const action = side === "BUY" ? "buy" : "sell";
+
+  if (tier === "whale") {
+    return { label: `Whale ${action}`, labelTone: "green" };
+  }
+
+  if (tier === "shark") {
+    return { label: `Shark ${action}`, labelTone: "blue" };
+  }
+
+  if (tier === "pro") {
+    return { label: `Pro ${action}`, labelTone: "blue" };
+  }
+
+  return { label: `Large ${action}`, labelTone: "neutral" };
+};
 
 export class PolymarketSignalService {
   private readonly marketsByAssetId = new Map<string, MarketRecord>();
@@ -478,6 +522,7 @@ export class PolymarketSignalService {
 
     const trader = await this.getTraderSummary(accumulator.wallet, accumulator.displayName, accumulator.profileImage);
     const signalId = accumulator.signalId ?? `${accumulator.wallet}:${accumulator.assetId}:${accumulator.startedAt}`;
+    const signalLabel = buildSignalLabel(trader.tier, accumulator.side);
     const signal: WhaleSignal = {
       id: signalId,
       wallet: accumulator.wallet,
@@ -488,8 +533,8 @@ export class PolymarketSignalService {
       marketImage: accumulator.market.image,
       outcome: accumulator.outcome,
       side: accumulator.side,
-      label: trader.isVeryProfitable ? "Profitable whale buy" : "Whale buy",
-      labelTone: trader.isVeryProfitable ? "green" : "blue",
+      label: signalLabel.label,
+      labelTone: signalLabel.labelTone,
       totalUsd: accumulator.totalUsd,
       fillCount: accumulator.fillCount,
       totalShares: accumulator.totalShares,
@@ -599,6 +644,8 @@ export class PolymarketSignalService {
     const realizedPnl = openRealized + closedRealized;
     const totalValue = Number(valueRows[0]?.value ?? 0);
     const totalPnl = openPnl + realizedPnl;
+    const tradeCount = await this.getTradeCount(wallet);
+    const classification = classifyTrader(totalPnl, tradeCount);
 
     const summary: TraderSummary = {
       wallet,
@@ -608,10 +655,33 @@ export class PolymarketSignalService {
       realizedPnl,
       totalValue,
       totalPnl,
-      isVeryProfitable: totalPnl >= config.profitableWhaleThresholdUsd,
+      tradeCount,
+      tier: classification.tier,
+      weight: classification.weight,
     };
 
     this.traderCache.set(wallet, { summary, fetchedAt: Date.now() });
     return summary;
+  }
+
+  private async getTradeCount(wallet: string): Promise<number> {
+    let count = 0;
+
+    for (let offset = 0; offset <= 100; offset += 50) {
+      const response = await fetch(`${DATA_API_URL}/activity?user=${wallet}&limit=50&offset=${offset}`);
+      if (!response.ok) {
+        break;
+      }
+
+      const rows = (await response.json()) as RawActivity[];
+      const tradeRows = rows.filter((row) => row.type === "TRADE");
+      count += tradeRows.length;
+
+      if (count >= 100 || rows.length < 50) {
+        break;
+      }
+    }
+
+    return count;
   }
 }
