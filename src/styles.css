@@ -104,9 +104,9 @@ a {
 
 .hero h1 {
   margin: 12px 0 14px;
-  font-size: clamp(2.4rem, 5vw, 4.8rem);
-  line-height: 0.96;
-  max-width: 10ch;
+  font-size: 2rem;
+  line-height: 1.1;
+  max-width: 18ch;
 }
 
 .hero-text {
@@ -415,7 +415,7 @@ a {
   }
 
   .hero h1 {
-    font-size: 2.6rem;
+    font-size: 2rem;
   }
 
   .feed-header,
