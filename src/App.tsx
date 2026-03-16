@@ -403,18 +403,18 @@ function App() {
           <div className="feed-header">
             <div>
               <p className="section-kicker">Signal feed</p>
-              <h2>Whale alerts</h2>
+              <h2>Vegas Monitor</h2>
             </div>
+            <label className="search-control">
+              <span>Search</span>
+              <input
+                type="search"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Markets, outcomes, traders"
+              />
+            </label>
             <div className="feed-controls">
-              <label className="search-control">
-                <span>Search</span>
-                <input
-                  type="search"
-                  value={searchQuery}
-                  onChange={(event) => setSearchQuery(event.target.value)}
-                  placeholder="Markets, outcomes, traders"
-                />
-              </label>
               <label className="sort-control">
                 <span>Sort</span>
                 <select value={marketSort} onChange={(event) => setMarketSort(event.target.value as MarketSortOption)}>
