@@ -307,7 +307,7 @@ function App() {
                         <Metric label="Last price" value={signal.averagePrice.toFixed(3)} />
                       </div>
 
-                      <div className="metric-row">
+                      <div className="metric-row metric-row-tier-counts">
                         <Metric label="Whales" value={market.whales.toString()} />
                         <Metric label="Sharks" value={market.sharks.toString()} />
                         <Metric label="Pros" value={market.pros.toString()} />

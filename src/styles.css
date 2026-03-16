@@ -406,8 +406,7 @@ a {
 
 @media (max-width: 1024px) {
   .hero,
-  .summary-strip,
-  .metric-row {
+  .summary-strip {
     grid-template-columns: 1fr;
   }
 
@@ -444,6 +443,22 @@ a {
   .signal-topline {
     flex-direction: column;
     align-items: start;
+  }
+
+  .metric-row-tier-counts {
+    display: none;
+  }
+
+  .metric-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .metric {
+    min-width: 0;
+  }
+
+  .metric strong {
+    overflow-wrap: anywhere;
   }
 
   .signal-actions a {
