@@ -793,7 +793,7 @@ function App() {
                             onClick={() => void removeWatch(watch.marketSlug, watch.outcome)}
                             disabled={removingWatchKey === `${watch.marketSlug}:${watch.outcome}`}
                           >
-                            {removingWatchKey === `${watch.marketSlug}:${watch.outcome}`}
+                            {removingWatchKey === `${watch.marketSlug}:${watch.outcome}`
                               ? t.removing
                               : t.removeWatch}
                           </button>
