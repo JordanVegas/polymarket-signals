@@ -425,7 +425,7 @@ a {
   }
 
   .signal-media {
-    min-height: 180px;
+    min-height: 120px;
   }
 }
 
@@ -472,5 +472,9 @@ a {
 
   .signal-actions a {
     width: 100%;
+  }
+
+  .signal-media {
+    min-height: 84px;
   }
 }
