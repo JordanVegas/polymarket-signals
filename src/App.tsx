@@ -91,6 +91,8 @@ function App() {
   useEffect(() => {
     let closed = false;
     let refreshTimer: number | undefined;
+    let reconnectTimer: number | undefined;
+    let socket: WebSocket | null = null;
 
     const loadSnapshot = async () => {
       const response = await fetch("/api/snapshot");
@@ -100,48 +102,77 @@ function App() {
       }
     };
 
+    const scheduleReconnect = () => {
+      if (closed || reconnectTimer) {
+        return;
+      }
+
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = undefined;
+        connectSocket();
+      }, 2_000);
+    };
+
+    const connectSocket = () => {
+      if (closed) {
+        return;
+      }
+
+      setFeedConnected(false);
+      const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+      socket = new WebSocket(`${protocol}://${window.location.host}/ws`);
+
+      socket.addEventListener("open", () => {
+        if (!closed) {
+          setFeedConnected(true);
+        }
+      });
+
+      socket.addEventListener("close", () => {
+        if (!closed) {
+          setFeedConnected(false);
+          scheduleReconnect();
+        }
+      });
+
+      socket.addEventListener("error", () => {
+        if (!closed) {
+          setFeedConnected(false);
+        }
+      });
+
+      socket.addEventListener("message", (event) => {
+        const message = JSON.parse(event.data) as {
+          type: "snapshot" | "signal";
+          payload: Snapshot | WhaleSignal;
+        };
+        if (message.type === "snapshot") {
+          setSnapshot(message.payload as Snapshot);
+          return;
+        }
+
+        setSnapshot((current) => ({
+          ...current,
+          signals: upsertSignal(current.signals, message.payload as WhaleSignal).slice(0, 75),
+        }));
+      });
+    };
+
     void loadSnapshot();
     refreshTimer = window.setInterval(() => {
       void loadSnapshot();
     }, 15_000);
-
-    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-    const socket = new WebSocket(`${protocol}://${window.location.host}/ws`);
-
-    socket.addEventListener("open", () => {
-      if (!closed) {
-        setFeedConnected(true);
-      }
-    });
-
-    socket.addEventListener("close", () => {
-      if (!closed) {
-        setFeedConnected(false);
-      }
-    });
-
-    socket.addEventListener("message", (event) => {
-      const message = JSON.parse(event.data) as {
-        type: "snapshot" | "signal";
-        payload: Snapshot | WhaleSignal;
-      };
-      if (message.type === "snapshot") {
-        setSnapshot(message.payload as Snapshot);
-        return;
-      }
-
-      setSnapshot((current) => ({
-        ...current,
-        signals: upsertSignal(current.signals, message.payload as WhaleSignal).slice(0, 75),
-      }));
-    });
+    connectSocket();
 
     return () => {
       closed = true;
       if (refreshTimer) {
         window.clearInterval(refreshTimer);
       }
-      socket.close();
+      if (reconnectTimer) {
+        window.clearTimeout(reconnectTimer);
+      }
+      socket?.close();
     };
   }, []);
 
