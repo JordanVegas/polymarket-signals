@@ -9,6 +9,7 @@ const CLOB_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
 
 type RawMarket = {
   id: string;
+  conditionId?: string;
   question: string;
   slug: string;
   image?: string;
@@ -132,6 +133,7 @@ const buildSignalLabel = (
 export class PolymarketSignalService {
   private readonly marketsByAssetId = new Map<string, MarketRecord>();
   private readonly activeAssetIds = new Set<string>();
+  private readonly initialActiveConditionIds = new Set<string>();
   private readonly accumulators = new Map<string, SignalAccumulator>();
   private readonly traderCache = new Map<string, { summary: TraderSummary; fetchedAt: number }>();
   private readonly storage = new SignalStorage();
@@ -152,6 +154,7 @@ export class PolymarketSignalService {
     await this.storage.connect();
     await this.restoreActiveClusters();
     await this.syncMarkets();
+    this.captureInitialActiveMarkets();
     await this.backfillHistoricalSignals();
     this.connectMarketSocket();
     this.startTradePolling();
@@ -238,6 +241,7 @@ export class PolymarketSignalService {
 
         const record: MarketRecord = {
           id: market.id,
+          conditionId: market.conditionId ?? market.id,
           question: market.question,
           slug: market.slug,
           image: market.image ?? "",
@@ -265,6 +269,16 @@ export class PolymarketSignalService {
 
     this.lastMarketSyncAt = Date.now();
     this.resubscribeToActiveAssets();
+  }
+
+  private captureInitialActiveMarkets(): void {
+    if (this.initialActiveConditionIds.size > 0) {
+      return;
+    }
+
+    for (const market of this.marketsByAssetId.values()) {
+      this.initialActiveConditionIds.add(market.conditionId);
+    }
   }
 
   private safeJsonParse<T>(value: string | undefined, fallback: T): T {
@@ -451,6 +465,47 @@ export class PolymarketSignalService {
       .sort((left, right) => left.timestamp - right.timestamp);
 
     await this.processHistoricalTrades(historicalTrades, true);
+  }
+
+  private async backfillMarketHistory(market: MarketRecord): Promise<void> {
+    const started = await this.storage.markMarketCatchupStarted(market.conditionId);
+    if (!started) {
+      return;
+    }
+
+    const batchSize = 500;
+    const maxOffset = 10_000;
+    const trades: TradeRecord[] = [];
+
+    try {
+      for (let offset = 0; offset <= maxOffset; offset += batchSize) {
+        const url = new URL(`${DATA_API_URL}/trades`);
+        url.searchParams.set("market", market.conditionId);
+        url.searchParams.set("limit", String(batchSize));
+        url.searchParams.set("offset", String(offset));
+
+        const response = await fetch(url);
+        if (!response.ok) {
+          break;
+        }
+
+        const batch = (await response.json()) as TradeRecord[] | { error?: string };
+        if (!Array.isArray(batch) || batch.length === 0) {
+          break;
+        }
+
+        trades.push(...batch);
+
+        if (batch.length < batchSize) {
+          break;
+        }
+      }
+
+      const historicalTrades = dedupeTrades(trades).sort((left, right) => left.timestamp - right.timestamp);
+      await this.processHistoricalTrades(historicalTrades, true);
+    } finally {
+      await this.storage.markMarketCatchupCompleted(market.conditionId);
+    }
   }
 
   private async processHistoricalTrades(
@@ -650,6 +705,10 @@ export class PolymarketSignalService {
     await this.storage.saveCluster(this.toPersistedCluster(accumulator));
     await this.storage.saveSignal(signal);
 
+    if (this.initialActiveConditionIds.has(accumulator.market.conditionId)) {
+      void this.backfillMarketHistory(accumulator.market);
+    }
+
     for (const listener of this.listeners) {
       listener(signal);
     }
@@ -697,7 +756,10 @@ export class PolymarketSignalService {
       assetId: cluster.assetId,
       side: cluster.side,
       outcome: cluster.outcome,
-      market: cluster.market,
+      market: {
+        ...cluster.market,
+        conditionId: cluster.market.conditionId ?? cluster.market.id,
+      },
       displayName: cluster.displayName,
       profileImage: cluster.profileImage,
       profileUrl: cluster.profileUrl,

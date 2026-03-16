@@ -21,6 +21,12 @@ export type PersistedObservedTrade = TradeRecord & {
   createdAt: Date;
 };
 
+export type PersistedMarketCatchup = {
+  marketId: string;
+  requestedAt: Date;
+  completedAt?: Date;
+};
+
 export type PersistedCluster = {
   clusterKey: string;
   wallet: string;
@@ -29,6 +35,7 @@ export type PersistedCluster = {
   outcome: string;
   market: {
     id: string;
+    conditionId?: string;
     question: string;
     slug: string;
     image: string;
@@ -67,6 +74,7 @@ export class SignalStorage {
     await this.tradeCollection().createIndex({ timestamp: -1 });
     await this.observedTradeCollection().createIndex({ tradeId: 1 }, { unique: true });
     await this.observedTradeCollection().createIndex({ timestamp: -1 });
+    await this.marketCatchupCollection().createIndex({ marketId: 1 }, { unique: true });
     await this.clusterCollection().createIndex({ clusterKey: 1 }, { unique: true });
     await this.clusterCollection().createIndex({ updatedAt: -1 });
     await this.clusterCollection().createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
@@ -119,6 +127,29 @@ export class SignalStorage {
       .toArray();
 
     return rows.map(({ _id: _ignored, tradeId: _tradeId, createdAt: _createdAt, ...trade }) => trade);
+  }
+
+  async markMarketCatchupStarted(marketId: string): Promise<boolean> {
+    const result = await this.marketCatchupCollection().updateOne(
+      { marketId },
+      {
+        $setOnInsert: {
+          marketId,
+          requestedAt: new Date(),
+        },
+      },
+      { upsert: true },
+    );
+
+    return result.upsertedCount > 0;
+  }
+
+  async markMarketCatchupCompleted(marketId: string): Promise<void> {
+    await this.marketCatchupCollection().updateOne(
+      { marketId },
+      { $set: { completedAt: new Date() } },
+      { upsert: true },
+    );
   }
 
   async loadActiveClusters(cutoffMs: number): Promise<PersistedCluster[]> {
@@ -177,5 +208,15 @@ export class SignalStorage {
     return this.client
       .db(config.mongoDbName)
       .collection<PersistedObservedTrade>("observed_trades");
+  }
+
+  private marketCatchupCollection() {
+    if (!this.client) {
+      throw new Error("Mongo client not connected");
+    }
+
+    return this.client
+      .db(config.mongoDbName)
+      .collection<PersistedMarketCatchup>("market_catchups");
   }
 }

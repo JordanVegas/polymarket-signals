@@ -1,5 +1,6 @@
 export type MarketRecord = {
   id: string;
+  conditionId: string;
   question: string;
   slug: string;
   image: string;
