@@ -213,7 +213,6 @@ function App() {
     () => snapshot.signals.filter((signal) => signal.side === "BUY"),
     [snapshot.signals],
   );
-  const headerSignal = visibleSignals[0];
   const marketAggregates = useMemo(
     () => sortMarkets(aggregateMarkets(visibleSignals), marketSort),
     [visibleSignals, marketSort],
@@ -230,6 +229,18 @@ function App() {
 
       <main className="page">
         <section className="hero">
+          <div className="summary-strip">
+            <SummaryCard
+              label="Last market sync"
+              value={formatTimestamp(snapshot.status.lastMarketSyncAt)}
+              detail="Active markets are refreshed continuously so new listings join the stream."
+            />
+            <SummaryCard
+              label="Last trade seen"
+              value={formatTimestamp(snapshot.status.lastTradeAt)}
+              detail="Signals are grouped by wallet, market outcome, and side within a rolling window."
+            />
+          </div>
           <div className="hero-panel">
             <StatusRow
               label="Frontend stream"
@@ -266,29 +277,6 @@ function App() {
               tone="green"
             />
           </div>
-        </section>
-
-        <section className="summary-strip">
-          <SummaryCard
-            className="summary-card-featured"
-            label="Most recent alert"
-            value={headerSignal ? headerSignal.displayName : "Waiting for whale flow"}
-            detail={
-              headerSignal
-                ? `${headerSignal.outcome} ${headerSignal.side.toLowerCase()} in ${headerSignal.marketQuestion}`
-                : "The feed will populate as large clustered trades appear."
-            }
-          />
-          <SummaryCard
-            label="Last market sync"
-            value={formatTimestamp(snapshot.status.lastMarketSyncAt)}
-            detail="Active markets are refreshed continuously so new listings join the stream."
-          />
-          <SummaryCard
-            label="Last trade seen"
-            value={formatTimestamp(snapshot.status.lastTradeAt)}
-            detail="Signals are grouped by wallet, market outcome, and side within a rolling window."
-          />
         </section>
 
         <section className="feed-section">

@@ -190,8 +190,8 @@ export class PolymarketSignalService {
     await this.restoreActiveClusters();
     await this.syncMarkets();
     this.captureInitialActiveMarkets();
-    await this.backfillHistoricalSignals();
     this.startTradePolling();
+    this.runBackgroundTask("historical backfill", this.backfillHistoricalSignals());
     this.marketSyncTimer = setInterval(() => {
       this.runBackgroundTask("scheduled market sync", this.syncMarkets());
     }, config.marketRefreshMs);
