@@ -57,6 +57,37 @@ app.get("/api/snapshot", async (_request, response) => {
   response.json(await service.getSnapshot());
 });
 
+app.get("/api/profile", async (request, response) => {
+  try {
+    if (!request.sessionUser?.username) {
+      response.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+
+    response.json(await service.getUserProfile(request.sessionUser.username));
+  } catch (error) {
+    response.status(400).json({
+      error: error instanceof Error ? error.message : "Unable to load profile",
+    });
+  }
+});
+
+app.put("/api/profile", async (request, response) => {
+  try {
+    if (!request.sessionUser?.username) {
+      response.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+
+    const webhookUrl = String(request.body.webhookUrl ?? "");
+    response.json(await service.updateUserProfile(request.sessionUser.username, webhookUrl));
+  } catch (error) {
+    response.status(400).json({
+      error: error instanceof Error ? error.message : "Unable to save profile",
+    });
+  }
+});
+
 app.get("/api/markets", async (request, response) => {
   const sortParam = String(request.query.sort ?? "recent");
   const sort = (
@@ -73,7 +104,6 @@ app.get("/api/markets", async (request, response) => {
 app.post("/api/market-alerts/watch", async (request, response) => {
   try {
     const marketSlug = String(request.body.marketSlug ?? "").trim();
-    const webhookUrl = typeof request.body.webhookUrl === "string" ? request.body.webhookUrl : undefined;
 
     if (!request.sessionUser?.username) {
       response.status(401).json({ error: "Unauthorized" });
@@ -85,7 +115,7 @@ app.post("/api/market-alerts/watch", async (request, response) => {
       return;
     }
 
-    response.json(await service.watchMarket(request.sessionUser.username, marketSlug, webhookUrl));
+    response.json(await service.watchMarket(request.sessionUser.username, marketSlug));
   } catch (error) {
     response.status(400).json({
       error: error instanceof Error ? error.message : "Unable to enable sell alerts",

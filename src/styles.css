@@ -74,7 +74,8 @@ a {
 
 .hero-panel,
 .empty-state,
-.signal-card {
+.signal-card,
+.profile-panel {
   background: var(--panel);
   border: 1px solid var(--panel-border);
   border-radius: 28px;
@@ -153,6 +154,24 @@ a {
   flex-wrap: wrap;
 }
 
+.nav-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.nav-button:hover {
+  border-color: rgba(255, 255, 255, 0.24);
+}
+
 .feed-header h2 {
   margin: 6px 0 0;
   font-size: 2rem;
@@ -219,6 +238,57 @@ a {
   display: grid;
   gap: 12px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.profile-panel {
+  padding: 22px;
+  display: grid;
+  gap: 18px;
+}
+
+.profile-copy h3 {
+  margin: 6px 0 10px;
+  font-size: 1.4rem;
+}
+
+.profile-copy p {
+  margin: 0;
+  color: #d0e1eb;
+  line-height: 1.6;
+}
+
+.profile-field {
+  display: grid;
+  gap: 8px;
+}
+
+.profile-field span {
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.68rem;
+}
+
+.profile-field input {
+  min-height: 42px;
+  width: 100%;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: inherit;
+  padding: 0 14px;
+  font: inherit;
+}
+
+.profile-message {
+  margin: 0;
+  color: #dffcff;
+  font-size: 0.9rem;
+}
+
+.profile-actions {
+  display: flex;
+  justify-content: flex-start;
 }
 
 .load-more-sentinel {

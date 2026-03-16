@@ -79,6 +79,11 @@ type MarketPageResponse = {
   hasMore: boolean;
 };
 
+type UserProfileResponse = {
+  username: string;
+  webhookUrl: string;
+};
+
 const positiveOutcomeKeywords = ["yes", "up", "above", "over", "higher", "more", "long"];
 const negativeOutcomeKeywords = ["no", "down", "below", "under", "lower", "less", "short"];
 const outcomeOpposites: Record<string, string> = {
@@ -107,6 +112,7 @@ const currencyFormatter = new Intl.NumberFormat("en-US", {
 const MARKET_PAGE_SIZE = 24;
 
 function App() {
+  const [currentPath, setCurrentPath] = useState(() => window.location.pathname);
   const [snapshot, setSnapshot] = useState<Snapshot>({
     status: {
       marketCount: 0,
@@ -136,9 +142,24 @@ function App() {
   const [isLoadingMarkets, setIsLoadingMarkets] = useState(false);
   const [alertActionMarketSlug, setAlertActionMarketSlug] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
+  const [profile, setProfile] = useState<UserProfileResponse | null>(null);
+  const [profileFormWebhookUrl, setProfileFormWebhookUrl] = useState("");
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [profileMessage, setProfileMessage] = useState<string | null>(null);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const deferredSearchQuery = useDeferredValue(debouncedSearchQuery);
   const deferredRefreshVersion = useDeferredValue(refreshVersion);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      setCurrentPath(window.location.pathname);
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => {
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -234,6 +255,10 @@ function App() {
   }, [marketSort, deferredSearchQuery]);
 
   useEffect(() => {
+    if (currentPath === "/profile") {
+      return;
+    }
+
     let cancelled = false;
 
     const loadMarketPages = async () => {
@@ -284,7 +309,38 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [marketSort, deferredSearchQuery, pageCount, deferredRefreshVersion]);
+  }, [currentPath, marketSort, deferredSearchQuery, pageCount, deferredRefreshVersion]);
+
+  useEffect(() => {
+    if (currentPath !== "/profile") {
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadProfile = async () => {
+      const response = await fetch("/api/profile");
+      const payload = (await response.json()) as UserProfileResponse & { error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error || "Unable to load profile");
+      }
+
+      if (!cancelled) {
+        setProfile(payload);
+        setProfileFormWebhookUrl(payload.webhookUrl);
+      }
+    };
+
+    void loadProfile().catch((error) => {
+      if (!cancelled) {
+        setProfileMessage(error instanceof Error ? error.message : "Unable to load profile");
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentPath]);
 
   useEffect(() => {
     const sentinel = loadMoreRef.current;
@@ -314,6 +370,14 @@ function App() {
 
   const visibleMarkets = useMemo(() => marketPage.items, [marketPage.items]);
 
+  const navigateTo = (path: "/" | "/profile") => {
+    if (window.location.pathname !== path) {
+      window.history.pushState({}, "", path);
+    }
+    setCurrentPath(path);
+    setProfileMessage(null);
+  };
+
   const toggleSellAlerts = async (market: MarketAggregate) => {
     setAlertActionMarketSlug(market.marketSlug);
 
@@ -327,15 +391,6 @@ function App() {
           throw new Error(payload.error || "Unable to disable sell alerts");
         }
       } else {
-        const webhookUrl = window.prompt(
-          "Enter your Discord webhook URL for sell alerts. If you've already saved one, you can leave this blank.",
-          "",
-        );
-
-        if (webhookUrl === null) {
-          return;
-        }
-
         const response = await fetch("/api/market-alerts/watch", {
           method: "POST",
           headers: {
@@ -343,7 +398,6 @@ function App() {
           },
           body: JSON.stringify({
             marketSlug: market.marketSlug,
-            webhookUrl: webhookUrl.trim() || undefined,
           }),
         });
         const payload = (await response.json()) as { error?: string };
@@ -354,11 +408,48 @@ function App() {
 
       setRefreshVersion((current) => current + 1);
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : "Unable to update sell alerts");
+      const message = error instanceof Error ? error.message : "Unable to update sell alerts";
+      if (message.includes("Discord webhook URL")) {
+        setProfileMessage(message);
+        navigateTo("/profile");
+      } else {
+        window.alert(message);
+      }
     } finally {
       setAlertActionMarketSlug(null);
     }
   };
+
+  const saveProfile = async () => {
+    setIsSavingProfile(true);
+    setProfileMessage(null);
+
+    try {
+      const response = await fetch("/api/profile", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          webhookUrl: profileFormWebhookUrl,
+        }),
+      });
+      const payload = (await response.json()) as UserProfileResponse & { error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error || "Unable to save profile");
+      }
+
+      setProfile(payload);
+      setProfileFormWebhookUrl(payload.webhookUrl);
+      setProfileMessage("Discord webhook saved");
+    } catch (error) {
+      setProfileMessage(error instanceof Error ? error.message : "Unable to save profile");
+    } finally {
+      setIsSavingProfile(false);
+    }
+  };
+
+  const profileTitle = profile?.username ? `${profile.username}'s profile` : "Profile";
 
   return (
     <div className="app-shell">
@@ -410,6 +501,50 @@ function App() {
           </div>
         </section>
 
+        {currentPath === "/profile" ? (
+          <section className="profile-section">
+            <div className="feed-header">
+              <div>
+                <p className="section-kicker">Settings</p>
+                <h2>Profile</h2>
+              </div>
+              <div className="feed-controls">
+                <button type="button" className="nav-button" onClick={() => navigateTo("/")}>
+                  Back to monitor
+                </button>
+              </div>
+            </div>
+
+            <div className="profile-panel">
+              <div className="profile-copy">
+                <p className="section-kicker">Discord alerts</p>
+                <h3>{profileTitle}</h3>
+                <p>
+                  Save your Discord webhook here once, then use <strong>Get sell alerts</strong> on any market card
+                  you want to track for exit signals.
+                </p>
+              </div>
+
+              <label className="profile-field">
+                <span>Discord webhook URL</span>
+                <input
+                  type="url"
+                  value={profileFormWebhookUrl}
+                  onChange={(event) => setProfileFormWebhookUrl(event.target.value)}
+                  placeholder="https://discord.com/api/webhooks/..."
+                />
+              </label>
+
+              {profileMessage ? <p className="profile-message">{profileMessage}</p> : null}
+
+              <div className="profile-actions">
+                <button type="button" className="watch-button watch-button-active" onClick={() => void saveProfile()} disabled={isSavingProfile}>
+                  {isSavingProfile ? "Saving..." : "Save webhook"}
+                </button>
+              </div>
+            </div>
+          </section>
+        ) : (
         <section className="feed-section">
           <div className="feed-header">
             <div>
@@ -426,6 +561,9 @@ function App() {
               />
             </label>
             <div className="feed-controls">
+              <button type="button" className="nav-button" onClick={() => navigateTo("/profile")}>
+                Profile
+              </button>
               <label className="sort-control">
                 <span>Sort</span>
                 <select value={marketSort} onChange={(event) => setMarketSort(event.target.value as MarketSortOption)}>
@@ -545,6 +683,7 @@ function App() {
             </>
           )}
         </section>
+        )}
       </main>
     </div>
   );

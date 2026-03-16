@@ -9,6 +9,7 @@ import type {
   MarketSortOption,
   TradeRecord,
   TraderSummary,
+  UserProfileResponse,
   WatchMarketResult,
   WhaleSignal,
 } from "./types.js";
@@ -315,7 +316,6 @@ export class PolymarketSignalService {
   async watchMarket(
     username: string,
     marketSlug: string,
-    webhookUrl?: string,
   ): Promise<WatchMarketResult> {
     const normalizedUsername = username.trim();
     const normalizedMarketSlug = marketSlug.trim();
@@ -323,18 +323,9 @@ export class PolymarketSignalService {
       throw new Error("Username and market slug are required");
     }
 
-    const normalizedWebhookUrl = webhookUrl?.trim();
-    if (normalizedWebhookUrl) {
-      if (!isValidDiscordWebhookUrl(normalizedWebhookUrl)) {
-        throw new Error("Please enter a valid Discord webhook URL");
-      }
-
-      await this.storage.upsertUserWebhook(normalizedUsername, normalizedWebhookUrl);
-    }
-
     const savedWebhookUrl = await this.storage.getUserWebhook(normalizedUsername);
     if (!savedWebhookUrl) {
-      throw new Error("Add your Discord webhook URL to enable sell alerts");
+      throw new Error("Add your Discord webhook URL in Profile before enabling sell alerts");
     }
 
     await this.storage.watchMarket(normalizedUsername, normalizedMarketSlug);
@@ -356,6 +347,40 @@ export class PolymarketSignalService {
     return {
       isWatched: false,
       webhookConfigured: Boolean(savedWebhookUrl),
+    };
+  }
+
+  async getUserProfile(username: string): Promise<UserProfileResponse> {
+    const normalizedUsername = username.trim();
+    if (!normalizedUsername) {
+      throw new Error("Username is required");
+    }
+
+    return {
+      username: normalizedUsername,
+      webhookUrl: (await this.storage.getUserWebhook(normalizedUsername)) ?? "",
+    };
+  }
+
+  async updateUserProfile(username: string, webhookUrl: string): Promise<UserProfileResponse> {
+    const normalizedUsername = username.trim();
+    const normalizedWebhookUrl = webhookUrl.trim();
+    if (!normalizedUsername) {
+      throw new Error("Username is required");
+    }
+
+    if (!normalizedWebhookUrl) {
+      throw new Error("Discord webhook URL is required");
+    }
+
+    if (!isValidDiscordWebhookUrl(normalizedWebhookUrl)) {
+      throw new Error("Please enter a valid Discord webhook URL");
+    }
+
+    await this.storage.upsertUserWebhook(normalizedUsername, normalizedWebhookUrl);
+    return {
+      username: normalizedUsername,
+      webhookUrl: normalizedWebhookUrl,
     };
   }
 

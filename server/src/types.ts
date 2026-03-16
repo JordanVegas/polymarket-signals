@@ -110,3 +110,8 @@ export type WatchMarketResult = {
   isWatched: boolean;
   webhookConfigured: boolean;
 };
+
+export type UserProfileResponse = {
+  username: string;
+  webhookUrl: string;
+};
