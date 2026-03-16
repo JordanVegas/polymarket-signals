@@ -191,7 +191,9 @@ export class PolymarketSignalService {
     await this.syncMarkets();
     this.captureInitialActiveMarkets();
     this.startTradePolling();
-    this.runBackgroundTask("historical backfill", this.backfillHistoricalSignals());
+    if (config.historicalFetchEnabled) {
+      this.runBackgroundTask("historical backfill", this.backfillHistoricalSignals());
+    }
     this.marketSyncTimer = setInterval(() => {
       this.runBackgroundTask("scheduled market sync", this.syncMarkets());
     }, config.marketRefreshMs);
@@ -532,6 +534,10 @@ export class PolymarketSignalService {
   }
 
   private async backfillHistoricalSignals(): Promise<void> {
+    if (!config.historicalFetchEnabled) {
+      return;
+    }
+
     const limit = Math.max(0, Math.min(config.historicalBackfillLimit, 50_000));
     if (limit === 0) {
       return;
@@ -581,6 +587,10 @@ export class PolymarketSignalService {
   }
 
   private async backfillMarketHistory(market: MarketRecord): Promise<void> {
+    if (!config.historicalFetchEnabled) {
+      return;
+    }
+
     const started = await this.storage.markMarketCatchupStarted(market.conditionId);
     if (!started) {
       return;
@@ -628,6 +638,10 @@ export class PolymarketSignalService {
   }
 
   private async backfillTraderHistory(trader: TraderSummary): Promise<void> {
+    if (!config.historicalFetchEnabled) {
+      return;
+    }
+
     if (trader.tier !== "whale" && trader.tier !== "shark") {
       return;
     }

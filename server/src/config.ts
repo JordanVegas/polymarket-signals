@@ -7,6 +7,23 @@ const parseNumber = (value: string | undefined, fallback: number): number => {
   return Number.isFinite(parsed) ? parsed : fallback;
 };
 
+const parseBoolean = (value: string | undefined, fallback: boolean): boolean => {
+  if (!value) {
+    return fallback;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+
+  return fallback;
+};
+
 const withDatabaseName = (mongoUri: string, databaseName: string): string => {
   try {
     const nextUri = new URL(mongoUri);
@@ -38,6 +55,7 @@ export const config = {
   maxSignals: parseNumber(process.env.MAX_SIGNALS, 75),
   marketRefreshMs: parseNumber(process.env.MARKET_REFRESH_MS, 10 * 60_000),
   tradePollMs: parseNumber(process.env.TRADE_POLL_MS, 2_500),
+  historicalFetchEnabled: parseBoolean(process.env.HISTORICAL_FETCH_ENABLED, false),
   historicalBackfillLimit: parseNumber(process.env.HISTORICAL_BACKFILL_LIMIT, 2_000),
   historicalBackfillLookbackHours: parseNumber(
     process.env.HISTORICAL_BACKFILL_LOOKBACK_HOURS,
