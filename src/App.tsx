@@ -698,11 +698,6 @@ function App() {
               tone={snapshot.status.websocketConnected ? "green" : "blue"}
             />
             <StatusRow
-              label={t.activeAssets}
-              value={snapshot.status.marketCount.toLocaleString()}
-              tone="neutral"
-            />
-            <StatusRow
               label={t.signalsSurfaced}
               value={marketPage.total.toString()}
               tone="neutral"
