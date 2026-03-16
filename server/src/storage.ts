@@ -159,6 +159,10 @@ export class SignalStorage {
     );
   }
 
+  async clearMarketCatchup(marketId: string): Promise<void> {
+    await this.marketCatchupCollection().deleteOne({ marketId });
+  }
+
   async markTraderCatchupStarted(wallet: string): Promise<boolean> {
     const result = await this.traderCatchupCollection().updateOne(
       { wallet },
@@ -180,6 +184,10 @@ export class SignalStorage {
       { $set: { completedAt: new Date() } },
       { upsert: true },
     );
+  }
+
+  async clearTraderCatchup(wallet: string): Promise<void> {
+    await this.traderCatchupCollection().deleteOne({ wallet });
   }
 
   async loadActiveClusters(cutoffMs: number): Promise<PersistedCluster[]> {

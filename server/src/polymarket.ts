@@ -144,6 +144,10 @@ const buildSignalLabel = (
   return { label: `Large ${action}`, labelTone: "neutral" };
 };
 
+const logFetchFailure = (context: string, error: unknown) => {
+  console.error(`[polysignals] ${context}`, error);
+};
+
 export class PolymarketSignalService {
   private readonly marketsByAssetId = new Map<string, MarketRecord>();
   private readonly activeAssetIds = new Set<string>();
@@ -173,7 +177,7 @@ export class PolymarketSignalService {
     this.connectMarketSocket();
     this.startTradePolling();
     this.marketSyncTimer = setInterval(() => {
-      void this.syncMarkets();
+      this.runBackgroundTask("scheduled market sync", this.syncMarkets());
     }, config.marketRefreshMs);
   }
 
@@ -231,7 +235,10 @@ export class PolymarketSignalService {
       url.searchParams.set("limit", String(pageSize));
       url.searchParams.set("offset", String(offset));
 
-      const response = await fetch(url);
+      const response = await this.safeFetch(url, "sync markets");
+      if (!response) {
+        return;
+      }
       if (!response.ok) {
         throw new Error(`Failed to sync markets: ${response.status}`);
       }
@@ -390,9 +397,9 @@ export class PolymarketSignalService {
   }
 
   private startTradePolling(): void {
-    void this.pollRecentTrades();
+    this.runBackgroundTask("initial trade poll", this.pollRecentTrades());
     this.tradePollTimer = setInterval(() => {
-      void this.pollRecentTrades();
+      this.runBackgroundTask("trade poll", this.pollRecentTrades());
     }, config.tradePollMs);
   }
 
@@ -400,7 +407,10 @@ export class PolymarketSignalService {
     const url = new URL(`${DATA_API_URL}/trades`);
     url.searchParams.set("limit", "250");
 
-    const response = await fetch(url);
+    const response = await this.safeFetch(url, "poll recent trades");
+    if (!response) {
+      return;
+    }
     if (!response.ok) {
       return;
     }
@@ -457,7 +467,10 @@ export class PolymarketSignalService {
       url.searchParams.set("limit", String(Math.min(batchSize, limit - offset)));
       url.searchParams.set("offset", String(offset));
 
-      const response = await fetch(url);
+      const response = await this.safeFetch(url, "historical backfill");
+      if (!response) {
+        break;
+      }
       if (!response.ok) {
         break;
       }
@@ -498,7 +511,10 @@ export class PolymarketSignalService {
         url.searchParams.set("limit", String(batchSize));
         url.searchParams.set("offset", String(offset));
 
-        const response = await fetch(url);
+        const response = await this.safeFetch(url, `market catch-up ${market.slug}`);
+        if (!response) {
+          throw new Error(`Failed market catch-up fetch for ${market.slug}`);
+        }
         if (!response.ok) {
           break;
         }
@@ -517,8 +533,11 @@ export class PolymarketSignalService {
 
       const historicalTrades = dedupeTrades(trades).sort((left, right) => left.timestamp - right.timestamp);
       await this.processHistoricalTrades(historicalTrades, true);
-    } finally {
       await this.storage.markMarketCatchupCompleted(market.conditionId);
+    } catch (error) {
+      await this.storage.clearMarketCatchup(market.conditionId);
+      throw error;
+    } finally {
     }
   }
 
@@ -538,9 +557,13 @@ export class PolymarketSignalService {
 
     try {
       for (let offset = 0; offset <= maxOffset; offset += batchSize) {
-        const response = await fetch(
+        const response = await this.safeFetch(
           `${DATA_API_URL}/activity?user=${trader.wallet}&limit=${batchSize}&offset=${offset}`,
+          `trader catch-up ${trader.wallet}`,
         );
+        if (!response) {
+          throw new Error(`Failed trader catch-up fetch for ${trader.wallet}`);
+        }
         if (!response.ok) {
           break;
         }
@@ -565,8 +588,11 @@ export class PolymarketSignalService {
 
       const historicalTrades = dedupeTrades(trades).sort((left, right) => left.timestamp - right.timestamp);
       await this.processHistoricalTrades(historicalTrades, true);
-    } finally {
       await this.storage.markTraderCatchupCompleted(trader.wallet);
+    } catch (error) {
+      await this.storage.clearTraderCatchup(trader.wallet);
+      throw error;
+    } finally {
     }
   }
 
@@ -768,11 +794,14 @@ export class PolymarketSignalService {
     await this.storage.saveSignal(signal);
 
     if (this.initialActiveConditionIds.has(accumulator.market.conditionId)) {
-      void this.backfillMarketHistory(accumulator.market);
+      this.runBackgroundTask(
+        `market catch-up ${accumulator.market.slug}`,
+        this.backfillMarketHistory(accumulator.market),
+      );
     }
 
     if (trader.tier === "whale" || trader.tier === "shark") {
-      void this.backfillTraderHistory(trader);
+      this.runBackgroundTask(`trader catch-up ${trader.wallet}`, this.backfillTraderHistory(trader));
     }
 
     for (const listener of this.listeners) {
@@ -851,16 +880,16 @@ export class PolymarketSignalService {
     }
 
     const [positionsRes, closedPositionsRes, valueRes] = await Promise.all([
-      fetch(`${DATA_API_URL}/positions?user=${wallet}&sizeThreshold=.1`),
-      fetch(`${DATA_API_URL}/closed-positions?user=${wallet}&limit=500`),
-      fetch(`${DATA_API_URL}/value?user=${wallet}`),
+      this.safeFetch(`${DATA_API_URL}/positions?user=${wallet}&sizeThreshold=.1`, `positions ${wallet}`),
+      this.safeFetch(`${DATA_API_URL}/closed-positions?user=${wallet}&limit=500`, `closed positions ${wallet}`),
+      this.safeFetch(`${DATA_API_URL}/value?user=${wallet}`, `value ${wallet}`),
     ]);
 
-    const positions = positionsRes.ok ? (((await positionsRes.json()) as RawPosition[]) ?? []) : [];
-    const closedPositions = closedPositionsRes.ok
+    const positions = positionsRes?.ok ? (((await positionsRes.json()) as RawPosition[]) ?? []) : [];
+    const closedPositions = closedPositionsRes?.ok
       ? (((await closedPositionsRes.json()) as RawClosedPosition[]) ?? [])
       : [];
-    const valueRows = valueRes.ok ? (((await valueRes.json()) as RawValue[]) ?? []) : [];
+    const valueRows = valueRes?.ok ? (((await valueRes.json()) as RawValue[]) ?? []) : [];
 
     const openPnl = positions.reduce((sum, position) => sum + Number(position.cashPnl ?? 0), 0);
     const openRealized = positions.reduce(
@@ -898,7 +927,13 @@ export class PolymarketSignalService {
     let count = 0;
 
     for (let offset = 0; offset <= 100; offset += 50) {
-      const response = await fetch(`${DATA_API_URL}/activity?user=${wallet}&limit=50&offset=${offset}`);
+      const response = await this.safeFetch(
+        `${DATA_API_URL}/activity?user=${wallet}&limit=50&offset=${offset}`,
+        `trade count ${wallet}`,
+      );
+      if (!response) {
+        break;
+      }
       if (!response.ok) {
         break;
       }
@@ -952,5 +987,20 @@ export class PolymarketSignalService {
       profileImage: activity.profileImage ? String(activity.profileImage) : undefined,
       transactionHash,
     };
+  }
+
+  private async safeFetch(input: string | URL, context: string): Promise<Response | null> {
+    try {
+      return await fetch(input);
+    } catch (error) {
+      logFetchFailure(context, error);
+      return null;
+    }
+  }
+
+  private runBackgroundTask(context: string, task: Promise<unknown>): void {
+    void task.catch((error) => {
+      logFetchFailure(context, error);
+    });
   }
 }
