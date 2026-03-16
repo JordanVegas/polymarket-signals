@@ -68,6 +68,10 @@ export type AppSnapshot = {
     websocketConnected: boolean;
     lastMarketSyncAt: number | null;
     lastTradeAt: number | null;
+    websocketSubscribedAssetCount: number;
+    websocketAssetsSeenCount: number;
+    websocketAssetsSeenRecentlyCount: number;
+    lastWebsocketMessageAt: number | null;
   };
   signals: WhaleSignal[];
 };

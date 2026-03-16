@@ -152,6 +152,7 @@ export class PolymarketSignalService {
   private readonly marketsByAssetId = new Map<string, MarketRecord>();
   private readonly activeAssetIds = new Set<string>();
   private readonly initialActiveConditionIds = new Set<string>();
+  private readonly websocketAssetSeenAt = new Map<string, number>();
   private readonly accumulators = new Map<string, SignalAccumulator>();
   private readonly traderCache = new Map<string, { summary: TraderSummary; fetchedAt: number }>();
   private readonly storage = new SignalStorage();
@@ -164,6 +165,7 @@ export class PolymarketSignalService {
   private websocketConnected = false;
   private lastMarketSyncAt: number | null = null;
   private lastTradeAt: number | null = null;
+  private lastWebsocketMessageAt: number | null = null;
   private lastForcedMarketSyncAt = 0;
   private forcingMarketSync: Promise<void> | null = null;
   private listeners = new Set<(payload: WhaleSignal) => void>();
@@ -212,12 +214,25 @@ export class PolymarketSignalService {
   }
 
   async getSnapshot() {
+    const recentCutoff = Date.now() - 15 * 60_000;
+    let websocketAssetsSeenRecentlyCount = 0;
+
+    for (const seenAt of this.websocketAssetSeenAt.values()) {
+      if (seenAt >= recentCutoff) {
+        websocketAssetsSeenRecentlyCount += 1;
+      }
+    }
+
     return {
       status: {
         marketCount: this.activeAssetIds.size,
         websocketConnected: this.websocketConnected,
         lastMarketSyncAt: this.lastMarketSyncAt,
         lastTradeAt: this.lastTradeAt,
+        websocketSubscribedAssetCount: this.activeAssetIds.size,
+        websocketAssetsSeenCount: this.websocketAssetSeenAt.size,
+        websocketAssetsSeenRecentlyCount,
+        lastWebsocketMessageAt: this.lastWebsocketMessageAt,
       },
       signals: await this.storage.loadRecentSignals(config.maxSignals),
     };
@@ -389,7 +404,10 @@ export class PolymarketSignalService {
       return;
     }
 
+    const seenAt = Date.now();
     this.lastTradeAt = Date.now();
+    this.lastWebsocketMessageAt = seenAt;
+    this.websocketAssetSeenAt.set(message.asset_id, seenAt);
     const timestampSec = Math.floor(Number(message.timestamp) / 1000);
     if (Number.isFinite(timestampSec)) {
       this.lastTradeTimestampSec = Math.max(this.lastTradeTimestampSec, timestampSec - 1);

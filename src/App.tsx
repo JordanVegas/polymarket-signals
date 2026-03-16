@@ -41,6 +41,10 @@ type Snapshot = {
     websocketConnected: boolean;
     lastMarketSyncAt: number | null;
     lastTradeAt: number | null;
+    websocketSubscribedAssetCount: number;
+    websocketAssetsSeenCount: number;
+    websocketAssetsSeenRecentlyCount: number;
+    lastWebsocketMessageAt: number | null;
   };
   signals: WhaleSignal[];
 };
@@ -85,6 +89,10 @@ function App() {
       websocketConnected: false,
       lastMarketSyncAt: null,
       lastTradeAt: null,
+      websocketSubscribedAssetCount: 0,
+      websocketAssetsSeenCount: 0,
+      websocketAssetsSeenRecentlyCount: 0,
+      lastWebsocketMessageAt: null,
     },
     signals: [],
   });
@@ -233,6 +241,11 @@ function App() {
             <StatusRow
               label="Signals surfaced"
               value={marketAggregates.length.toString()}
+              tone="neutral"
+            />
+            <StatusRow
+              label="WS coverage"
+              value={`${snapshot.status.websocketAssetsSeenRecentlyCount}/${snapshot.status.websocketSubscribedAssetCount} active`}
               tone="neutral"
             />
             <StatusRow
