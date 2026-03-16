@@ -312,6 +312,19 @@ a {
   white-space: nowrap;
 }
 
+.edge-return {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.72rem;
+}
+
+.edge-return-positive {
+  color: var(--green);
+}
+
+.edge-return-negative {
+  color: #ff8d8d;
+}
+
 .outcome-chip {
   display: inline-flex;
   align-items: center;

@@ -2,7 +2,7 @@ import { config } from "./config.js";
 import WebSocket from "ws";
 import { SignalStorage, type PersistedCluster } from "./storage.js";
 import type {
-  MarketPriceUpdate,
+  MarketQuoteUpdate,
   MarketRecord,
   TradeRecord,
   TraderSummary,
@@ -62,10 +62,18 @@ type MarketTradeMessage = {
   asset_id?: string;
   market?: string;
   price?: string;
+  best_bid?: string;
+  best_ask?: string;
   size?: string;
   side?: "BUY" | "SELL";
   timestamp?: string;
   transaction_hash?: string;
+};
+
+type MarketQuoteState = {
+  lastTradePrice?: number;
+  bestBid?: number;
+  bestAsk?: number;
 };
 
 type SignalAccumulator = {
@@ -177,7 +185,7 @@ export class PolymarketSignalService {
   private readonly activeAssetIds = new Set<string>();
   private readonly initialActiveConditionIds = new Set<string>();
   private readonly websocketAssetSeenAt = new Map<string, number>();
-  private readonly marketPrices = new Map<string, Map<string, number>>();
+  private readonly marketQuotes = new Map<string, Map<string, MarketQuoteState>>();
   private readonly accumulators = new Map<string, SignalAccumulator>();
   private readonly traderCache = new Map<string, { summary: TraderSummary; fetchedAt: number }>();
   private readonly storage = new SignalStorage();
@@ -196,7 +204,7 @@ export class PolymarketSignalService {
   private forcingMarketSync: Promise<void> | null = null;
   private nextShardId = 1;
   private listeners = new Set<(payload: WhaleSignal) => void>();
-  private priceListeners = new Set<(payload: MarketPriceUpdate) => void>();
+  private quoteListeners = new Set<(payload: MarketQuoteUpdate) => void>();
 
   async start(): Promise<void> {
     await this.storage.connect();
@@ -240,10 +248,10 @@ export class PolymarketSignalService {
     };
   }
 
-  onMarketPrice(listener: (payload: MarketPriceUpdate) => void): () => void {
-    this.priceListeners.add(listener);
+  onMarketQuote(listener: (payload: MarketQuoteUpdate) => void): () => void {
+    this.quoteListeners.add(listener);
     return () => {
-      this.priceListeners.delete(listener);
+      this.quoteListeners.delete(listener);
     };
   }
 
@@ -284,10 +292,10 @@ export class PolymarketSignalService {
         websocketAssetsSeenRecentlyCount,
         lastWebsocketMessageAt: this.lastWebsocketMessageAt,
       },
-      marketPrices: Object.fromEntries(
-        Array.from(this.marketPrices.entries(), ([marketSlug, pricesByOutcome]) => [
+      marketQuotes: Object.fromEntries(
+        Array.from(this.marketQuotes.entries(), ([marketSlug, quotesByOutcome]) => [
           marketSlug,
-          Object.fromEntries(pricesByOutcome),
+          Object.fromEntries(quotesByOutcome),
         ]),
       ),
       signals: recentSignals,
@@ -421,6 +429,7 @@ export class PolymarketSignalService {
         JSON.stringify({
           type: "market",
           assets_ids: shard.assetIds,
+          custom_feature_enabled: true,
         }),
       );
       shard.heartbeatTimer = setInterval(() => {
@@ -499,26 +508,31 @@ export class PolymarketSignalService {
   }
 
   private processSocketEvent(message: MarketTradeMessage): void {
-    if (message.event_type !== "last_trade_price" || !message.asset_id || !message.timestamp) {
+    if (!message.asset_id) {
       return;
     }
 
     const seenAt = Date.now();
-    this.lastTradeAt = Date.now();
     this.lastWebsocketMessageAt = seenAt;
     this.websocketAssetSeenAt.set(message.asset_id, seenAt);
-    this.updateMarketPrice(message);
-    this.scheduleMarketTradeFetch(message);
-  }
 
-  private updateMarketPrice(message: MarketTradeMessage): void {
-    const market = this.marketsByAssetId.get(message.asset_id ?? "");
-    if (!market) {
+    if (message.event_type === "best_bid_ask") {
+      this.updateMarketQuote(message);
       return;
     }
 
-    const price = Number(message.price);
-    if (!Number.isFinite(price)) {
+    if (message.event_type !== "last_trade_price" || !message.timestamp) {
+      return;
+    }
+
+    this.lastTradeAt = Date.now();
+    this.updateMarketQuote(message);
+    this.scheduleMarketTradeFetch(message);
+  }
+
+  private updateMarketQuote(message: MarketTradeMessage): void {
+    const market = this.marketsByAssetId.get(message.asset_id ?? "");
+    if (!market) {
       return;
     }
 
@@ -527,21 +541,45 @@ export class PolymarketSignalService {
       return;
     }
 
-    const pricesByOutcome = this.marketPrices.get(market.slug) ?? new Map<string, number>();
-    const previousPrice = pricesByOutcome.get(outcome);
-    if (previousPrice === price) {
+    const quotesByOutcome =
+      this.marketQuotes.get(market.slug) ?? new Map<string, MarketQuoteState>();
+    const previousQuote = quotesByOutcome.get(outcome) ?? {};
+    const nextQuote: MarketQuoteState = { ...previousQuote };
+    let changed = false;
+
+    const lastTradePrice = Number(message.price);
+    if (Number.isFinite(lastTradePrice)) {
+      nextQuote.lastTradePrice = lastTradePrice;
+      changed = changed || nextQuote.lastTradePrice !== previousQuote.lastTradePrice;
+    }
+
+    const bestBid = Number(message.best_bid);
+    if (Number.isFinite(bestBid)) {
+      nextQuote.bestBid = bestBid;
+      changed = changed || nextQuote.bestBid !== previousQuote.bestBid;
+    }
+
+    const bestAsk = Number(message.best_ask);
+    if (Number.isFinite(bestAsk)) {
+      nextQuote.bestAsk = bestAsk;
+      changed = changed || nextQuote.bestAsk !== previousQuote.bestAsk;
+    }
+
+    if (!changed) {
       return;
     }
 
-    pricesByOutcome.set(outcome, price);
-    this.marketPrices.set(market.slug, pricesByOutcome);
-    const payload: MarketPriceUpdate = {
+    quotesByOutcome.set(outcome, nextQuote);
+    this.marketQuotes.set(market.slug, quotesByOutcome);
+    const payload: MarketQuoteUpdate = {
       marketSlug: market.slug,
       outcome,
-      price,
+      lastTradePrice: nextQuote.lastTradePrice,
+      bestBid: nextQuote.bestBid,
+      bestAsk: nextQuote.bestAsk,
     };
 
-    for (const listener of this.priceListeners) {
+    for (const listener of this.quoteListeners) {
       listener(payload);
     }
   }
