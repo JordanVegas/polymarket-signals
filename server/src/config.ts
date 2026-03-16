@@ -43,8 +43,4 @@ export const config = {
     process.env.HISTORICAL_BACKFILL_LOOKBACK_HOURS,
     168,
   ),
-  historicalBackfillTargetSignals: parseNumber(
-    process.env.HISTORICAL_BACKFILL_TARGET_SIGNALS,
-    25,
-  ),
 };

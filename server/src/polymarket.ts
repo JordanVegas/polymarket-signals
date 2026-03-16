@@ -412,7 +412,6 @@ export class PolymarketSignalService {
       Math.floor(Date.now() / 1000) - config.historicalBackfillLookbackHours * 60 * 60;
     const batchSize = 500;
     const trades: TradeRecord[] = [];
-    let emittedSignals = 0;
 
     for (let offset = 0; offset < limit; offset += batchSize) {
       const url = new URL(`${DATA_API_URL}/trades`);
@@ -431,11 +430,7 @@ export class PolymarketSignalService {
 
       trades.push(...batch);
       const oldestTrade = batch[batch.length - 1];
-      if (
-        !oldestTrade ||
-        oldestTrade.timestamp < lookbackCutoffSec ||
-        emittedSignals >= config.historicalBackfillTargetSignals
-      ) {
+      if (!oldestTrade || oldestTrade.timestamp < lookbackCutoffSec) {
         break;
       }
     }
@@ -459,13 +454,7 @@ export class PolymarketSignalService {
       }
 
       this.lastTradeTimestampSec = Math.max(this.lastTradeTimestampSec, trade.timestamp);
-      const emitted = await this.ingestTrade(trade);
-      if (emitted) {
-        emittedSignals += 1;
-        if (emittedSignals >= config.historicalBackfillTargetSignals) {
-          break;
-        }
-      }
+      await this.ingestTrade(trade);
     }
   }
 
