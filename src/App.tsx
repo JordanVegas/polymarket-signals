@@ -123,7 +123,6 @@ function App() {
 
   useEffect(() => {
     let closed = false;
-    let refreshTimer: number | undefined;
     let reconnectTimer: number | undefined;
     let socket: WebSocket | null = null;
 
@@ -192,16 +191,10 @@ function App() {
     };
 
     void loadSnapshot();
-    refreshTimer = window.setInterval(() => {
-      void loadSnapshot();
-    }, 15_000);
     connectSocket();
 
     return () => {
       closed = true;
-      if (refreshTimer) {
-        window.clearInterval(refreshTimer);
-      }
       if (reconnectTimer) {
         window.clearTimeout(reconnectTimer);
       }
