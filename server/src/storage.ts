@@ -27,6 +27,12 @@ export type PersistedMarketCatchup = {
   completedAt?: Date;
 };
 
+export type PersistedTraderCatchup = {
+  wallet: string;
+  requestedAt: Date;
+  completedAt?: Date;
+};
+
 export type PersistedCluster = {
   clusterKey: string;
   wallet: string;
@@ -75,6 +81,7 @@ export class SignalStorage {
     await this.observedTradeCollection().createIndex({ tradeId: 1 }, { unique: true });
     await this.observedTradeCollection().createIndex({ timestamp: -1 });
     await this.marketCatchupCollection().createIndex({ marketId: 1 }, { unique: true });
+    await this.traderCatchupCollection().createIndex({ wallet: 1 }, { unique: true });
     await this.clusterCollection().createIndex({ clusterKey: 1 }, { unique: true });
     await this.clusterCollection().createIndex({ updatedAt: -1 });
     await this.clusterCollection().createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
@@ -152,6 +159,29 @@ export class SignalStorage {
     );
   }
 
+  async markTraderCatchupStarted(wallet: string): Promise<boolean> {
+    const result = await this.traderCatchupCollection().updateOne(
+      { wallet },
+      {
+        $setOnInsert: {
+          wallet,
+          requestedAt: new Date(),
+        },
+      },
+      { upsert: true },
+    );
+
+    return result.upsertedCount > 0;
+  }
+
+  async markTraderCatchupCompleted(wallet: string): Promise<void> {
+    await this.traderCatchupCollection().updateOne(
+      { wallet },
+      { $set: { completedAt: new Date() } },
+      { upsert: true },
+    );
+  }
+
   async loadActiveClusters(cutoffMs: number): Promise<PersistedCluster[]> {
     return this.clusterCollection()
       .find({ updatedAt: { $gte: cutoffMs } })
@@ -218,5 +248,15 @@ export class SignalStorage {
     return this.client
       .db(config.mongoDbName)
       .collection<PersistedMarketCatchup>("market_catchups");
+  }
+
+  private traderCatchupCollection() {
+    if (!this.client) {
+      throw new Error("Mongo client not connected");
+    }
+
+    return this.client
+      .db(config.mongoDbName)
+      .collection<PersistedTraderCatchup>("trader_catchups");
   }
 }

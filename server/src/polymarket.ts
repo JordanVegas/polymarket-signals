@@ -35,6 +35,20 @@ type RawValue = {
 
 type RawActivity = {
   type?: string;
+  proxyWallet?: string;
+  side?: "BUY" | "SELL";
+  asset?: string;
+  size?: number | string;
+  price?: number | string;
+  timestamp?: number | string;
+  title?: string;
+  slug?: string;
+  icon?: string;
+  outcome?: string;
+  name?: string;
+  pseudonym?: string;
+  profileImage?: string;
+  transactionHash?: string;
 };
 
 type MarketTradeMessage = {
@@ -508,6 +522,54 @@ export class PolymarketSignalService {
     }
   }
 
+  private async backfillTraderHistory(trader: TraderSummary): Promise<void> {
+    if (trader.tier !== "whale" && trader.tier !== "shark") {
+      return;
+    }
+
+    const started = await this.storage.markTraderCatchupStarted(trader.wallet);
+    if (!started) {
+      return;
+    }
+
+    const trades: TradeRecord[] = [];
+    const batchSize = 50;
+    const maxOffset = 3_000;
+
+    try {
+      for (let offset = 0; offset <= maxOffset; offset += batchSize) {
+        const response = await fetch(
+          `${DATA_API_URL}/activity?user=${trader.wallet}&limit=${batchSize}&offset=${offset}`,
+        );
+        if (!response.ok) {
+          break;
+        }
+
+        const rows = (await response.json()) as RawActivity[] | { error?: string };
+        if (!Array.isArray(rows) || rows.length === 0) {
+          break;
+        }
+
+        const batch = rows
+          .filter((row) => row.type === "TRADE")
+          .map((row) => this.toTradeRecord(row))
+          .filter((trade): trade is TradeRecord => Boolean(trade))
+          .filter((trade) => this.activeAssetIds.has(trade.asset));
+
+        trades.push(...batch);
+
+        if (rows.length < batchSize) {
+          break;
+        }
+      }
+
+      const historicalTrades = dedupeTrades(trades).sort((left, right) => left.timestamp - right.timestamp);
+      await this.processHistoricalTrades(historicalTrades, true);
+    } finally {
+      await this.storage.markTraderCatchupCompleted(trader.wallet);
+    }
+  }
+
   private async processHistoricalTrades(
     trades: TradeRecord[],
     persistObservedTrades = false,
@@ -709,6 +771,10 @@ export class PolymarketSignalService {
       void this.backfillMarketHistory(accumulator.market);
     }
 
+    if (trader.tier === "whale" || trader.tier === "shark") {
+      void this.backfillTraderHistory(trader);
+    }
+
     for (const listener of this.listeners) {
       listener(signal);
     }
@@ -847,5 +913,44 @@ export class PolymarketSignalService {
     }
 
     return count;
+  }
+
+  private toTradeRecord(activity: RawActivity): TradeRecord | null {
+    const proxyWallet = String(activity.proxyWallet || "").trim();
+    const asset = String(activity.asset || "").trim();
+    const side = activity.side === "SELL" ? "SELL" : activity.side === "BUY" ? "BUY" : null;
+    const size = Number(activity.size);
+    const price = Number(activity.price);
+    const timestamp = Number(activity.timestamp);
+    const transactionHash = String(activity.transactionHash || "").trim();
+
+    if (
+      !proxyWallet ||
+      !asset ||
+      !side ||
+      !Number.isFinite(size) ||
+      !Number.isFinite(price) ||
+      !Number.isFinite(timestamp) ||
+      !transactionHash
+    ) {
+      return null;
+    }
+
+    return {
+      proxyWallet,
+      side,
+      asset,
+      size,
+      price,
+      timestamp,
+      title: String(activity.title || ""),
+      slug: String(activity.slug || ""),
+      icon: activity.icon ? String(activity.icon) : undefined,
+      outcome: String(activity.outcome || ""),
+      pseudonym: activity.pseudonym ? String(activity.pseudonym) : undefined,
+      name: activity.name ? String(activity.name) : undefined,
+      profileImage: activity.profileImage ? String(activity.profileImage) : undefined,
+      transactionHash,
+    };
   }
 }
