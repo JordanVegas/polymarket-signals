@@ -340,8 +340,11 @@ function App() {
 
                       <h3>{market.marketQuestion}</h3>
                       <p className="signal-thesis">
-                        <strong>{signal.displayName}</strong> last {signal.side.toLowerCase()}{" "}
-                        <span className="outcome-chip">{signal.outcome}</span>
+                        <strong>{signal.displayName}</strong>
+                        <span className="signal-thesis-trade">
+                          <span>{`last ${signal.side.toLowerCase()}`}</span>
+                          <span className="outcome-chip">{signal.outcome}</span>
+                        </span>
                       </p>
 
                       <div className="metric-row">

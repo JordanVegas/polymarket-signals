@@ -344,6 +344,10 @@ a {
 }
 
 .signal-thesis {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   margin: 0 0 8px;
   color: #ddedf7;
   font-size: 0.82rem;
@@ -351,11 +355,22 @@ a {
 
 .signal-thesis strong {
   display: inline-block;
-  max-width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   vertical-align: bottom;
+}
+
+.signal-thesis-trade {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex: 0 0 auto;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .outcome-chip {
