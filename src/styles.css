@@ -418,6 +418,37 @@ a {
   font-size: 0.75rem;
 }
 
+.signal-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(91, 233, 255, 0.28);
+  background: rgba(91, 233, 255, 0.08);
+  color: #dffcff;
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.signal-actions button:hover:enabled {
+  border-color: rgba(91, 233, 255, 0.48);
+  background: rgba(91, 233, 255, 0.12);
+}
+
+.signal-actions button:disabled {
+  opacity: 0.68;
+  cursor: wait;
+}
+
+.watch-button-active {
+  border-color: rgba(67, 232, 154, 0.34) !important;
+  background: rgba(67, 232, 154, 0.12) !important;
+  color: #cffff0 !important;
+}
+
 .signal-actions a:hover {
   border-color: rgba(255, 255, 255, 0.24);
 }
@@ -531,7 +562,8 @@ a {
     white-space: nowrap;
   }
 
-  .signal-actions a {
+  .signal-actions a,
+  .signal-actions button {
     width: 100%;
   }
 

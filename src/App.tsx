@@ -65,6 +65,7 @@ type MarketAggregate = {
   outcomeWeights: Array<{ outcome: string; weight: number }>;
   observedAvgEntry: number | null;
   participantCount: number;
+  isWatched: boolean;
   latestSignal: WhaleSignal;
 };
 
@@ -132,6 +133,7 @@ function App() {
     hasMore: false,
   });
   const [isLoadingMarkets, setIsLoadingMarkets] = useState(false);
+  const [alertActionMarketSlug, setAlertActionMarketSlug] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const deferredSearchQuery = useDeferredValue(searchQuery);
@@ -301,6 +303,52 @@ function App() {
 
   const visibleMarkets = useMemo(() => marketPage.items, [marketPage.items]);
 
+  const toggleSellAlerts = async (market: MarketAggregate) => {
+    setAlertActionMarketSlug(market.marketSlug);
+
+    try {
+      if (market.isWatched) {
+        const response = await fetch(`/api/market-alerts/watch/${encodeURIComponent(market.marketSlug)}`, {
+          method: "DELETE",
+        });
+        const payload = (await response.json()) as { error?: string };
+        if (!response.ok) {
+          throw new Error(payload.error || "Unable to disable sell alerts");
+        }
+      } else {
+        const webhookUrl = window.prompt(
+          "Enter your Discord webhook URL for sell alerts. If you've already saved one, you can leave this blank.",
+          "",
+        );
+
+        if (webhookUrl === null) {
+          return;
+        }
+
+        const response = await fetch("/api/market-alerts/watch", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            marketSlug: market.marketSlug,
+            webhookUrl: webhookUrl.trim() || undefined,
+          }),
+        });
+        const payload = (await response.json()) as { error?: string };
+        if (!response.ok) {
+          throw new Error(payload.error || "Unable to enable sell alerts");
+        }
+      }
+
+      setRefreshVersion((current) => current + 1);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Unable to update sell alerts");
+    } finally {
+      setAlertActionMarketSlug(null);
+    }
+  };
+
   return (
     <div className="app-shell">
       <div className="ambient ambient-left" />
@@ -461,6 +509,18 @@ function App() {
                           <a href={normalizeSecureUrl(signal.profileUrl) ?? signal.profileUrl} target="_blank" rel="noreferrer">
                             Open whale profile
                           </a>
+                          <button
+                            type="button"
+                            className={`watch-button ${market.isWatched ? "watch-button-active" : ""}`}
+                            onClick={() => void toggleSellAlerts(market)}
+                            disabled={alertActionMarketSlug === market.marketSlug}
+                          >
+                            {alertActionMarketSlug === market.marketSlug
+                              ? "Saving..."
+                              : market.isWatched
+                                ? "Sell alerts on"
+                                : "Get sell alerts"}
+                          </button>
                         </div>
                       </div>
                     </article>

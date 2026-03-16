@@ -9,6 +9,7 @@ import type {
   MarketSortOption,
   TradeRecord,
   TraderSummary,
+  WatchMarketResult,
   WhaleSignal,
 } from "./types.js";
 
@@ -282,6 +283,7 @@ export class PolymarketSignalService {
     search: string,
     page: number,
     pageSize: number,
+    username?: string,
   ): Promise<MarketPageResponse> {
     const activeMarketSlugs = Array.from(
       new Set(Array.from(this.marketsByAssetId.values(), (market) => market.slug)),
@@ -289,7 +291,13 @@ export class PolymarketSignalService {
     const signals = resolveActiveBuySignals(
       (await this.storage.loadSignalsForMarketSlugs(activeMarketSlugs)).map(applySignalLabelStyle),
     );
-    const markets = filterMarkets(sortMarkets(aggregateMarkets(signals), sort), search);
+    const watchedMarketSlugs = username
+      ? await this.storage.loadWatchedMarketSlugs(username)
+      : new Set<string>();
+    const markets = filterMarkets(
+      sortMarkets(applyWatchState(aggregateMarkets(signals), watchedMarketSlugs), sort),
+      search,
+    );
     const safePage = Math.max(1, page);
     const safePageSize = Math.max(1, Math.min(pageSize, 100));
     const start = (safePage - 1) * safePageSize;
@@ -301,6 +309,53 @@ export class PolymarketSignalService {
       page: safePage,
       pageSize: safePageSize,
       hasMore: start + safePageSize < markets.length,
+    };
+  }
+
+  async watchMarket(
+    username: string,
+    marketSlug: string,
+    webhookUrl?: string,
+  ): Promise<WatchMarketResult> {
+    const normalizedUsername = username.trim();
+    const normalizedMarketSlug = marketSlug.trim();
+    if (!normalizedUsername || !normalizedMarketSlug) {
+      throw new Error("Username and market slug are required");
+    }
+
+    const normalizedWebhookUrl = webhookUrl?.trim();
+    if (normalizedWebhookUrl) {
+      if (!isValidDiscordWebhookUrl(normalizedWebhookUrl)) {
+        throw new Error("Please enter a valid Discord webhook URL");
+      }
+
+      await this.storage.upsertUserWebhook(normalizedUsername, normalizedWebhookUrl);
+    }
+
+    const savedWebhookUrl = await this.storage.getUserWebhook(normalizedUsername);
+    if (!savedWebhookUrl) {
+      throw new Error("Add your Discord webhook URL to enable sell alerts");
+    }
+
+    await this.storage.watchMarket(normalizedUsername, normalizedMarketSlug);
+    return {
+      isWatched: true,
+      webhookConfigured: true,
+    };
+  }
+
+  async unwatchMarket(username: string, marketSlug: string): Promise<WatchMarketResult> {
+    const normalizedUsername = username.trim();
+    const normalizedMarketSlug = marketSlug.trim();
+    if (!normalizedUsername || !normalizedMarketSlug) {
+      throw new Error("Username and market slug are required");
+    }
+
+    await this.storage.unwatchMarket(normalizedUsername, normalizedMarketSlug);
+    const savedWebhookUrl = await this.storage.getUserWebhook(normalizedUsername);
+    return {
+      isWatched: false,
+      webhookConfigured: Boolean(savedWebhookUrl),
     };
   }
 
@@ -1047,6 +1102,13 @@ export class PolymarketSignalService {
       this.runBackgroundTask(`trader catch-up ${trader.wallet}`, this.backfillTraderHistory(trader));
     }
 
+    if (!wasAlreadyEmitted && styledSignal.side === "SELL") {
+      this.runBackgroundTask(
+        `sell alert ${styledSignal.marketSlug}`,
+        this.sendSellSignalAlerts(styledSignal),
+      );
+    }
+
     for (const listener of this.listeners) {
       listener(styledSignal);
     }
@@ -1246,6 +1308,50 @@ export class PolymarketSignalService {
       logFetchFailure(context, error);
     });
   }
+
+  private async sendSellSignalAlerts(signal: WhaleSignal): Promise<void> {
+    const watchers = await this.storage.loadWatchersForMarket(signal.marketSlug);
+    if (watchers.length === 0) {
+      return;
+    }
+
+    for (const watcher of watchers) {
+      const shouldSend = await this.storage.markAlertDelivered(
+        watcher.username,
+        signal.marketSlug,
+        signal.id,
+      );
+      if (!shouldSend) {
+        continue;
+      }
+
+      const payload = {
+        content: [
+          `Sell signal for **${signal.marketQuestion}**`,
+          `${signal.label} by **${signal.displayName}** on **${signal.outcome}**`,
+          `Flow: ${formatUsd(signal.totalUsd)} across ${signal.fillCount} fills at avg ${signal.averagePrice.toFixed(3)}`,
+          `Market: ${signal.marketUrl}`,
+          `Trader: ${signal.profileUrl}`,
+        ].join("\n"),
+      };
+
+      try {
+        const response = await fetch(watcher.webhookUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+          throw new Error(`Discord webhook returned ${response.status}`);
+        }
+      } catch (error) {
+        logFetchFailure(`discord webhook ${watcher.username} ${signal.marketSlug}`, error);
+      }
+    }
+  }
 }
 
 const aggregateMarkets = (signals: WhaleSignal[]): MarketAggregate[] => {
@@ -1275,6 +1381,7 @@ const aggregateMarkets = (signals: WhaleSignal[]): MarketAggregate[] => {
         outcomeWeights: [],
         observedAvgEntry: null,
         participantCount: 0,
+        isWatched: false,
         latestSignal: signal,
       });
     } else {
@@ -1400,6 +1507,15 @@ const aggregateMarkets = (signals: WhaleSignal[]): MarketAggregate[] => {
   return Array.from(markets.values());
 };
 
+const applyWatchState = (
+  markets: MarketAggregate[],
+  watchedMarketSlugs: Set<string>,
+): MarketAggregate[] =>
+  markets.map((market) => ({
+    ...market,
+    isWatched: watchedMarketSlugs.has(market.marketSlug),
+  }));
+
 const sortMarkets = (markets: MarketAggregate[], sort: MarketSortOption): MarketAggregate[] => {
   const sorted = [...markets];
 
@@ -1490,3 +1606,23 @@ const filterMarkets = (markets: MarketAggregate[], query: string): MarketAggrega
     return haystack.includes(normalizedQuery);
   });
 };
+
+const isValidDiscordWebhookUrl = (value: string): boolean => {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" &&
+      (url.hostname === "discord.com" || url.hostname.endsWith(".discord.com")) &&
+      url.pathname.startsWith("/api/webhooks/")
+    );
+  } catch {
+    return false;
+  }
+};
+
+const formatUsd = (value: number): string =>
+  new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(value);

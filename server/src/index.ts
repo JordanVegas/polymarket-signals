@@ -13,6 +13,7 @@ const app = express();
 const auth = new SharedAuthService();
 app.use(cors());
 app.set("trust proxy", 1);
+app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use((_request, response, next) => {
   response.setHeader(
@@ -66,7 +67,52 @@ app.get("/api/markets", async (request, response) => {
   const search = String(request.query.search ?? "");
   const page = Number(request.query.page ?? 1);
   const pageSize = Number(request.query.pageSize ?? 24);
-  response.json(await service.getMarketPage(sort, search, page, pageSize));
+  response.json(await service.getMarketPage(sort, search, page, pageSize, request.sessionUser?.username));
+});
+
+app.post("/api/market-alerts/watch", async (request, response) => {
+  try {
+    const marketSlug = String(request.body.marketSlug ?? "").trim();
+    const webhookUrl = typeof request.body.webhookUrl === "string" ? request.body.webhookUrl : undefined;
+
+    if (!request.sessionUser?.username) {
+      response.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+
+    if (!marketSlug) {
+      response.status(400).json({ error: "Market slug is required" });
+      return;
+    }
+
+    response.json(await service.watchMarket(request.sessionUser.username, marketSlug, webhookUrl));
+  } catch (error) {
+    response.status(400).json({
+      error: error instanceof Error ? error.message : "Unable to enable sell alerts",
+    });
+  }
+});
+
+app.delete("/api/market-alerts/watch/:marketSlug", async (request, response) => {
+  try {
+    const marketSlug = String(request.params.marketSlug ?? "").trim();
+
+    if (!request.sessionUser?.username) {
+      response.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+
+    if (!marketSlug) {
+      response.status(400).json({ error: "Market slug is required" });
+      return;
+    }
+
+    response.json(await service.unwatchMarket(request.sessionUser.username, marketSlug));
+  } catch (error) {
+    response.status(400).json({
+      error: error instanceof Error ? error.message : "Unable to disable sell alerts",
+    });
+  }
 });
 
 if (hasBuiltClient) {

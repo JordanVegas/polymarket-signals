@@ -92,6 +92,7 @@ export type MarketAggregate = {
   outcomeWeights: Array<{ outcome: string; weight: number }>;
   observedAvgEntry: number | null;
   participantCount: number;
+  isWatched: boolean;
   latestSignal: WhaleSignal;
 };
 
@@ -103,4 +104,9 @@ export type MarketPageResponse = {
   page: number;
   pageSize: number;
   hasMore: boolean;
+};
+
+export type WatchMarketResult = {
+  isWatched: boolean;
+  webhookConfigured: boolean;
 };
