@@ -239,6 +239,10 @@ a {
   display: block;
 }
 
+.signal-media img {
+  opacity: 0.42;
+}
+
 .image-fallback {
   display: grid;
   place-items: center;
