@@ -230,15 +230,6 @@ function App() {
 
       <main className="page">
         <section className="hero">
-          <div className="hero-copy">
-            <p className="eyebrow">Realtime whale flow on Polymarket</p>
-            <h1>Track oversized conviction trades the moment they hit.</h1>
-            <p className="hero-text">
-              Live active-market monitoring, trade clustering by wallet, and fast whale labeling
-              powered by Polymarket websockets plus the public HTTP APIs.
-            </p>
-          </div>
-
           <div className="hero-panel">
             <StatusRow
               label="Frontend stream"
