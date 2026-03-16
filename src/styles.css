@@ -246,6 +246,12 @@ a {
   color: inherit;
   padding: 0 12px;
   font: inherit;
+  color-scheme: dark;
+}
+
+.sort-control option {
+  background: #081722;
+  color: #eff8ff;
 }
 
 .signal-grid {
