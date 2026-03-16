@@ -58,6 +58,14 @@ export const config = {
   recentCatchupLookbackMinutes: parseNumber(process.env.RECENT_CATCHUP_LOOKBACK_MINUTES, 30),
   recentCatchupMaxOffset: parseNumber(process.env.RECENT_CATCHUP_MAX_OFFSET, 3_000),
   historicalFetchEnabled: parseBoolean(process.env.HISTORICAL_FETCH_ENABLED, false),
+  startupHistoricalBackfillEnabled: parseBoolean(
+    process.env.STARTUP_HISTORICAL_BACKFILL_ENABLED,
+    false,
+  ),
+  marketHistoryCatchupEnabled: parseBoolean(
+    process.env.MARKET_HISTORY_CATCHUP_ENABLED,
+    false,
+  ),
   historicalBackfillLimit: parseNumber(process.env.HISTORICAL_BACKFILL_LIMIT, 2_000),
   historicalBackfillLookbackHours: parseNumber(
     process.env.HISTORICAL_BACKFILL_LOOKBACK_HOURS,

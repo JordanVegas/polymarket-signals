@@ -211,7 +211,7 @@ export class PolymarketSignalService {
     this.captureInitialActiveMarkets();
     this.startTradePolling();
     this.runBackgroundTask("recent catch-up", this.catchUpRecentTrades());
-    if (config.historicalFetchEnabled) {
+    if (config.historicalFetchEnabled && config.startupHistoricalBackfillEnabled) {
       this.runBackgroundTask("historical backfill", this.backfillHistoricalSignals());
     }
     this.marketSyncTimer = setInterval(() => {
@@ -699,7 +699,7 @@ export class PolymarketSignalService {
   }
 
   private async backfillHistoricalSignals(): Promise<void> {
-    if (!config.historicalFetchEnabled) {
+    if (!config.historicalFetchEnabled || !config.startupHistoricalBackfillEnabled) {
       return;
     }
 
@@ -752,7 +752,7 @@ export class PolymarketSignalService {
   }
 
   private async backfillMarketHistory(market: MarketRecord): Promise<void> {
-    if (!config.historicalFetchEnabled) {
+    if (!config.historicalFetchEnabled || !config.marketHistoryCatchupEnabled) {
       return;
     }
 
@@ -1140,7 +1140,7 @@ export class PolymarketSignalService {
     await this.storage.saveCluster(this.toPersistedCluster(accumulator));
     await this.storage.saveSignal(styledSignal);
 
-    if (this.initialActiveConditionIds.has(accumulator.market.conditionId)) {
+    if (config.marketHistoryCatchupEnabled && this.initialActiveConditionIds.has(accumulator.market.conditionId)) {
       this.runBackgroundTask(
         `market catch-up ${accumulator.market.slug}`,
         this.backfillMarketHistory(accumulator.market),
