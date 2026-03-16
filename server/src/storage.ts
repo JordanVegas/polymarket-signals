@@ -104,6 +104,7 @@ export class SignalStorage {
     await this.client.connect();
     await this.collection().createIndex({ id: 1 }, { unique: true });
     await this.collection().createIndex({ timestamp: -1 });
+    await this.collection().createIndex({ marketSlug: 1, timestamp: -1 });
     await this.tradeCollection().createIndex({ tradeId: 1 }, { unique: true });
     await this.tradeCollection().createIndex({ timestamp: -1 });
     await this.observedTradeCollection().createIndex({ tradeId: 1 }, { unique: true });
@@ -114,6 +115,7 @@ export class SignalStorage {
     await this.clusterCollection().createIndex({ updatedAt: -1 });
     await this.clusterCollection().createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
     await this.userWebhookCollection().createIndex({ username: 1 }, { unique: true });
+    await this.userWebhookCollection().createIndex({ monitoredWallet: 1 });
     await this.traderSummaryCollection().createIndex({ wallet: 1 }, { unique: true });
     await this.traderSummaryCollection().createIndex({ updatedAt: -1 });
     await this.marketAlertWatchCollection().createIndex(
@@ -121,6 +123,7 @@ export class SignalStorage {
       { unique: true },
     );
     await this.marketAlertWatchCollection().createIndex({ marketSlug: 1, outcome: 1, username: 1 });
+    await this.marketAlertWatchCollection().createIndex({ username: 1, updatedAt: -1, createdAt: -1 });
     await this.alertDeliveryCollection().createIndex(
       { username: 1, marketSlug: 1, outcome: 1, signalId: 1 },
       { unique: true },
