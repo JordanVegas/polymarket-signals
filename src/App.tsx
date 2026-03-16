@@ -229,18 +229,6 @@ function App() {
 
       <main className="page">
         <section className="hero">
-          <div className="summary-strip">
-            <SummaryCard
-              label="Last market sync"
-              value={formatTimestamp(snapshot.status.lastMarketSyncAt)}
-              detail="Active markets are refreshed continuously so new listings join the stream."
-            />
-            <SummaryCard
-              label="Last trade seen"
-              value={formatTimestamp(snapshot.status.lastTradeAt)}
-              detail="Signals are grouped by wallet, market outcome, and side within a rolling window."
-            />
-          </div>
           <div className="hero-panel">
             <StatusRow
               label="Frontend stream"
@@ -275,6 +263,16 @@ function App() {
               label="Profitable whales"
               value={profitableCount.toString()}
               tone="green"
+            />
+            <StatusRow
+              label="Last market sync"
+              value={formatTimestamp(snapshot.status.lastMarketSyncAt)}
+              tone="neutral"
+            />
+            <StatusRow
+              label="Last trade seen"
+              value={formatTimestamp(snapshot.status.lastTradeAt)}
+              tone="neutral"
             />
           </div>
         </section>
@@ -356,12 +354,6 @@ function App() {
                         <Metric label="Weighted" value={market.weightedScore.toString()} />
                       </div>
 
-                      <div className="metric-row metric-row-tier-counts">
-                        <Metric label="Whales" value={market.whales.toString()} />
-                        <Metric label="Sharks" value={market.sharks.toString()} />
-                        <Metric label="Pros" value={market.pros.toString()} />
-                      </div>
-
                       <div className="metric-row">
                         <Metric
                           label={primaryOutcome?.outcome ?? "Outcome 1"}
@@ -371,7 +363,7 @@ function App() {
                           label={secondaryOutcome?.outcome ?? "Outcome 2"}
                           value={(secondaryOutcome?.weight ?? 0).toString()}
                         />
-                        <Metric label="Participants" value={market.participantCount.toString()} />
+                        <Metric label="W/S/P" value={`${market.whales}/${market.sharks}/${market.pros}`} />
                       </div>
 
                       <div className="signal-actions">
@@ -408,26 +400,6 @@ function StatusRow({
       <span>{label}</span>
       <span className={`status-value status-${tone}`}>{value}</span>
     </div>
-  );
-}
-
-function SummaryCard({
-  className,
-  label,
-  value,
-  detail,
-}: {
-  className?: string;
-  label: string;
-  value: string;
-  detail: string;
-}) {
-  return (
-    <article className={`summary-card ${className ?? ""}`.trim()}>
-      <p>{label}</p>
-      <h3>{value}</h3>
-      <span>{detail}</span>
-    </article>
   );
 }
 
