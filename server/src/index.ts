@@ -5,11 +5,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
+import { SharedAuthService } from "./auth.js";
 import { config } from "./config.js";
 import { PolymarketSignalService } from "./polymarket.js";
 
 const app = express();
+const auth = new SharedAuthService();
 app.use(cors());
+app.set("trust proxy", 1);
+app.use(express.urlencoded({ extended: false }));
 app.use((_request, response, next) => {
   response.setHeader(
     "Content-Security-Policy",
@@ -17,6 +21,8 @@ app.use((_request, response, next) => {
   );
   next();
 });
+app.use(auth.createSessionMiddleware());
+app.use(auth.attachSessionUser());
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -32,6 +38,18 @@ app.get("/api/health", (_request, response) => {
 
 app.get("/health", (_request, response) => {
   response.json({ ok: true });
+});
+
+app.get("/login", (request, response) => {
+  auth.handleLoginPage(request, response);
+});
+
+app.post("/login", async (request, response) => {
+  await auth.handleLogin(request, response);
+});
+
+app.get("/logout", (request, response) => {
+  auth.handleLogout(request, response);
 });
 
 app.get("/api/snapshot", async (_request, response) => {
@@ -52,7 +70,7 @@ if (hasBuiltClient) {
 }
 
 const server = createServer(app);
-const wss = new WebSocketServer({ server, path: "/ws" });
+const wss = new WebSocketServer({ noServer: true });
 
 wss.on("connection", (socket) => {
   let unsubscribe = () => {};
@@ -70,7 +88,33 @@ wss.on("connection", (socket) => {
   });
 });
 
-void service.start();
+server.on("upgrade", (request, socket, head) => {
+  if (request.url !== "/ws") {
+    socket.destroy();
+    return;
+  }
+
+  void (async () => {
+    const sessionUser = await auth.getRequestUser(request);
+    if (!sessionUser) {
+      socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+
+    wss.handleUpgrade(request, socket, head, (websocket) => {
+      wss.emit("connection", websocket, request);
+    });
+  })().catch(() => {
+    socket.write("HTTP/1.1 500 Internal Server Error\r\n\r\n");
+    socket.destroy();
+  });
+});
+
+void (async () => {
+  await auth.connect();
+  await service.start();
+})();
 
 server.listen(config.port, () => {
   console.log(`Server listening on http://localhost:${config.port}`);

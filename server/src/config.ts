@@ -7,11 +7,27 @@ const parseNumber = (value: string | undefined, fallback: number): number => {
   return Number.isFinite(parsed) ? parsed : fallback;
 };
 
+const withDatabaseName = (mongoUri: string, databaseName: string): string => {
+  try {
+    const nextUri = new URL(mongoUri);
+    nextUri.pathname = `/${databaseName}`;
+    return nextUri.toString();
+  } catch {
+    return mongoUri;
+  }
+};
+
+const defaultMongoUri = process.env.MONGO_URI || "mongodb://127.0.0.1:27017";
+
 export const config = {
   port: parseNumber(process.env.PORT, 3001),
-  mongoUri: process.env.MONGO_URI || "",
+  mongoUri: defaultMongoUri,
   mongoDbName: process.env.MONGO_DB_NAME || "polymarket_signals",
   mongoSignalsCollection: process.env.MONGO_SIGNALS_COLLECTION || "signals",
+  authMongoUri: process.env.AUTH_MONGO_URI || withDatabaseName(defaultMongoUri, "authentication"),
+  webSessionSecret: process.env.WEB_SESSION_SECRET || "change-me",
+  webSessionCookieName: process.env.WEB_SESSION_COOKIE_NAME || "tuf_session",
+  webCookieDomain: process.env.WEB_COOKIE_DOMAIN || "",
   minSignalClusterUsd: parseNumber(process.env.MIN_SIGNAL_CLUSTER_USD, 1_000),
   whaleThresholdUsd: parseNumber(process.env.WHALE_THRESHOLD_USD, 200_000),
   profitableWhaleThresholdUsd: parseNumber(
