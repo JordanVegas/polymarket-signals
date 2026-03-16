@@ -333,6 +333,7 @@ function App() {
                   outcome: string;
                   weight: number;
                 }>;
+                const edgeLabel = formatOutcomeEdge(visibleOutcomeWeights);
                 return (
                   <article className="signal-card" key={market.marketSlug}>
                     <div className="signal-media">
@@ -354,9 +355,9 @@ function App() {
                       <p className="signal-thesis">
                         <strong>{signal.displayName}</strong>
                         <span className="signal-thesis-trade">
-                          <span>{`last ${signal.side.toLowerCase()}`}</span>
-                          <span className={`outcome-chip outcome-chip-${getOutcomeTone(signal.outcome)}`}>
-                            {signal.outcome}
+                          <span>edge</span>
+                          <span className={`outcome-chip outcome-chip-${getOutcomeTone(edgeLabel)}`}>
+                            {edgeLabel}
                           </span>
                         </span>
                       </p>
@@ -382,7 +383,7 @@ function App() {
                           label={secondaryOutcome?.outcome ?? "Outcome 2"}
                           value={(secondaryOutcome?.weight ?? 0).toString()}
                         />
-                        <Metric label="Edge" value={formatOutcomeEdge(visibleOutcomeWeights)} />
+                        <Metric label="Participants" value={market.participantCount.toString()} />
                       </div>
 
                       <div className="signal-actions">
