@@ -56,6 +56,19 @@ app.get("/api/snapshot", async (_request, response) => {
   response.json(await service.getSnapshot());
 });
 
+app.get("/api/markets", async (request, response) => {
+  const sortParam = String(request.query.sort ?? "recent");
+  const sort = (
+    ["recent", "weighted", "buyWeight", "flow", "participants"].includes(sortParam)
+      ? sortParam
+      : "recent"
+  ) as "recent" | "weighted" | "buyWeight" | "flow" | "participants";
+  const search = String(request.query.search ?? "");
+  const page = Number(request.query.page ?? 1);
+  const pageSize = Number(request.query.pageSize ?? 24);
+  response.json(await service.getMarketPage(sort, search, page, pageSize));
+});
+
 if (hasBuiltClient) {
   app.use(express.static(clientDistDir));
 

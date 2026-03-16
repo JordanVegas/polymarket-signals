@@ -1,7 +1,16 @@
 import { config } from "./config.js";
 import WebSocket from "ws";
 import { SignalStorage, type PersistedCluster } from "./storage.js";
-import type { MarketRecord, TradeRecord, TraderSummary, WhaleSignal } from "./types.js";
+import type {
+  AppSnapshot,
+  MarketAggregate,
+  MarketPageResponse,
+  MarketRecord,
+  MarketSortOption,
+  TradeRecord,
+  TraderSummary,
+  WhaleSignal,
+} from "./types.js";
 
 const GAMMA_MARKETS_URL = "https://gamma-api.polymarket.com/markets";
 const DATA_API_URL = "https://data-api.polymarket.com";
@@ -164,6 +173,9 @@ const logFetchFailure = (context: string, error: unknown) => {
   console.error(`[polysignals] ${context}`, error);
 };
 
+const positiveOutcomeKeywords = ["yes", "up", "above", "over", "higher", "more", "long"];
+const negativeOutcomeKeywords = ["no", "down", "below", "under", "lower", "less", "short"];
+
 type IngestResult = "ingested" | "queued";
 
 export class PolymarketSignalService {
@@ -232,7 +244,7 @@ export class PolymarketSignalService {
     };
   }
 
-  async getSnapshot() {
+  async getSnapshot(): Promise<AppSnapshot> {
     const recentCutoff = Date.now() - 15 * 60_000;
     let websocketAssetsSeenRecentlyCount = 0;
     let websocketConnectedShardCount = 0;
@@ -249,13 +261,6 @@ export class PolymarketSignalService {
       }
     }
 
-    const activeMarketSlugs = new Set(
-      Array.from(this.marketsByAssetId.values(), (market) => market.slug),
-    );
-    const recentSignals = (
-      await this.storage.loadSignalsForMarketSlugs(Array.from(activeMarketSlugs))
-    ).map(applySignalLabelStyle);
-
     return {
       status: {
         marketCount: this.activeAssetIds.size,
@@ -269,7 +274,33 @@ export class PolymarketSignalService {
         websocketAssetsSeenRecentlyCount,
         lastWebsocketMessageAt: this.lastWebsocketMessageAt,
       },
-      signals: recentSignals,
+    };
+  }
+
+  async getMarketPage(
+    sort: MarketSortOption,
+    search: string,
+    page: number,
+    pageSize: number,
+  ): Promise<MarketPageResponse> {
+    const activeMarketSlugs = Array.from(
+      new Set(Array.from(this.marketsByAssetId.values(), (market) => market.slug)),
+    );
+    const signals = (await this.storage.loadSignalsForMarketSlugs(activeMarketSlugs))
+      .map(applySignalLabelStyle)
+      .filter((signal) => signal.side === "BUY");
+    const markets = filterMarkets(sortMarkets(aggregateMarkets(signals), sort), search);
+    const safePage = Math.max(1, page);
+    const safePageSize = Math.max(1, Math.min(pageSize, 100));
+    const start = (safePage - 1) * safePageSize;
+    const items = markets.slice(start, start + safePageSize);
+
+    return {
+      items,
+      total: markets.length,
+      page: safePage,
+      pageSize: safePageSize,
+      hasMore: start + safePageSize < markets.length,
     };
   }
 
@@ -1216,3 +1247,201 @@ export class PolymarketSignalService {
     });
   }
 }
+
+const aggregateMarkets = (signals: WhaleSignal[]): MarketAggregate[] => {
+  const markets = new Map<string, MarketAggregate>();
+  const traderSpendByMarket = new Map<string, Map<string, { totalUsd: number; trader: TraderSummary }>>();
+  const traderOutcomeSpendByMarket = new Map<
+    string,
+    Map<string, Map<string, { totalUsd: number; trader: TraderSummary }>>
+  >();
+
+  for (const signal of signals) {
+    const existing = markets.get(signal.marketSlug);
+    if (!existing) {
+      markets.set(signal.marketSlug, {
+        marketSlug: signal.marketSlug,
+        marketQuestion: signal.marketQuestion,
+        marketUrl: signal.marketUrl,
+        marketImage: signal.marketImage,
+        latestTimestamp: signal.timestamp,
+        totalUsd: signal.totalUsd,
+        totalFillCount: signal.fillCount,
+        whales: 0,
+        sharks: 0,
+        pros: 0,
+        weightedScore: 0,
+        outcomeWeights: [],
+        participantCount: 0,
+        latestSignal: signal,
+      });
+    } else {
+      existing.totalUsd += signal.totalUsd;
+      existing.totalFillCount += signal.fillCount;
+      if (signal.timestamp > existing.latestTimestamp) {
+        existing.latestTimestamp = signal.timestamp;
+        existing.latestSignal = signal;
+      }
+    }
+
+    const marketTraders =
+      traderSpendByMarket.get(signal.marketSlug) ?? new Map<string, { totalUsd: number; trader: TraderSummary }>();
+    const traderEntry = marketTraders.get(signal.wallet);
+    if (traderEntry) {
+      traderEntry.totalUsd += signal.totalUsd;
+      if (signal.trader.weight > traderEntry.trader.weight) {
+        traderEntry.trader = signal.trader;
+      }
+    } else {
+      marketTraders.set(signal.wallet, { totalUsd: signal.totalUsd, trader: signal.trader });
+    }
+    traderSpendByMarket.set(signal.marketSlug, marketTraders);
+
+    const marketOutcomeTraders =
+      traderOutcomeSpendByMarket.get(signal.marketSlug) ??
+      new Map<string, Map<string, { totalUsd: number; trader: TraderSummary }>>();
+    const traderOutcomes =
+      marketOutcomeTraders.get(signal.wallet) ??
+      new Map<string, { totalUsd: number; trader: TraderSummary }>();
+    const outcomeEntry = traderOutcomes.get(signal.outcome);
+    if (outcomeEntry) {
+      outcomeEntry.totalUsd += signal.totalUsd;
+      if (signal.trader.weight > outcomeEntry.trader.weight) {
+        outcomeEntry.trader = signal.trader;
+      }
+    } else {
+      traderOutcomes.set(signal.outcome, { totalUsd: signal.totalUsd, trader: signal.trader });
+    }
+    marketOutcomeTraders.set(signal.wallet, traderOutcomes);
+    traderOutcomeSpendByMarket.set(signal.marketSlug, marketOutcomeTraders);
+  }
+
+  for (const [marketSlug, aggregate] of markets) {
+    const traders = traderSpendByMarket.get(marketSlug);
+    const outcomeTraders = traderOutcomeSpendByMarket.get(marketSlug);
+    if (!traders) {
+      continue;
+    }
+
+    let whales = 0;
+    let sharks = 0;
+    let pros = 0;
+    let weightedScore = 0;
+    let participantCount = 0;
+    const outcomeWeights = new Map<string, number>();
+
+    for (const { totalUsd, trader } of traders.values()) {
+      if (totalUsd < 1_000 || trader.tier === "none") {
+        continue;
+      }
+
+      participantCount += 1;
+      weightedScore += trader.weight;
+      if (trader.tier === "whale") {
+        whales += 1;
+      } else if (trader.tier === "shark") {
+        sharks += 1;
+      } else if (trader.tier === "pro") {
+        pros += 1;
+      }
+    }
+
+    if (outcomeTraders) {
+      for (const traderOutcomes of outcomeTraders.values()) {
+        let leadingOutcome: string | null = null;
+        let leadingUsd = 0;
+        let leadingWeight = 0;
+
+        for (const [outcome, { totalUsd, trader }] of traderOutcomes.entries()) {
+          if (totalUsd < 1_000 || trader.tier === "none") {
+            continue;
+          }
+
+          if (totalUsd > leadingUsd) {
+            leadingOutcome = outcome;
+            leadingUsd = totalUsd;
+            leadingWeight = trader.weight;
+          }
+        }
+
+        if (leadingOutcome) {
+          outcomeWeights.set(leadingOutcome, (outcomeWeights.get(leadingOutcome) ?? 0) + leadingWeight);
+        }
+      }
+    }
+
+    aggregate.whales = whales;
+    aggregate.sharks = sharks;
+    aggregate.pros = pros;
+    aggregate.weightedScore = weightedScore;
+    aggregate.outcomeWeights = Array.from(outcomeWeights.entries())
+      .map(([outcome, weight]) => ({ outcome, weight }))
+      .sort((left, right) => right.weight - left.weight);
+    aggregate.participantCount = participantCount;
+  }
+
+  return Array.from(markets.values());
+};
+
+const sortMarkets = (markets: MarketAggregate[], sort: MarketSortOption): MarketAggregate[] => {
+  const sorted = [...markets];
+
+  sorted.sort((left, right) => {
+    if (sort === "weighted") {
+      return (
+        right.weightedScore - left.weightedScore ||
+        (right.outcomeWeights[0]?.weight ?? 0) - (left.outcomeWeights[0]?.weight ?? 0) ||
+        right.latestTimestamp - left.latestTimestamp
+      );
+    }
+
+    if (sort === "buyWeight") {
+      return (
+        (right.outcomeWeights[0]?.weight ?? 0) - (left.outcomeWeights[0]?.weight ?? 0) ||
+        right.weightedScore - left.weightedScore ||
+        right.latestTimestamp - left.latestTimestamp
+      );
+    }
+
+    if (sort === "flow") {
+      return (
+        right.totalUsd - left.totalUsd ||
+        right.weightedScore - left.weightedScore ||
+        right.latestTimestamp - left.latestTimestamp
+      );
+    }
+
+    if (sort === "participants") {
+      return (
+        right.participantCount - left.participantCount ||
+        right.weightedScore - left.weightedScore ||
+        right.latestTimestamp - left.latestTimestamp
+      );
+    }
+
+    return right.latestTimestamp - left.latestTimestamp;
+  });
+
+  return sorted;
+};
+
+const filterMarkets = (markets: MarketAggregate[], query: string): MarketAggregate[] => {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return markets;
+  }
+
+  return markets.filter((market) => {
+    const haystack = [
+      market.marketQuestion,
+      market.marketSlug,
+      market.latestSignal.displayName,
+      market.latestSignal.outcome,
+      ...market.outcomeWeights.map((entry) => entry.outcome),
+    ]
+      .join(" ")
+      .toLowerCase();
+
+    return haystack.includes(normalizedQuery);
+  });
+};

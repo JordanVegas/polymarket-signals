@@ -75,5 +75,31 @@ export type AppSnapshot = {
     websocketAssetsSeenRecentlyCount: number;
     lastWebsocketMessageAt: number | null;
   };
-  signals: WhaleSignal[];
+};
+
+export type MarketAggregate = {
+  marketSlug: string;
+  marketQuestion: string;
+  marketUrl: string;
+  marketImage: string;
+  latestTimestamp: number;
+  totalUsd: number;
+  totalFillCount: number;
+  whales: number;
+  sharks: number;
+  pros: number;
+  weightedScore: number;
+  outcomeWeights: Array<{ outcome: string; weight: number }>;
+  participantCount: number;
+  latestSignal: WhaleSignal;
+};
+
+export type MarketSortOption = "recent" | "weighted" | "buyWeight" | "flow" | "participants";
+
+export type MarketPageResponse = {
+  items: MarketAggregate[];
+  total: number;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
 };

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 
 type TraderSummary = {
   wallet: string;
@@ -48,7 +48,6 @@ type Snapshot = {
     websocketAssetsSeenRecentlyCount: number;
     lastWebsocketMessageAt: number | null;
   };
-  signals: WhaleSignal[];
 };
 
 type MarketAggregate = {
@@ -69,6 +68,14 @@ type MarketAggregate = {
 };
 
 type MarketSortOption = "recent" | "weighted" | "buyWeight" | "flow" | "participants";
+
+type MarketPageResponse = {
+  items: MarketAggregate[];
+  total: number;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+};
 
 const positiveOutcomeKeywords = ["yes", "up", "above", "over", "higher", "more", "long"];
 const negativeOutcomeKeywords = ["no", "down", "below", "under", "lower", "less", "short"];
@@ -95,13 +102,6 @@ const currencyFormatter = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 0,
 });
 
-const compactCurrencyFormatter = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
-  notation: "compact",
-  maximumFractionDigits: 1,
-});
-
 const MARKET_PAGE_SIZE = 24;
 
 function App() {
@@ -118,13 +118,23 @@ function App() {
       websocketAssetsSeenRecentlyCount: 0,
       lastWebsocketMessageAt: null,
     },
-    signals: [],
   });
   const [feedConnected, setFeedConnected] = useState(false);
   const [marketSort, setMarketSort] = useState<MarketSortOption>("recent");
   const [searchQuery, setSearchQuery] = useState("");
-  const [visibleMarketCount, setVisibleMarketCount] = useState(MARKET_PAGE_SIZE);
+  const [pageCount, setPageCount] = useState(1);
+  const [marketPage, setMarketPage] = useState<MarketPageResponse>({
+    items: [],
+    total: 0,
+    page: 1,
+    pageSize: MARKET_PAGE_SIZE,
+    hasMore: false,
+  });
+  const [isLoadingMarkets, setIsLoadingMarkets] = useState(false);
+  const [refreshVersion, setRefreshVersion] = useState(0);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  const deferredSearchQuery = useDeferredValue(searchQuery);
+  const deferredRefreshVersion = useDeferredValue(refreshVersion);
 
   useEffect(() => {
     let closed = false;
@@ -183,15 +193,13 @@ function App() {
           type: "snapshot" | "signal";
           payload: Snapshot | WhaleSignal;
         };
+
         if (message.type === "snapshot") {
           setSnapshot(message.payload as Snapshot);
           return;
         }
 
-        setSnapshot((current) => ({
-          ...current,
-          signals: upsertSignal(current.signals, message.payload as WhaleSignal),
-        }));
+        setRefreshVersion((current) => current + 1);
       });
     };
 
@@ -207,26 +215,66 @@ function App() {
     };
   }, []);
 
-  const visibleSignals = useMemo(
-    () => snapshot.signals.filter((signal) => signal.side === "BUY"),
-    [snapshot.signals],
-  );
-  const filteredMarketAggregates = useMemo(
-    () => filterMarkets(sortMarkets(aggregateMarkets(visibleSignals), marketSort), searchQuery),
-    [visibleSignals, marketSort, searchQuery],
-  );
-  const visibleMarkets = useMemo(
-    () => filteredMarketAggregates.slice(0, visibleMarketCount),
-    [filteredMarketAggregates, visibleMarketCount],
-  );
+  useEffect(() => {
+    setPageCount(1);
+  }, [marketSort, deferredSearchQuery]);
 
   useEffect(() => {
-    setVisibleMarketCount(MARKET_PAGE_SIZE);
-  }, [marketSort, snapshot.signals, searchQuery]);
+    let cancelled = false;
+
+    const loadMarketPages = async () => {
+      setIsLoadingMarkets(true);
+
+      try {
+        const responses = await Promise.all(
+          Array.from({ length: pageCount }, async (_value, index) => {
+            const page = index + 1;
+            const url = new URL("/api/markets", window.location.origin);
+            url.searchParams.set("sort", marketSort);
+            url.searchParams.set("search", deferredSearchQuery);
+            url.searchParams.set("page", String(page));
+            url.searchParams.set("pageSize", String(MARKET_PAGE_SIZE));
+            const response = await fetch(url);
+            return (await response.json()) as MarketPageResponse;
+          }),
+        );
+
+        if (cancelled) {
+          return;
+        }
+
+        const lastResponse = responses[responses.length - 1] ?? {
+          items: [],
+          total: 0,
+          page: 1,
+          pageSize: MARKET_PAGE_SIZE,
+          hasMore: false,
+        };
+
+        setMarketPage({
+          items: responses.flatMap((response) => response.items),
+          total: lastResponse.total,
+          page: lastResponse.page,
+          pageSize: lastResponse.pageSize,
+          hasMore: lastResponse.hasMore,
+        });
+      } finally {
+        if (!cancelled) {
+          setIsLoadingMarkets(false);
+        }
+      }
+    };
+
+    void loadMarketPages();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [marketSort, deferredSearchQuery, pageCount, deferredRefreshVersion]);
 
   useEffect(() => {
     const sentinel = loadMoreRef.current;
-    if (!sentinel || visibleMarketCount >= filteredMarketAggregates.length) {
+    if (!sentinel || !marketPage.hasMore || isLoadingMarkets) {
       return;
     }
 
@@ -237,9 +285,7 @@ function App() {
           return;
         }
 
-        setVisibleMarketCount((current) =>
-          Math.min(current + MARKET_PAGE_SIZE, filteredMarketAggregates.length),
-        );
+        setPageCount((current) => current + 1);
       },
       {
         rootMargin: "240px 0px",
@@ -250,7 +296,9 @@ function App() {
     return () => {
       observer.disconnect();
     };
-  }, [filteredMarketAggregates.length, visibleMarketCount]);
+  }, [isLoadingMarkets, marketPage.hasMore]);
+
+  const visibleMarkets = useMemo(() => marketPage.items, [marketPage.items]);
 
   return (
     <div className="app-shell">
@@ -281,7 +329,7 @@ function App() {
             />
             <StatusRow
               label="Signals surfaced"
-              value={filteredMarketAggregates.length.toString()}
+              value={marketPage.total.toString()}
               tone="neutral"
             />
             <StatusRow
@@ -332,7 +380,7 @@ function App() {
             </div>
           </div>
 
-          {filteredMarketAggregates.length === 0 ? (
+          {visibleMarkets.length === 0 && !isLoadingMarkets ? (
             <div className="empty-state">
               <div className="empty-pulse" />
               <h3>Watching the tape</h3>
@@ -345,81 +393,79 @@ function App() {
             <>
               <div className="signal-grid">
                 {visibleMarkets.map((market) => {
-                const signal = market.latestSignal;
-                const primaryOutcome = market.outcomeWeights[0];
-                const secondaryOutcome =
-                  market.outcomeWeights[1] ??
-                  inferMissingOutcome(primaryOutcome?.outcome, market.outcomeWeights);
-                const visibleOutcomeWeights = [primaryOutcome, secondaryOutcome].filter(Boolean) as Array<{
-                  outcome: string;
-                  weight: number;
-                }>;
-                const edgeLabel = formatOutcomeEdge(visibleOutcomeWeights);
-                return (
-                  <article className="signal-card" key={market.marketSlug}>
-                    <div className="signal-media">
-                      {normalizeSecureUrl(market.marketImage) ? (
-                        <img src={normalizeSecureUrl(market.marketImage)!} alt={market.marketQuestion} />
-                      ) : (
-                        <div className="image-fallback">{signal.outcome[0]}</div>
-                      )}
-                      <div className={`pill pill-${signal.labelTone}`}>{signal.label}</div>
-                    </div>
+                  const signal = market.latestSignal;
+                  const primaryOutcome = market.outcomeWeights[0];
+                  const secondaryOutcome =
+                    market.outcomeWeights[1] ??
+                    inferMissingOutcome(primaryOutcome?.outcome, market.outcomeWeights);
+                  const visibleOutcomeWeights = [primaryOutcome, secondaryOutcome].filter(Boolean) as Array<{
+                    outcome: string;
+                    weight: number;
+                  }>;
+                  const edgeLabel = formatOutcomeEdge(visibleOutcomeWeights);
 
-                    <div className="signal-body">
-                      <div className="signal-topline">
-                        <span>{formatRelativeTime(market.latestTimestamp)}</span>
-                        <span>{market.participantCount} traders</span>
+                  return (
+                    <article className="signal-card" key={market.marketSlug}>
+                      <div className="signal-media">
+                        {normalizeSecureUrl(market.marketImage) ? (
+                          <img src={normalizeSecureUrl(market.marketImage)!} alt={market.marketQuestion} />
+                        ) : (
+                          <div className="image-fallback">{signal.outcome[0]}</div>
+                        )}
+                        <div className={`pill pill-${signal.labelTone}`}>{signal.label}</div>
                       </div>
 
-                      <h3>{market.marketQuestion}</h3>
-                      <p className="signal-thesis">
-                        <strong>{signal.displayName}</strong>
-                        <span className="signal-thesis-trade">
-                          <span>edge</span>
-                          <span className={`outcome-chip outcome-chip-${getOutcomeTone(edgeLabel)}`}>
-                            {edgeLabel}
+                      <div className="signal-body">
+                        <div className="signal-topline">
+                          <span>{formatRelativeTime(market.latestTimestamp)}</span>
+                          <span>{market.participantCount} traders</span>
+                        </div>
+
+                        <h3>{market.marketQuestion}</h3>
+                        <p className="signal-thesis">
+                          <strong>{signal.displayName}</strong>
+                          <span className="signal-thesis-trade">
+                            <span>edge</span>
+                            <span className={`outcome-chip outcome-chip-${getOutcomeTone(edgeLabel)}`}>
+                              {edgeLabel}
+                            </span>
                           </span>
-                        </span>
-                      </p>
+                        </p>
 
-                      <div className="metric-row">
-                        <Metric label="Market flow" value={currencyFormatter.format(market.totalUsd)} />
-                        <Metric
-                          label="Last price"
-                          value={signal.averagePrice.toFixed(3)}
-                        />
-                        <Metric label="Weighted" value={market.weightedScore.toString()} />
-                      </div>
+                        <div className="metric-row">
+                          <Metric label="Market flow" value={currencyFormatter.format(market.totalUsd)} />
+                          <Metric label="Last price" value={signal.averagePrice.toFixed(3)} />
+                          <Metric label="Weighted" value={market.weightedScore.toString()} />
+                        </div>
 
-                      <div className="metric-row">
-                        <Metric
-                          label={primaryOutcome?.outcome ?? "Outcome 1"}
-                          value={(primaryOutcome?.weight ?? 0).toString()}
-                        />
-                        <Metric
-                          label={secondaryOutcome?.outcome ?? "Outcome 2"}
-                          value={(secondaryOutcome?.weight ?? 0).toString()}
-                        />
-                        <Metric label="W/S/P" value={`${market.whales}/${market.sharks}/${market.pros}`} />
-                      </div>
+                        <div className="metric-row">
+                          <Metric
+                            label={primaryOutcome?.outcome ?? "Outcome 1"}
+                            value={(primaryOutcome?.weight ?? 0).toString()}
+                          />
+                          <Metric
+                            label={secondaryOutcome?.outcome ?? "Outcome 2"}
+                            value={(secondaryOutcome?.weight ?? 0).toString()}
+                          />
+                          <Metric label="W/S/P" value={`${market.whales}/${market.sharks}/${market.pros}`} />
+                        </div>
 
-                      <div className="signal-actions">
-                        <a href={normalizeSecureUrl(market.marketUrl) ?? market.marketUrl} target="_blank" rel="noreferrer">
-                          Open market
-                        </a>
-                        <a href={normalizeSecureUrl(signal.profileUrl) ?? signal.profileUrl} target="_blank" rel="noreferrer">
-                          Open whale profile
-                        </a>
+                        <div className="signal-actions">
+                          <a href={normalizeSecureUrl(market.marketUrl) ?? market.marketUrl} target="_blank" rel="noreferrer">
+                            Open market
+                          </a>
+                          <a href={normalizeSecureUrl(signal.profileUrl) ?? signal.profileUrl} target="_blank" rel="noreferrer">
+                            Open whale profile
+                          </a>
+                        </div>
                       </div>
-                    </div>
-                  </article>
-                );
+                    </article>
+                  );
                 })}
               </div>
-              {visibleMarketCount < filteredMarketAggregates.length ? (
+              {marketPage.hasMore || isLoadingMarkets ? (
                 <div className="load-more-sentinel" ref={loadMoreRef}>
-                  Loading more markets...
+                  {isLoadingMarkets ? "Loading markets..." : "Scroll for more"}
                 </div>
               ) : null}
             </>
@@ -504,210 +550,6 @@ function formatOutcomeEdge(outcomeWeights: Array<{ outcome: string; weight: numb
   return `${first.outcome} +${first.weight - second.weight}`;
 }
 
-function upsertSignal(signals: WhaleSignal[], nextSignal: WhaleSignal) {
-  const remaining = signals.filter((signal) => signal.id !== nextSignal.id);
-  return [nextSignal, ...remaining];
-}
-
-function aggregateMarkets(signals: WhaleSignal[]): MarketAggregate[] {
-  const markets = new Map<string, MarketAggregate>();
-  const traderSpendByMarket = new Map<string, Map<string, { totalUsd: number; trader: TraderSummary }>>();
-  const traderOutcomeSpendByMarket = new Map<
-    string,
-    Map<string, Map<string, { totalUsd: number; trader: TraderSummary }>>
-  >();
-
-  for (const signal of signals) {
-    const existing = markets.get(signal.marketSlug);
-    if (!existing) {
-      markets.set(signal.marketSlug, {
-        marketSlug: signal.marketSlug,
-        marketQuestion: signal.marketQuestion,
-        marketUrl: signal.marketUrl,
-        marketImage: signal.marketImage,
-        latestTimestamp: signal.timestamp,
-        totalUsd: signal.totalUsd,
-        totalFillCount: signal.fillCount,
-        whales: 0,
-        sharks: 0,
-        pros: 0,
-        weightedScore: 0,
-        outcomeWeights: [],
-        participantCount: 0,
-        latestSignal: signal,
-      });
-    } else {
-      existing.totalUsd += signal.totalUsd;
-      existing.totalFillCount += signal.fillCount;
-      if (signal.timestamp > existing.latestTimestamp) {
-        existing.latestTimestamp = signal.timestamp;
-        existing.latestSignal = signal;
-      }
-    }
-
-    const marketTraders =
-      traderSpendByMarket.get(signal.marketSlug) ?? new Map<string, { totalUsd: number; trader: TraderSummary }>();
-    const traderEntry = marketTraders.get(signal.wallet);
-    if (traderEntry) {
-      traderEntry.totalUsd += signal.totalUsd;
-      if (signal.trader.weight > traderEntry.trader.weight) {
-        traderEntry.trader = signal.trader;
-      }
-    } else {
-      marketTraders.set(signal.wallet, { totalUsd: signal.totalUsd, trader: signal.trader });
-    }
-    traderSpendByMarket.set(signal.marketSlug, marketTraders);
-
-    const marketOutcomeTraders =
-      traderOutcomeSpendByMarket.get(signal.marketSlug) ??
-      new Map<string, Map<string, { totalUsd: number; trader: TraderSummary }>>();
-    const traderOutcomes =
-      marketOutcomeTraders.get(signal.wallet) ??
-      new Map<string, { totalUsd: number; trader: TraderSummary }>();
-    const outcomeEntry = traderOutcomes.get(signal.outcome);
-    if (outcomeEntry) {
-      outcomeEntry.totalUsd += signal.totalUsd;
-      if (signal.trader.weight > outcomeEntry.trader.weight) {
-        outcomeEntry.trader = signal.trader;
-      }
-    } else {
-      traderOutcomes.set(signal.outcome, { totalUsd: signal.totalUsd, trader: signal.trader });
-    }
-    marketOutcomeTraders.set(signal.wallet, traderOutcomes);
-    traderOutcomeSpendByMarket.set(signal.marketSlug, marketOutcomeTraders);
-  }
-
-  for (const [marketSlug, aggregate] of markets) {
-    const traders = traderSpendByMarket.get(marketSlug);
-    const outcomeTraders = traderOutcomeSpendByMarket.get(marketSlug);
-    if (!traders) {
-      continue;
-    }
-
-    let whales = 0;
-    let sharks = 0;
-    let pros = 0;
-    let weightedScore = 0;
-    let participantCount = 0;
-    const outcomeWeights = new Map<string, number>();
-
-    for (const { totalUsd, trader } of traders.values()) {
-      if (totalUsd < 1_000 || trader.tier === "none") {
-        continue;
-      }
-
-      participantCount += 1;
-      weightedScore += trader.weight;
-      if (trader.tier === "whale") {
-        whales += 1;
-      } else if (trader.tier === "shark") {
-        sharks += 1;
-      } else if (trader.tier === "pro") {
-        pros += 1;
-      }
-    }
-
-    if (outcomeTraders) {
-      for (const traderOutcomes of outcomeTraders.values()) {
-        let leadingOutcome: string | null = null;
-        let leadingUsd = 0;
-        let leadingWeight = 0;
-
-        for (const [outcome, { totalUsd, trader }] of traderOutcomes.entries()) {
-          if (totalUsd < 1_000 || trader.tier === "none") {
-            continue;
-          }
-
-          if (totalUsd > leadingUsd) {
-            leadingOutcome = outcome;
-            leadingUsd = totalUsd;
-            leadingWeight = trader.weight;
-          }
-        }
-
-        if (leadingOutcome) {
-          outcomeWeights.set(leadingOutcome, (outcomeWeights.get(leadingOutcome) ?? 0) + leadingWeight);
-        }
-      }
-    }
-
-    aggregate.whales = whales;
-    aggregate.sharks = sharks;
-    aggregate.pros = pros;
-    aggregate.weightedScore = weightedScore;
-    aggregate.outcomeWeights = Array.from(outcomeWeights.entries())
-      .map(([outcome, weight]) => ({ outcome, weight }))
-      .sort((left, right) => right.weight - left.weight);
-    aggregate.participantCount = participantCount;
-  }
-
-  return Array.from(markets.values()).sort((left, right) => right.latestTimestamp - left.latestTimestamp);
-}
-
-function sortMarkets(markets: MarketAggregate[], sort: MarketSortOption) {
-  const sorted = [...markets];
-
-  sorted.sort((left, right) => {
-    if (sort === "weighted") {
-      return (
-        right.weightedScore - left.weightedScore ||
-        (right.outcomeWeights[0]?.weight ?? 0) - (left.outcomeWeights[0]?.weight ?? 0) ||
-        right.latestTimestamp - left.latestTimestamp
-      );
-    }
-
-    if (sort === "buyWeight") {
-      return (
-        (right.outcomeWeights[0]?.weight ?? 0) - (left.outcomeWeights[0]?.weight ?? 0) ||
-        right.weightedScore - left.weightedScore ||
-        right.latestTimestamp - left.latestTimestamp
-      );
-    }
-
-    if (sort === "flow") {
-      return (
-        right.totalUsd - left.totalUsd ||
-        right.weightedScore - left.weightedScore ||
-        right.latestTimestamp - left.latestTimestamp
-      );
-    }
-
-    if (sort === "participants") {
-      return (
-        right.participantCount - left.participantCount ||
-        right.weightedScore - left.weightedScore ||
-        right.latestTimestamp - left.latestTimestamp
-      );
-    }
-
-    return right.latestTimestamp - left.latestTimestamp;
-  });
-
-  return sorted;
-}
-
-function filterMarkets(markets: MarketAggregate[], query: string) {
-  const normalizedQuery = query.trim().toLowerCase();
-  if (!normalizedQuery) {
-    return markets;
-  }
-
-  return markets.filter((market) => {
-    const haystack = [
-      market.marketQuestion,
-      market.marketSlug,
-      market.latestSignal.displayName,
-      market.latestSignal.outcome,
-      ...market.outcomeWeights.map((entry) => entry.outcome),
-      ...market.outcomeStats.map((entry) => entry.outcome),
-    ]
-      .join(" ")
-      .toLowerCase();
-
-    return haystack.includes(normalizedQuery);
-  });
-}
-
 function normalizeSecureUrl(value?: string) {
   if (!value) {
     return undefined;
@@ -742,16 +584,18 @@ function inferMissingOutcome(
     return undefined;
   }
 
-  const opposite = outcomeOpposites[primaryOutcome.trim().toLowerCase()];
+  const normalized = primaryOutcome.trim().toLowerCase();
+  const opposite = outcomeOpposites[normalized];
   if (!opposite) {
     return undefined;
   }
 
-  const existing = currentOutcomes.find(
-    (entry) => entry.outcome.trim().toLowerCase() === opposite.toLowerCase(),
-  );
+  const alreadyExists = currentOutcomes.some((entry) => entry.outcome.trim().toLowerCase() === opposite.toLowerCase());
+  if (alreadyExists) {
+    return undefined;
+  }
 
-  return existing ?? { outcome: opposite, weight: 0 };
+  return { outcome: opposite, weight: 0 };
 }
 
 export default App;
