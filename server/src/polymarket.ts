@@ -130,15 +130,15 @@ const buildSignalLabel = (
   const action = side === "BUY" ? "buy" : "sell";
 
   if (tier === "whale") {
-    return { label: `Whale ${action}`, labelTone: "green" };
+    return { label: `🐋 Whale ${action}`, labelTone: "green" };
   }
 
   if (tier === "shark") {
-    return { label: `Shark ${action}`, labelTone: "blue" };
+    return { label: `🦈 Shark ${action}`, labelTone: "blue" };
   }
 
   if (tier === "pro") {
-    return { label: `Pro ${action}`, labelTone: "blue" };
+    return { label: `😎 Pro ${action}`, labelTone: "blue" };
   }
 
   return { label: `Large ${action}`, labelTone: "neutral" };
