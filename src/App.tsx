@@ -63,6 +63,8 @@ type MarketAggregate = {
   latestSignal: WhaleSignal;
 };
 
+type MarketSortOption = "recent" | "weighted" | "buyWeight" | "flow" | "participants";
+
 const currencyFormatter = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
@@ -87,6 +89,7 @@ function App() {
     signals: [],
   });
   const [feedConnected, setFeedConnected] = useState(false);
+  const [marketSort, setMarketSort] = useState<MarketSortOption>("recent");
 
   useEffect(() => {
     let closed = false;
@@ -181,7 +184,10 @@ function App() {
     [snapshot.signals],
   );
   const headerSignal = visibleSignals[0];
-  const marketAggregates = useMemo(() => aggregateMarkets(visibleSignals), [visibleSignals]);
+  const marketAggregates = useMemo(
+    () => sortMarkets(aggregateMarkets(visibleSignals), marketSort),
+    [visibleSignals, marketSort],
+  );
   const profitableCount = useMemo(
     () => visibleSignals.filter((signal) => signal.trader.tier === "whale").length,
     [visibleSignals],
@@ -266,7 +272,19 @@ function App() {
               <p className="section-kicker">Signal feed</p>
               <h2>Whale alerts</h2>
             </div>
-            <p className="feed-meta">Triggered by whale, shark, and pro tiers with a $1,000 minimum cluster</p>
+            <div className="feed-controls">
+              <p className="feed-meta">Triggered by whale, shark, and pro tiers with a $1,000 minimum cluster</p>
+              <label className="sort-control">
+                <span>Sort</span>
+                <select value={marketSort} onChange={(event) => setMarketSort(event.target.value as MarketSortOption)}>
+                  <option value="recent">Most recent</option>
+                  <option value="weighted">Highest weight</option>
+                  <option value="buyWeight">Strongest buy side</option>
+                  <option value="flow">Largest flow</option>
+                  <option value="participants">Most traders</option>
+                </select>
+              </label>
+            </div>
           </div>
 
           {marketAggregates.length === 0 ? (
@@ -570,6 +588,48 @@ function aggregateMarkets(signals: WhaleSignal[]): MarketAggregate[] {
   }
 
   return Array.from(markets.values()).sort((left, right) => right.latestTimestamp - left.latestTimestamp);
+}
+
+function sortMarkets(markets: MarketAggregate[], sort: MarketSortOption) {
+  const sorted = [...markets];
+
+  sorted.sort((left, right) => {
+    if (sort === "weighted") {
+      return (
+        right.weightedScore - left.weightedScore ||
+        right.buyWeight - left.buyWeight ||
+        right.latestTimestamp - left.latestTimestamp
+      );
+    }
+
+    if (sort === "buyWeight") {
+      return (
+        right.buyWeight - left.buyWeight ||
+        right.weightedScore - left.weightedScore ||
+        right.latestTimestamp - left.latestTimestamp
+      );
+    }
+
+    if (sort === "flow") {
+      return (
+        right.totalUsd - left.totalUsd ||
+        right.weightedScore - left.weightedScore ||
+        right.latestTimestamp - left.latestTimestamp
+      );
+    }
+
+    if (sort === "participants") {
+      return (
+        right.participantCount - left.participantCount ||
+        right.weightedScore - left.weightedScore ||
+        right.latestTimestamp - left.latestTimestamp
+      );
+    }
+
+    return right.latestTimestamp - left.latestTimestamp;
+  });
+
+  return sorted;
 }
 
 function normalizeSecureUrl(value?: string) {
