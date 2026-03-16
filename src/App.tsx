@@ -217,11 +217,6 @@ function App() {
     () => sortMarkets(aggregateMarkets(visibleSignals), marketSort),
     [visibleSignals, marketSort],
   );
-  const profitableCount = useMemo(
-    () => visibleSignals.filter((signal) => signal.trader.tier === "whale").length,
-    [visibleSignals],
-  );
-
   return (
     <div className="app-shell">
       <div className="ambient ambient-left" />
@@ -258,11 +253,6 @@ function App() {
               label="WS coverage"
               value={`${snapshot.status.websocketAssetsSeenRecentlyCount}/${snapshot.status.websocketSubscribedAssetCount} active`}
               tone="neutral"
-            />
-            <StatusRow
-              label="Profitable whales"
-              value={profitableCount.toString()}
-              tone="green"
             />
             <StatusRow
               label="Last market sync"
