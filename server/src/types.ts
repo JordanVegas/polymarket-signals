@@ -51,7 +51,7 @@ export type WhaleSignal = {
   outcome: string;
   side: "BUY" | "SELL";
   label: string;
-  labelTone: "green" | "blue" | "neutral";
+  labelTone: "cyan" | "blue" | "yellow" | "neutral";
   totalUsd: number;
   fillCount: number;
   totalShares: number;

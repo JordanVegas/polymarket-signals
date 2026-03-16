@@ -10,7 +10,9 @@
   --panel-border: rgba(183, 228, 255, 0.11);
   --text-dim: #92aab9;
   --green: #43e89a;
+  --cyan: #5be9ff;
   --blue: #4aa8ff;
+  --yellow: #ffd84d;
   --shadow: 0 30px 80px rgba(0, 0, 0, 0.35);
 }
 
@@ -301,16 +303,22 @@ a {
   letter-spacing: 0.02em;
 }
 
-.pill-green {
-  background: rgba(67, 232, 154, 0.14);
-  color: var(--green);
-  border: 1px solid rgba(67, 232, 154, 0.28);
+.pill-cyan {
+  background: rgba(91, 233, 255, 0.16);
+  color: var(--cyan);
+  border: 1px solid rgba(91, 233, 255, 0.32);
 }
 
 .pill-blue {
   background: rgba(74, 168, 255, 0.14);
   color: var(--blue);
   border: 1px solid rgba(74, 168, 255, 0.28);
+}
+
+.pill-yellow {
+  background: rgba(255, 216, 77, 0.16);
+  color: var(--yellow);
+  border: 1px solid rgba(255, 216, 77, 0.3);
 }
 
 .pill-neutral {
