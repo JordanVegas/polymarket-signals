@@ -353,8 +353,8 @@ function App() {
 
                       <div className="metric-row">
                         <Metric label="Market flow" value={currencyFormatter.format(market.totalUsd)} />
-                        <Metric label="Signals" value={market.totalFillCount.toString()} />
                         <Metric label="Last price" value={signal.averagePrice.toFixed(3)} />
+                        <Metric label="Weighted" value={market.weightedScore.toString()} />
                       </div>
 
                       <div className="metric-row metric-row-tier-counts">
@@ -373,12 +373,6 @@ function App() {
                           value={(market.outcomeWeights[1]?.weight ?? 0).toString()}
                         />
                         <Metric label="Edge" value={formatOutcomeEdge(market.outcomeWeights)} />
-                      </div>
-
-                      <div className="metric-row">
-                        <Metric label="Weighted" value={market.weightedScore.toString()} />
-                        <Metric label="Last trader" value={signal.displayName} />
-                        <Metric label="Last tier" value={`${signal.trader.tier.toUpperCase()} x${signal.trader.weight}`} />
                       </div>
 
                       <div className="signal-actions">
