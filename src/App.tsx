@@ -185,7 +185,7 @@ function App() {
 
         setSnapshot((current) => ({
           ...current,
-          signals: upsertSignal(current.signals, message.payload as WhaleSignal).slice(0, 75),
+          signals: upsertSignal(current.signals, message.payload as WhaleSignal),
         }));
       });
     };

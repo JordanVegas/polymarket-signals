@@ -252,7 +252,9 @@ export class PolymarketSignalService {
     const activeMarketSlugs = new Set(
       Array.from(this.marketsByAssetId.values(), (market) => market.slug),
     );
-    const recentSignals = (await this.storage.loadRecentSignals(config.maxSignals)).map(applySignalLabelStyle);
+    const recentSignals = (
+      await this.storage.loadSignalsForMarketSlugs(Array.from(activeMarketSlugs))
+    ).map(applySignalLabelStyle);
 
     return {
       status: {
@@ -267,7 +269,7 @@ export class PolymarketSignalService {
         websocketAssetsSeenRecentlyCount,
         lastWebsocketMessageAt: this.lastWebsocketMessageAt,
       },
-      signals: recentSignals.filter((signal) => activeMarketSlugs.has(signal.marketSlug)),
+      signals: recentSignals,
     };
   }
 

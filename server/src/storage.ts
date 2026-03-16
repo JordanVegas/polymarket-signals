@@ -95,6 +95,18 @@ export class SignalStorage {
     return rows.map(({ _id: _ignored, updatedAt: _updatedAt, ...signal }) => signal);
   }
 
+  async loadSignalsForMarketSlugs(marketSlugs: string[]): Promise<WhaleSignal[]> {
+    if (marketSlugs.length === 0) {
+      return [];
+    }
+
+    const rows = await this.collection()
+      .find({ marketSlug: { $in: marketSlugs } }, { sort: { timestamp: -1 } })
+      .toArray();
+
+    return rows.map(({ _id: _ignored, updatedAt: _updatedAt, ...signal }) => signal);
+  }
+
   async saveSignal(signal: WhaleSignal): Promise<void> {
     const payload: PersistedSignal = {
       ...signal,
