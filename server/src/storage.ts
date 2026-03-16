@@ -1,6 +1,6 @@
 import { MongoClient } from "mongodb";
 import { config } from "./config.js";
-import type { WhaleSignal } from "./types.js";
+import type { TradeRecord, WhaleSignal } from "./types.js";
 
 type PersistedSignal = WhaleSignal & {
   updatedAt: Date;
@@ -13,6 +13,11 @@ export type PersistedTrade = {
   side: "BUY" | "SELL";
   timestamp: number;
   totalUsd: number;
+  createdAt: Date;
+};
+
+export type PersistedObservedTrade = TradeRecord & {
+  tradeId: string;
   createdAt: Date;
 };
 
@@ -60,6 +65,8 @@ export class SignalStorage {
     await this.collection().createIndex({ timestamp: -1 });
     await this.tradeCollection().createIndex({ tradeId: 1 }, { unique: true });
     await this.tradeCollection().createIndex({ timestamp: -1 });
+    await this.observedTradeCollection().createIndex({ tradeId: 1 }, { unique: true });
+    await this.observedTradeCollection().createIndex({ timestamp: -1 });
     await this.clusterCollection().createIndex({ clusterKey: 1 }, { unique: true });
     await this.clusterCollection().createIndex({ updatedAt: -1 });
     await this.clusterCollection().createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
@@ -94,6 +101,24 @@ export class SignalStorage {
     );
 
     return result.upsertedCount > 0;
+  }
+
+  async saveObservedTrade(trade: PersistedObservedTrade): Promise<boolean> {
+    const result = await this.observedTradeCollection().updateOne(
+      { tradeId: trade.tradeId },
+      { $setOnInsert: trade },
+      { upsert: true },
+    );
+
+    return result.upsertedCount > 0;
+  }
+
+  async loadObservedTradesSince(timestampSec: number, limit: number): Promise<TradeRecord[]> {
+    const rows = await this.observedTradeCollection()
+      .find({ timestamp: { $gte: timestampSec } }, { sort: { timestamp: 1 }, limit })
+      .toArray();
+
+    return rows.map(({ _id: _ignored, tradeId: _tradeId, createdAt: _createdAt, ...trade }) => trade);
   }
 
   async loadActiveClusters(cutoffMs: number): Promise<PersistedCluster[]> {
@@ -142,5 +167,15 @@ export class SignalStorage {
     return this.client
       .db(config.mongoDbName)
       .collection<PersistedCluster>("active_clusters");
+  }
+
+  private observedTradeCollection() {
+    if (!this.client) {
+      throw new Error("Mongo client not connected");
+    }
+
+    return this.client
+      .db(config.mongoDbName)
+      .collection<PersistedObservedTrade>("observed_trades");
   }
 }

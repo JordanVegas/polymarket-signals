@@ -384,6 +384,11 @@ export class PolymarketSignalService {
 
     for (const trade of trades) {
       const tradeId = getTradeId(trade);
+      await this.storage.saveObservedTrade({
+        ...trade,
+        tradeId,
+        createdAt: new Date(),
+      });
       const inserted = await this.storage.markTradeProcessed({
         tradeId,
         proxyWallet: trade.proxyWallet,
@@ -410,6 +415,12 @@ export class PolymarketSignalService {
 
     const lookbackCutoffSec =
       Math.floor(Date.now() / 1000) - config.historicalBackfillLookbackHours * 60 * 60;
+    const storedTrades = await this.storage.loadObservedTradesSince(lookbackCutoffSec, limit);
+    if (storedTrades.length > 0) {
+      await this.processHistoricalTrades(storedTrades);
+      return;
+    }
+
     const batchSize = 500;
     const trades: TradeRecord[] = [];
 
@@ -439,9 +450,25 @@ export class PolymarketSignalService {
       .filter((trade) => trade.timestamp >= lookbackCutoffSec)
       .sort((left, right) => left.timestamp - right.timestamp);
 
-    for (const trade of historicalTrades) {
+    await this.processHistoricalTrades(historicalTrades, true);
+  }
+
+  private async processHistoricalTrades(
+    trades: TradeRecord[],
+    persistObservedTrades = false,
+  ): Promise<void> {
+    for (const trade of trades) {
+      const tradeId = getTradeId(trade);
+      if (persistObservedTrades) {
+        await this.storage.saveObservedTrade({
+          ...trade,
+          tradeId,
+          createdAt: new Date(),
+        });
+      }
+
       const inserted = await this.storage.markTradeProcessed({
-        tradeId: getTradeId(trade),
+        tradeId,
         proxyWallet: trade.proxyWallet,
         asset: trade.asset,
         side: trade.side,
