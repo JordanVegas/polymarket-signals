@@ -167,6 +167,12 @@ const copy = {
     getSellAlerts: "Get sell alerts",
     loadingMarkets: "Loading markets...",
     scrollForMore: "Scroll for more",
+    whaleBuy: "🐋 Whale buy",
+    sharkBuy: "🦈 Shark buy",
+    proBuy: "😎 Pro buy",
+    whaleSell: "🐋 Whale sell",
+    sharkSell: "🦈 Shark sell",
+    proSell: "😎 Pro sell",
     now: "now",
     minutesAgo: "m ago",
     hoursAgo: "h ago",
@@ -228,6 +234,12 @@ const copy = {
     getSellAlerts: "קבל התראות מכירה",
     loadingMarkets: "טוען שווקים...",
     scrollForMore: "גלול לעוד",
+    whaleBuy: "עסקת לוויתן",
+    sharkBuy: "עסקת כריש",
+    proBuy: "עסקת מקצוען",
+    whaleSell: "מימוש לוויתן",
+    sharkSell: "מימוש כריש",
+    proSell: "מימוש מקצוען",
     now: "עכשיו",
     minutesAgo: " דק׳",
     hoursAgo: " ש׳",
@@ -764,7 +776,7 @@ function App() {
                           ) : (
                             <div className="image-fallback">{signal.outcome[0]}</div>
                           )}
-                          <div className={`pill pill-${signal.labelTone}`}>{signal.label}</div>
+                          <div className={`pill pill-${signal.labelTone}`}>{getSignalLabel(signal, t)}</div>
                         </div>
 
                         <div className="signal-body">
@@ -942,6 +954,22 @@ function getOutcomeTone(outcome: string) {
   }
 
   return "neutral";
+}
+
+function getSignalLabel(signal: WhaleSignal, t: (typeof copy)["en"]) {
+  if (signal.trader.tier === "whale") {
+    return signal.side === "BUY" ? t.whaleBuy : t.whaleSell;
+  }
+
+  if (signal.trader.tier === "shark") {
+    return signal.side === "BUY" ? t.sharkBuy : t.sharkSell;
+  }
+
+  if (signal.trader.tier === "pro") {
+    return signal.side === "BUY" ? t.proBuy : t.proSell;
+  }
+
+  return signal.label;
 }
 
 function inferMissingOutcome(
