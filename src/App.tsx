@@ -124,6 +124,7 @@ function App() {
   const [feedConnected, setFeedConnected] = useState(false);
   const [marketSort, setMarketSort] = useState<MarketSortOption>("recent");
   const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
   const [pageCount, setPageCount] = useState(1);
   const [marketPage, setMarketPage] = useState<MarketPageResponse>({
     items: [],
@@ -136,8 +137,18 @@ function App() {
   const [alertActionMarketSlug, setAlertActionMarketSlug] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
-  const deferredSearchQuery = useDeferredValue(searchQuery);
+  const deferredSearchQuery = useDeferredValue(debouncedSearchQuery);
   const deferredRefreshVersion = useDeferredValue(refreshVersion);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 1_500);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [searchQuery]);
 
   useEffect(() => {
     let closed = false;
