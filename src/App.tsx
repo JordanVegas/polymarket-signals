@@ -146,10 +146,12 @@ const copy = {
     saveWebhook: "Save webhook",
     saving: "Saving...",
     discordWebhookSaved: "Discord webhook saved",
+    removing: "Removing...",
     activeWatches: "Active watches",
     noActiveWatches: "No sell-alert watches are active yet.",
     watchedOutcome: "Watched outcome",
     openWatchedMarket: "Open watched market",
+    removeWatch: "Remove watch",
     signalFeed: "Signal feed",
     vegasMonitor: "Vegas Monitor",
     search: "Search",
@@ -217,10 +219,12 @@ const copy = {
     saveWebhook: "שמור וובהוק",
     saving: "שומר...",
     discordWebhookSaved: "וובהוק דיסקורד נשמר",
+    removing: "מסיר...",
     activeWatches: "מעקבים פעילים",
     noActiveWatches: "עדיין אין מעקבי התראות מכירה פעילים.",
     watchedOutcome: "תוצאה במעקב",
     openWatchedMarket: "פתח שוק במעקב",
+    removeWatch: "הסר מעקב",
     signalFeed: "פיד סיגנלים",
     vegasMonitor: "Vegas Monitor",
     search: "חיפוש",
@@ -302,6 +306,7 @@ function App() {
   const [profile, setProfile] = useState<UserProfileResponse | null>(null);
   const [profileFormWebhookUrl, setProfileFormWebhookUrl] = useState("");
   const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [removingWatchKey, setRemovingWatchKey] = useState<string | null>(null);
   const [profileMessage, setProfileMessage] = useState<string | null>(null);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const deferredSearchQuery = useDeferredValue(debouncedSearchQuery);
@@ -617,6 +622,40 @@ function App() {
     }
   };
 
+  const removeWatch = async (marketSlug: string, outcome: string) => {
+    const watchKey = `${marketSlug}:${outcome}`;
+    setRemovingWatchKey(watchKey);
+    setProfileMessage(null);
+
+    try {
+      const url = new URL(`/api/market-alerts/watch/${encodeURIComponent(marketSlug)}`, window.location.origin);
+      url.searchParams.set("outcome", outcome);
+      const response = await fetch(url, {
+        method: "DELETE",
+      });
+      const payload = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error || t.unableToUpdateSellAlerts);
+      }
+
+      setProfile((current) =>
+        current
+          ? {
+              ...current,
+              watches: current.watches.filter(
+                (watch) => !(watch.marketSlug === marketSlug && watch.outcome === outcome),
+              ),
+            }
+          : current,
+      );
+      setRefreshVersion((current) => current + 1);
+    } catch (error) {
+      setProfileMessage(error instanceof Error ? error.message : t.unableToUpdateSellAlerts);
+    } finally {
+      setRemovingWatchKey(null);
+    }
+  };
+
   const profileTitle = profile?.username
     ? language === "he"
       ? `${t.profileTitle} ${profile.username}`
@@ -744,9 +783,21 @@ function App() {
                             {t.watchedOutcome}: {watch.outcome}
                           </span>
                         </div>
-                        <a href={normalizeSecureUrl(watch.marketUrl) ?? watch.marketUrl} target="_blank" rel="noreferrer">
-                          {t.openWatchedMarket}
-                        </a>
+                        <div className="profile-watch-actions">
+                          <a href={normalizeSecureUrl(watch.marketUrl) ?? watch.marketUrl} target="_blank" rel="noreferrer">
+                            {t.openWatchedMarket}
+                          </a>
+                          <button
+                            type="button"
+                            className="profile-watch-remove"
+                            onClick={() => void removeWatch(watch.marketSlug, watch.outcome)}
+                            disabled={removingWatchKey === `${watch.marketSlug}:${watch.outcome}`}
+                          >
+                            {removingWatchKey === `${watch.marketSlug}:${watch.outcome}`}
+                              ? t.removing
+                              : t.removeWatch}
+                          </button>
+                        </div>
                       </article>
                     ))}
                   </div>

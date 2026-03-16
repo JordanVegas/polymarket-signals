@@ -364,6 +364,39 @@ a {
   border-color: rgba(255, 255, 255, 0.24);
 }
 
+.profile-watch-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.profile-watch-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 92, 92, 0.24);
+  background: rgba(255, 92, 92, 0.12);
+  color: #ffb3b3;
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.profile-watch-remove:hover:enabled {
+  border-color: rgba(255, 92, 92, 0.4);
+  background: rgba(255, 92, 92, 0.18);
+}
+
+.profile-watch-remove:disabled {
+  opacity: 0.68;
+  cursor: wait;
+}
+
 .profile-empty {
   margin: 0;
 }
@@ -738,11 +771,17 @@ a {
 
   .signal-actions a,
   .signal-actions button,
-  .profile-watch-item a {
+  .profile-watch-item a,
+  .profile-watch-remove {
     width: 100%;
   }
 
   .profile-watch-item {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .profile-watch-actions {
     flex-direction: column;
     align-items: stretch;
   }
