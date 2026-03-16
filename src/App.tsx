@@ -669,16 +669,21 @@ function App() {
 
       <main className="page">
         <div className="page-topbar">
-          <button
-            type="button"
-            className="nav-button"
-            onClick={() => setLanguage((current) => (current === "en" ? "he" : "en"))}
-          >
-            {language === "en" ? "עברית" : "English"}
-          </button>
-          <button type="button" className="nav-button" onClick={() => navigateTo("/profile")}>
-            {t.profile}
-          </button>
+          <div className="page-brand" aria-label="Whale shark pro">
+            🐋 &gt; 🦈 &gt; 😎
+          </div>
+          <div className="page-topbar-actions">
+            <button
+              type="button"
+              className="nav-button"
+              onClick={() => setLanguage((current) => (current === "en" ? "he" : "en"))}
+            >
+              {language === "en" ? "עברית" : "English"}
+            </button>
+            <button type="button" className="nav-button" onClick={() => navigateTo("/profile")}>
+              {t.profile}
+            </button>
+          </div>
         </div>
 
         <section className="hero">
