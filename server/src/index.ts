@@ -80,7 +80,13 @@ app.put("/api/profile", async (request, response) => {
     }
 
     const webhookUrl = String(request.body.webhookUrl ?? "");
-    response.json(await service.updateUserProfile(request.sessionUser.username, webhookUrl));
+    const monitoredWallet = String(request.body.monitoredWallet ?? "");
+    response.json(
+      await service.updateUserProfile(request.sessionUser.username, {
+        webhookUrl,
+        monitoredWallet,
+      }),
+    );
   } catch (error) {
     response.status(400).json({
       error: error instanceof Error ? error.message : "Unable to save profile",

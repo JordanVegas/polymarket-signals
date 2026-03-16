@@ -32,6 +32,12 @@ type RawMarket = {
 };
 
 type RawPosition = {
+  asset?: string;
+  size?: number | string;
+  title?: string;
+  slug?: string;
+  icon?: string;
+  outcome?: string;
   cashPnl?: number;
   realizedPnl?: number;
 };
@@ -194,6 +200,7 @@ export class PolymarketSignalService {
   private readonly lastMarketTradeFetchAt = new Map<string, number>();
   private marketSyncTimer: NodeJS.Timeout | null = null;
   private tradePollTimer: NodeJS.Timeout | null = null;
+  private portfolioSyncTimer: NodeJS.Timeout | null = null;
   private lastTradeTimestampSec = 0;
   private websocketConnected = false;
   private lastMarketSyncAt: number | null = null;
@@ -217,6 +224,10 @@ export class PolymarketSignalService {
     this.marketSyncTimer = setInterval(() => {
       this.runBackgroundTask("scheduled market sync", this.syncMarkets());
     }, config.marketRefreshMs);
+    this.portfolioSyncTimer = setInterval(() => {
+      this.runBackgroundTask("portfolio watch sync", this.syncTrackedWalletWatches());
+    }, 3 * 60_000);
+    this.runBackgroundTask("initial portfolio watch sync", this.syncTrackedWalletWatches());
   }
 
   private async restoreActiveClusters(): Promise<void> {
@@ -235,6 +246,9 @@ export class PolymarketSignalService {
     }
     if (this.tradePollTimer) {
       clearInterval(this.tradePollTimer);
+    }
+    if (this.portfolioSyncTimer) {
+      clearInterval(this.portfolioSyncTimer);
     }
     this.teardownAllMarketSockets();
   }
@@ -325,7 +339,7 @@ export class PolymarketSignalService {
       throw new Error("Username, market slug, and outcome are required");
     }
 
-    const savedWebhookUrl = await this.storage.getUserWebhook(normalizedUsername);
+    const { webhookUrl: savedWebhookUrl } = await this.storage.getUserSettings(normalizedUsername);
     if (!savedWebhookUrl) {
       throw new Error("Add your Discord webhook URL in Profile before enabling sell alerts");
     }
@@ -346,7 +360,7 @@ export class PolymarketSignalService {
     }
 
     await this.storage.unwatchMarket(normalizedUsername, normalizedMarketSlug, normalizedOutcome);
-    const savedWebhookUrl = await this.storage.getUserWebhook(normalizedUsername);
+    const { webhookUrl: savedWebhookUrl } = await this.storage.getUserSettings(normalizedUsername);
     return {
       isWatched: false,
       webhookConfigured: Boolean(savedWebhookUrl),
@@ -363,10 +377,12 @@ export class PolymarketSignalService {
     const activeMarketsBySlug = new Map(
       Array.from(this.marketsByAssetId.values(), (market) => [market.slug, market] as const),
     );
+    const settings = await this.storage.getUserSettings(normalizedUsername);
 
     return {
       username: normalizedUsername,
-      webhookUrl: (await this.storage.getUserWebhook(normalizedUsername)) ?? "",
+      webhookUrl: settings.webhookUrl ?? "",
+      monitoredWallet: settings.monitoredWallet ?? "",
       watches: watchedMarkets.map((watch) => {
         const market = activeMarketsBySlug.get(watch.marketSlug);
         return {
@@ -374,14 +390,19 @@ export class PolymarketSignalService {
           outcome: watch.outcome,
           marketQuestion: market?.question ?? watch.marketSlug,
           marketUrl: market ? `https://polymarket.com/event/${market.slug}` : `https://polymarket.com/event/${watch.marketSlug}`,
+          source: watch.source,
         };
       }),
     };
   }
 
-  async updateUserProfile(username: string, webhookUrl: string): Promise<UserProfileResponse> {
+  async updateUserProfile(
+    username: string,
+    updates: { webhookUrl: string; monitoredWallet: string },
+  ): Promise<UserProfileResponse> {
     const normalizedUsername = username.trim();
-    const normalizedWebhookUrl = webhookUrl.trim();
+    const normalizedWebhookUrl = updates.webhookUrl.trim();
+    const normalizedMonitoredWallet = updates.monitoredWallet.trim();
     if (!normalizedUsername) {
       throw new Error("Username is required");
     }
@@ -394,12 +415,16 @@ export class PolymarketSignalService {
       throw new Error("Please enter a valid Discord webhook URL");
     }
 
-    await this.storage.upsertUserWebhook(normalizedUsername, normalizedWebhookUrl);
-    return {
-      username: normalizedUsername,
+    if (normalizedMonitoredWallet && !/^0x[a-fA-F0-9]{40}$/.test(normalizedMonitoredWallet)) {
+      throw new Error("Please enter a valid public Polymarket wallet");
+    }
+
+    await this.storage.updateUserSettings(normalizedUsername, {
       webhookUrl: normalizedWebhookUrl,
-      watches: (await this.getUserProfile(normalizedUsername)).watches,
-    };
+      monitoredWallet: normalizedMonitoredWallet,
+    });
+    await this.syncTrackedWalletWatchesForUser(normalizedUsername, normalizedMonitoredWallet);
+    return this.getUserProfile(normalizedUsername);
   }
 
   private async syncMarkets(): Promise<void> {
@@ -1401,6 +1426,54 @@ export class PolymarketSignalService {
         logFetchFailure(`discord webhook ${watcher.username} ${signal.marketSlug}`, error);
       }
     }
+  }
+
+  private async syncTrackedWalletWatches(): Promise<void> {
+    const users = await this.storage.loadUsersWithMonitoredWallets();
+    for (const user of users) {
+      await this.syncTrackedWalletWatchesForUser(user.username, user.monitoredWallet);
+    }
+  }
+
+  private async syncTrackedWalletWatchesForUser(username: string, monitoredWallet: string): Promise<void> {
+    const normalizedWallet = monitoredWallet.trim();
+    if (!normalizedWallet) {
+      await this.storage.syncPortfolioWatches(username, []);
+      return;
+    }
+
+    const response = await this.safeFetch(
+      `${DATA_API_URL}/positions?user=${normalizedWallet}&sizeThreshold=.1`,
+      `portfolio sync ${username}`,
+    );
+    if (!response || !response.ok) {
+      return;
+    }
+
+    const positions = ((await response.json()) as RawPosition[]) ?? [];
+    const activeMarketSlugs = new Set(Array.from(this.marketsByAssetId.values(), (market) => market.slug));
+    const watches = positions
+      .map((position) => this.toPortfolioWatch(position))
+      .filter((watch): watch is { marketSlug: string; outcome: string } => Boolean(watch))
+      .filter((watch) => activeMarketSlugs.has(watch.marketSlug));
+
+    const deduped = Array.from(
+      new Map(watches.map((watch) => [`${watch.marketSlug}:${watch.outcome}`, watch])).values(),
+    );
+
+    await this.storage.syncPortfolioWatches(username, deduped);
+  }
+
+  private toPortfolioWatch(position: RawPosition): { marketSlug: string; outcome: string } | null {
+    const marketSlug = String(position.slug || "").trim();
+    const outcome = String(position.outcome || "").trim();
+    const size = Number(position.size ?? 0);
+
+    if (!marketSlug || !outcome || !Number.isFinite(size) || size <= 0) {
+      return null;
+    }
+
+    return { marketSlug, outcome };
   }
 }
 

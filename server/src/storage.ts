@@ -66,7 +66,8 @@ export type PersistedCluster = {
 
 export type PersistedUserWebhookSetting = {
   username: string;
-  webhookUrl: string;
+  webhookUrl?: string;
+  monitoredWallet?: string;
   updatedAt: Date;
 };
 
@@ -74,6 +75,7 @@ export type PersistedMarketAlertWatch = {
   username: string;
   marketSlug: string;
   outcome: string;
+  source: "manual" | "portfolio_sync";
   createdAt: Date;
   updatedAt: Date;
 };
@@ -109,7 +111,7 @@ export class SignalStorage {
     await this.clusterCollection().createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
     await this.userWebhookCollection().createIndex({ username: 1 }, { unique: true });
     await this.marketAlertWatchCollection().createIndex(
-      { username: 1, marketSlug: 1, outcome: 1 },
+      { username: 1, marketSlug: 1, outcome: 1, source: 1 },
       { unique: true },
     );
     await this.marketAlertWatchCollection().createIndex({ marketSlug: 1, outcome: 1, username: 1 });
@@ -256,13 +258,16 @@ export class SignalStorage {
     await this.clusterCollection().deleteOne({ clusterKey });
   }
 
-  async upsertUserWebhook(username: string, webhookUrl: string): Promise<void> {
+  async updateUserSettings(
+    username: string,
+    updates: { webhookUrl?: string; monitoredWallet?: string },
+  ): Promise<void> {
     await this.userWebhookCollection().updateOne(
       { username },
       {
         $set: {
           username,
-          webhookUrl,
+          ...updates,
           updatedAt: new Date(),
         },
       },
@@ -270,19 +275,25 @@ export class SignalStorage {
     );
   }
 
-  async getUserWebhook(username: string): Promise<string | null> {
+  async getUserSettings(
+    username: string,
+  ): Promise<{ webhookUrl: string | null; monitoredWallet: string | null }> {
     const row = await this.userWebhookCollection().findOne({ username });
-    return row?.webhookUrl ?? null;
+    return {
+      webhookUrl: row?.webhookUrl ?? null,
+      monitoredWallet: row?.monitoredWallet ?? null,
+    };
   }
 
   async watchMarket(username: string, marketSlug: string, outcome: string): Promise<void> {
     await this.marketAlertWatchCollection().updateOne(
-      { username, marketSlug, outcome },
+      { username, marketSlug, outcome, source: "manual" },
       {
         $set: {
           username,
           marketSlug,
           outcome,
+          source: "manual",
           updatedAt: new Date(),
         },
         $setOnInsert: {
@@ -294,7 +305,7 @@ export class SignalStorage {
   }
 
   async unwatchMarket(username: string, marketSlug: string, outcome: string): Promise<void> {
-    await this.marketAlertWatchCollection().deleteOne({ username, marketSlug, outcome });
+    await this.marketAlertWatchCollection().deleteMany({ username, marketSlug, outcome });
   }
 
   async loadWatchedOutcomesByMarket(username: string): Promise<Map<string, Set<string>>> {
@@ -314,18 +325,86 @@ export class SignalStorage {
 
   async loadWatchedMarkets(
     username: string,
-  ): Promise<Array<{ marketSlug: string; outcome: string; createdAt?: Date; updatedAt?: Date }>> {
+  ): Promise<Array<{ marketSlug: string; outcome: string; source: "manual" | "portfolio_sync"; createdAt?: Date; updatedAt?: Date }>> {
     const rows = await this.marketAlertWatchCollection()
-      .find({ username }, { projection: { _id: 0, marketSlug: 1, outcome: 1, createdAt: 1, updatedAt: 1 } })
+      .find({ username }, { projection: { _id: 0, marketSlug: 1, outcome: 1, source: 1, createdAt: 1, updatedAt: 1 } })
       .sort({ updatedAt: -1, createdAt: -1 })
       .toArray();
 
     return rows.map((row) => ({
       marketSlug: row.marketSlug,
       outcome: row.outcome,
+      source: row.source ?? "manual",
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     }));
+  }
+
+  async syncPortfolioWatches(
+    username: string,
+    watches: Array<{ marketSlug: string; outcome: string }>,
+  ): Promise<void> {
+    const normalizedKeys = new Set(
+      watches.map((watch) => `${watch.marketSlug}:${watch.outcome}`),
+    );
+
+    if (watches.length > 0) {
+      const bulk = watches.map((watch) => ({
+        updateOne: {
+          filter: {
+            username,
+            marketSlug: watch.marketSlug,
+            outcome: watch.outcome,
+            source: "portfolio_sync" as const,
+          },
+          update: {
+            $set: {
+              username,
+              marketSlug: watch.marketSlug,
+              outcome: watch.outcome,
+              source: "portfolio_sync" as const,
+              updatedAt: new Date(),
+            },
+            $setOnInsert: {
+              createdAt: new Date(),
+            },
+          },
+          upsert: true,
+        },
+      }));
+      await this.marketAlertWatchCollection().bulkWrite(bulk, { ordered: false });
+    }
+
+    const existingAutoWatches = await this.marketAlertWatchCollection()
+      .find(
+        { username, source: "portfolio_sync" },
+        { projection: { marketSlug: 1, outcome: 1 } },
+      )
+      .toArray();
+
+    const staleIds = existingAutoWatches
+      .filter((watch) => !normalizedKeys.has(`${watch.marketSlug}:${watch.outcome}`))
+      .map((watch) => watch._id);
+
+    if (staleIds.length > 0) {
+      await this.marketAlertWatchCollection().deleteMany({ _id: { $in: staleIds } });
+    }
+  }
+
+  async loadUsersWithMonitoredWallets(): Promise<Array<{ username: string; monitoredWallet: string }>> {
+    const rows = await this.userWebhookCollection()
+      .find(
+        { monitoredWallet: { $exists: true, $ne: "" } },
+        { projection: { _id: 0, username: 1, monitoredWallet: 1 } },
+      )
+      .toArray();
+
+    return rows
+      .map((row) => ({
+        username: row.username,
+        monitoredWallet: row.monitoredWallet ?? "",
+      }))
+      .filter((row) => Boolean(row.username && row.monitoredWallet));
   }
 
   async loadWatchersForMarket(

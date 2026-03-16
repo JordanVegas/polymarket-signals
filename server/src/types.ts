@@ -114,10 +114,12 @@ export type WatchMarketResult = {
 export type UserProfileResponse = {
   username: string;
   webhookUrl: string;
+  monitoredWallet: string;
   watches: Array<{
     marketSlug: string;
     outcome: string;
     marketQuestion: string;
     marketUrl: string;
+    source: "manual" | "portfolio_sync";
   }>;
 };

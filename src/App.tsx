@@ -82,11 +82,13 @@ type MarketPageResponse = {
 type UserProfileResponse = {
   username: string;
   webhookUrl: string;
+  monitoredWallet: string;
   watches: Array<{
     marketSlug: string;
     outcome: string;
     marketQuestion: string;
     marketUrl: string;
+    source: "manual" | "portfolio_sync";
   }>;
 };
 
@@ -143,6 +145,7 @@ const copy = {
     profileBody:
       "Save your Discord webhook here once, then use Get sell alerts on any market card you want to track for exit signals.",
     discordWebhookUrl: "Discord webhook URL",
+    monitoredWallet: "Tracked Polymarket wallet",
     saveWebhook: "Save webhook",
     saving: "Saving...",
     discordWebhookSaved: "Discord webhook saved",
@@ -150,6 +153,8 @@ const copy = {
     activeWatches: "Active watches",
     noActiveWatches: "No sell-alert watches are active yet.",
     watchedOutcome: "Watched outcome",
+    watchSourceManual: "Manual",
+    watchSourcePortfolioSync: "Portfolio sync",
     openWatchedMarket: "Open watched market",
     removeWatch: "Remove watch",
     signalFeed: "Signal feed",
@@ -216,6 +221,7 @@ const copy = {
     profileBody:
       "שמור כאן פעם אחת את כתובת הוובהוק של דיסקורד, ואז השתמש ב-Get sell alerts על כל כרטיס שוק שתרצה לעקוב אחריו ליציאה.",
     discordWebhookUrl: "כתובת וובהוק של דיסקורד",
+    monitoredWallet: "ארנק פולימרקט למעקב",
     saveWebhook: "שמור וובהוק",
     saving: "שומר...",
     discordWebhookSaved: "וובהוק דיסקורד נשמר",
@@ -223,6 +229,8 @@ const copy = {
     activeWatches: "מעקבים פעילים",
     noActiveWatches: "עדיין אין מעקבי התראות מכירה פעילים.",
     watchedOutcome: "תוצאה במעקב",
+    watchSourceManual: "ידני",
+    watchSourcePortfolioSync: "מסונכרן מהתיק",
     openWatchedMarket: "פתח שוק במעקב",
     removeWatch: "הסר מעקב",
     signalFeed: "פיד סיגנלים",
@@ -305,6 +313,7 @@ function App() {
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [profile, setProfile] = useState<UserProfileResponse | null>(null);
   const [profileFormWebhookUrl, setProfileFormWebhookUrl] = useState("");
+  const [profileFormMonitoredWallet, setProfileFormMonitoredWallet] = useState("");
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [removingWatchKey, setRemovingWatchKey] = useState<string | null>(null);
   const [profileMessage, setProfileMessage] = useState<string | null>(null);
@@ -497,6 +506,7 @@ function App() {
       if (!cancelled) {
         setProfile(payload);
         setProfileFormWebhookUrl(payload.webhookUrl);
+        setProfileFormMonitoredWallet(payload.monitoredWallet);
       }
     };
 
@@ -605,6 +615,7 @@ function App() {
         },
         body: JSON.stringify({
           webhookUrl: profileFormWebhookUrl,
+          monitoredWallet: profileFormMonitoredWallet,
         }),
       });
       const payload = (await response.json()) as UserProfileResponse & { error?: string };
@@ -614,6 +625,7 @@ function App() {
 
       setProfile(payload);
       setProfileFormWebhookUrl(payload.webhookUrl);
+      setProfileFormMonitoredWallet(payload.monitoredWallet);
       setProfileMessage(t.discordWebhookSaved);
     } catch (error) {
       setProfileMessage(error instanceof Error ? error.message : t.unableToSaveProfile);
@@ -756,6 +768,16 @@ function App() {
                 />
               </label>
 
+              <label className="profile-field">
+                <span>{t.monitoredWallet}</span>
+                <input
+                  type="text"
+                  value={profileFormMonitoredWallet}
+                  onChange={(event) => setProfileFormMonitoredWallet(event.target.value)}
+                  placeholder="0x..."
+                />
+              </label>
+
               {profileMessage ? <p className="profile-message">{profileMessage}</p> : null}
 
               <div className="profile-actions">
@@ -781,6 +803,11 @@ function App() {
                           <strong>{watch.marketQuestion}</strong>
                           <span>
                             {t.watchedOutcome}: {watch.outcome}
+                          </span>
+                          <span>
+                            {watch.source === "portfolio_sync"
+                              ? t.watchSourcePortfolioSync
+                              : t.watchSourceManual}
                           </span>
                         </div>
                         <div className="profile-watch-actions">
