@@ -1,7 +1,13 @@
 import { config } from "./config.js";
 import WebSocket from "ws";
 import { SignalStorage, type PersistedCluster } from "./storage.js";
-import type { MarketRecord, TradeRecord, TraderSummary, WhaleSignal } from "./types.js";
+import type {
+  MarketPriceUpdate,
+  MarketRecord,
+  TradeRecord,
+  TraderSummary,
+  WhaleSignal,
+} from "./types.js";
 
 const GAMMA_MARKETS_URL = "https://gamma-api.polymarket.com/markets";
 const DATA_API_URL = "https://data-api.polymarket.com";
@@ -171,6 +177,7 @@ export class PolymarketSignalService {
   private readonly activeAssetIds = new Set<string>();
   private readonly initialActiveConditionIds = new Set<string>();
   private readonly websocketAssetSeenAt = new Map<string, number>();
+  private readonly marketPrices = new Map<string, number>();
   private readonly accumulators = new Map<string, SignalAccumulator>();
   private readonly traderCache = new Map<string, { summary: TraderSummary; fetchedAt: number }>();
   private readonly storage = new SignalStorage();
@@ -189,6 +196,7 @@ export class PolymarketSignalService {
   private forcingMarketSync: Promise<void> | null = null;
   private nextShardId = 1;
   private listeners = new Set<(payload: WhaleSignal) => void>();
+  private priceListeners = new Set<(payload: MarketPriceUpdate) => void>();
 
   async start(): Promise<void> {
     await this.storage.connect();
@@ -232,6 +240,13 @@ export class PolymarketSignalService {
     };
   }
 
+  onMarketPrice(listener: (payload: MarketPriceUpdate) => void): () => void {
+    this.priceListeners.add(listener);
+    return () => {
+      this.priceListeners.delete(listener);
+    };
+  }
+
   async getSnapshot() {
     const recentCutoff = Date.now() - 15 * 60_000;
     let websocketAssetsSeenRecentlyCount = 0;
@@ -269,6 +284,7 @@ export class PolymarketSignalService {
         websocketAssetsSeenRecentlyCount,
         lastWebsocketMessageAt: this.lastWebsocketMessageAt,
       },
+      marketPrices: Object.fromEntries(this.marketPrices),
       signals: recentSignals,
     };
   }
@@ -486,7 +502,35 @@ export class PolymarketSignalService {
     this.lastTradeAt = Date.now();
     this.lastWebsocketMessageAt = seenAt;
     this.websocketAssetSeenAt.set(message.asset_id, seenAt);
+    this.updateMarketPrice(message);
     this.scheduleMarketTradeFetch(message);
+  }
+
+  private updateMarketPrice(message: MarketTradeMessage): void {
+    const market = this.marketsByAssetId.get(message.asset_id ?? "");
+    if (!market) {
+      return;
+    }
+
+    const price = Number(message.price);
+    if (!Number.isFinite(price)) {
+      return;
+    }
+
+    const previousPrice = this.marketPrices.get(market.slug);
+    if (previousPrice === price) {
+      return;
+    }
+
+    this.marketPrices.set(market.slug, price);
+    const payload: MarketPriceUpdate = {
+      marketSlug: market.slug,
+      price,
+    };
+
+    for (const listener of this.priceListeners) {
+      listener(payload);
+    }
   }
 
   private startTradePolling(): void {

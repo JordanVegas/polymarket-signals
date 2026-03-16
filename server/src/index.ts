@@ -73,18 +73,23 @@ const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
 wss.on("connection", (socket) => {
-  let unsubscribe = () => {};
+  let unsubscribeSignal = () => {};
+  let unsubscribePrice = () => {};
 
   void (async () => {
     socket.send(JSON.stringify({ type: "snapshot", payload: await service.getSnapshot() }));
 
-    unsubscribe = service.onSignal((signal) => {
+    unsubscribeSignal = service.onSignal((signal) => {
       socket.send(JSON.stringify({ type: "signal", payload: signal }));
+    });
+    unsubscribePrice = service.onMarketPrice((priceUpdate) => {
+      socket.send(JSON.stringify({ type: "price", payload: priceUpdate }));
     });
   })();
 
   socket.on("close", () => {
-    unsubscribe();
+    unsubscribeSignal();
+    unsubscribePrice();
   });
 });
 

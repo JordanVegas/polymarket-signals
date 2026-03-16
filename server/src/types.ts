@@ -75,5 +75,11 @@ export type AppSnapshot = {
     websocketAssetsSeenRecentlyCount: number;
     lastWebsocketMessageAt: number | null;
   };
+  marketPrices: Record<string, number>;
   signals: WhaleSignal[];
+};
+
+export type MarketPriceUpdate = {
+  marketSlug: string;
+  price: number;
 };

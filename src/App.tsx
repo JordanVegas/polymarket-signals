@@ -48,7 +48,13 @@ type Snapshot = {
     websocketAssetsSeenRecentlyCount: number;
     lastWebsocketMessageAt: number | null;
   };
+  marketPrices: Record<string, number>;
   signals: WhaleSignal[];
+};
+
+type MarketPriceUpdate = {
+  marketSlug: string;
+  price: number;
 };
 
 type MarketAggregate = {
@@ -116,6 +122,7 @@ function App() {
       websocketAssetsSeenRecentlyCount: 0,
       lastWebsocketMessageAt: null,
     },
+    marketPrices: {},
     signals: [],
   });
   const [feedConnected, setFeedConnected] = useState(false);
@@ -175,11 +182,23 @@ function App() {
 
       socket.addEventListener("message", (event) => {
         const message = JSON.parse(event.data) as {
-          type: "snapshot" | "signal";
-          payload: Snapshot | WhaleSignal;
+          type: "snapshot" | "signal" | "price";
+          payload: Snapshot | WhaleSignal | MarketPriceUpdate;
         };
         if (message.type === "snapshot") {
           setSnapshot(message.payload as Snapshot);
+          return;
+        }
+
+        if (message.type === "price") {
+          const priceUpdate = message.payload as MarketPriceUpdate;
+          setSnapshot((current) => ({
+            ...current,
+            marketPrices: {
+              ...current.marketPrices,
+              [priceUpdate.marketSlug]: priceUpdate.price,
+            },
+          }));
           return;
         }
 
@@ -333,7 +352,10 @@ function App() {
 
                       <div className="metric-row">
                         <Metric label="Market flow" value={currencyFormatter.format(market.totalUsd)} />
-                        <Metric label="Last price" value={signal.averagePrice.toFixed(3)} />
+                        <Metric
+                          label="Last price"
+                          value={(snapshot.marketPrices[market.marketSlug] ?? signal.averagePrice).toFixed(3)}
+                        />
                         <Metric label="Weighted" value={market.weightedScore.toString()} />
                       </div>
 
