@@ -542,6 +542,26 @@ a {
   white-space: nowrap;
 }
 
+.signal-rationale {
+  margin: 0 0 8px;
+  display: grid;
+  gap: 3px;
+  color: #d0e1eb;
+  font-size: 0.76rem;
+}
+
+.signal-rationale span {
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.64rem;
+}
+
+.signal-rationale strong {
+  font-weight: 500;
+  line-height: 1.35;
+}
+
 .app-shell-he .feed-header,
 .app-shell-he .feed-controls,
 .app-shell-he .signal-topline,

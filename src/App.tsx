@@ -175,9 +175,16 @@ const copy = {
     marketFlow: "Market flow",
     lastPrice: "Last price",
     weighted: "Weighted",
+    confidence: "Confidence",
     outcome1: "Outcome 1",
     outcome2: "Outcome 2",
     avgEntry: "Avg entry",
+    whySignal: "Why",
+    rationaleCluster: "cluster",
+    tierWhale: "Whale",
+    tierShark: "Shark",
+    tierPro: "Pro",
+    tierNone: "Large trader",
     openMarket: "Open market",
     openWhaleProfile: "Open whale profile",
     sellAlertsOn: "Sell alerts on",
@@ -251,9 +258,16 @@ const copy = {
     marketFlow: "נפח שוק",
     lastPrice: "מחיר אחרון",
     weighted: "משקל",
+    confidence: "ביטחון",
     outcome1: "תוצאה 1",
     outcome2: "תוצאה 2",
     avgEntry: "ממוצע כניסה",
+    whySignal: "למה",
+    rationaleCluster: "אשכול",
+    tierWhale: "לוויתן",
+    tierShark: "כריש",
+    tierPro: "מקצוען",
+    tierNone: "טריידר גדול",
     openMarket: "פתח שוק",
     openWhaleProfile: "פתח פרופיל",
     sellAlertsOn: "התראות מכירה פועלות",
@@ -884,6 +898,8 @@ function App() {
                       weight: number;
                     }>;
                     const edgeLabel = formatOutcomeEdge(visibleOutcomeWeights, t.even);
+                    const confidenceScore = getSignalConfidence(signal);
+                    const signalRationale = getSignalRationale(signal, t);
 
                     return (
                       <article className="signal-card" key={market.marketSlug}>
@@ -913,10 +929,15 @@ function App() {
                             </span>
                           </p>
 
+                          <p className="signal-rationale">
+                            <span>{t.whySignal}</span>
+                            <strong>{signalRationale}</strong>
+                          </p>
+
                           <div className="metric-row">
                             <Metric label={t.marketFlow} value={currencyFormatter.format(market.totalUsd)} />
                             <Metric label={t.lastPrice} value={signal.averagePrice.toFixed(3)} />
-                            <Metric label={t.weighted} value={market.weightedScore.toString()} />
+                            <Metric label={t.confidence} value={`${confidenceScore}/100`} />
                           </div>
 
                           <div className="metric-row">
@@ -1071,6 +1092,51 @@ function getOutcomeTone(outcome: string) {
   }
 
   return "neutral";
+}
+
+function getSignalConfidence(signal: WhaleSignal) {
+  const tierBonus =
+    signal.trader.tier === "whale"
+      ? 28
+      : signal.trader.tier === "shark"
+        ? 18
+        : signal.trader.tier === "pro"
+          ? 10
+          : 0;
+  const pnlBonus = Math.min(18, Math.max(0, signal.trader.totalPnl / 10_000));
+  const tradeCountBonus = Math.min(14, signal.trader.tradeCount / 12);
+  const sizeBonus = Math.min(16, signal.totalUsd / 2_500);
+  const fillBonus = Math.min(6, signal.fillCount);
+
+  return Math.max(
+    50,
+    Math.min(99, Math.round(30 + tierBonus + pnlBonus + tradeCountBonus + sizeBonus + fillBonus)),
+  );
+}
+
+function getTierLabel(tier: TraderSummary["tier"], t: (typeof copy)["en"]) {
+  if (tier === "whale") {
+    return t.tierWhale;
+  }
+
+  if (tier === "shark") {
+    return t.tierShark;
+  }
+
+  if (tier === "pro") {
+    return t.tierPro;
+  }
+
+  return t.tierNone;
+}
+
+function getSignalRationale(signal: WhaleSignal, t: (typeof copy)["en"]) {
+  return [
+    getTierLabel(signal.trader.tier, t),
+    currencyFormatter.format(signal.trader.totalPnl),
+    `${signal.trader.tradeCount} trades`,
+    `${currencyFormatter.format(signal.totalUsd)} ${t.rationaleCluster}`,
+  ].join(", ");
 }
 
 function getSignalLabel(signal: WhaleSignal, t: (typeof copy)["en"]) {
