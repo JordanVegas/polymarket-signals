@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type TraderSummary = {
   wallet: string;
@@ -109,6 +109,8 @@ const compactCurrencyFormatter = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 1,
 });
 
+const MARKET_PAGE_SIZE = 24;
+
 function App() {
   const [snapshot, setSnapshot] = useState<Snapshot>({
     status: {
@@ -128,6 +130,8 @@ function App() {
   });
   const [feedConnected, setFeedConnected] = useState(false);
   const [marketSort, setMarketSort] = useState<MarketSortOption>("recent");
+  const [visibleMarketCount, setVisibleMarketCount] = useState(MARKET_PAGE_SIZE);
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     let closed = false;
@@ -233,6 +237,43 @@ function App() {
     () => sortMarkets(aggregateMarkets(visibleSignals), marketSort),
     [visibleSignals, marketSort],
   );
+  const visibleMarkets = useMemo(
+    () => marketAggregates.slice(0, visibleMarketCount),
+    [marketAggregates, visibleMarketCount],
+  );
+
+  useEffect(() => {
+    setVisibleMarketCount(MARKET_PAGE_SIZE);
+  }, [marketSort, snapshot.signals]);
+
+  useEffect(() => {
+    const sentinel = loadMoreRef.current;
+    if (!sentinel || visibleMarketCount >= marketAggregates.length) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const [entry] = entries;
+        if (!entry?.isIntersecting) {
+          return;
+        }
+
+        setVisibleMarketCount((current) =>
+          Math.min(current + MARKET_PAGE_SIZE, marketAggregates.length),
+        );
+      },
+      {
+        rootMargin: "240px 0px",
+      },
+    );
+
+    observer.observe(sentinel);
+    return () => {
+      observer.disconnect();
+    };
+  }, [marketAggregates.length, visibleMarketCount]);
+
   return (
     <div className="app-shell">
       <div className="ambient ambient-left" />
@@ -314,8 +355,9 @@ function App() {
               </p>
             </div>
           ) : (
-            <div className="signal-grid">
-              {marketAggregates.map((market) => {
+            <>
+              <div className="signal-grid">
+                {visibleMarkets.map((market) => {
                 const signal = market.latestSignal;
                 const primaryOutcome = market.outcomeWeights[0];
                 const secondaryOutcome =
@@ -395,8 +437,14 @@ function App() {
                     </div>
                   </article>
                 );
-              })}
-            </div>
+                })}
+              </div>
+              {visibleMarketCount < marketAggregates.length ? (
+                <div className="load-more-sentinel" ref={loadMoreRef}>
+                  Loading more markets...
+                </div>
+              ) : null}
+            </>
           )}
         </section>
       </main>
