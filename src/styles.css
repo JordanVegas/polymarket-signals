@@ -306,6 +306,15 @@ a {
   font-size: 0.82rem;
 }
 
+.signal-thesis strong {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
 .outcome-chip {
   display: inline-flex;
   align-items: center;
