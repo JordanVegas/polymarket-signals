@@ -63,6 +63,7 @@ type MarketAggregate = {
   pros: number;
   weightedScore: number;
   outcomeWeights: Array<{ outcome: string; weight: number }>;
+  observedAvgEntry: number | null;
   participantCount: number;
   latestSignal: WhaleSignal;
 };
@@ -447,7 +448,10 @@ function App() {
                             label={secondaryOutcome?.outcome ?? "Outcome 2"}
                             value={(secondaryOutcome?.weight ?? 0).toString()}
                           />
-                          <Metric label="W/S/P" value={`${market.whales}/${market.sharks}/${market.pros}`} />
+                          <Metric
+                            label="Observed avg entry"
+                            value={market.observedAvgEntry !== null ? market.observedAvgEntry.toFixed(3) : "—"}
+                          />
                         </div>
 
                         <div className="signal-actions">

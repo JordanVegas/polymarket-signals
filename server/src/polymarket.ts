@@ -1251,6 +1251,7 @@ export class PolymarketSignalService {
 const aggregateMarkets = (signals: WhaleSignal[]): MarketAggregate[] => {
   const markets = new Map<string, MarketAggregate>();
   const traderSpendByMarket = new Map<string, Map<string, { totalUsd: number; trader: TraderSummary }>>();
+  const outcomeTotalsByMarket = new Map<string, Map<string, { totalUsd: number; totalShares: number }>>();
   const traderOutcomeSpendByMarket = new Map<
     string,
     Map<string, Map<string, { totalUsd: number; trader: TraderSummary }>>
@@ -1272,6 +1273,7 @@ const aggregateMarkets = (signals: WhaleSignal[]): MarketAggregate[] => {
         pros: 0,
         weightedScore: 0,
         outcomeWeights: [],
+        observedAvgEntry: null,
         participantCount: 0,
         latestSignal: signal,
       });
@@ -1297,6 +1299,14 @@ const aggregateMarkets = (signals: WhaleSignal[]): MarketAggregate[] => {
     }
     traderSpendByMarket.set(signal.marketSlug, marketTraders);
 
+    const marketOutcomeTotals =
+      outcomeTotalsByMarket.get(signal.marketSlug) ?? new Map<string, { totalUsd: number; totalShares: number }>();
+    const outcomeTotals = marketOutcomeTotals.get(signal.outcome) ?? { totalUsd: 0, totalShares: 0 };
+    outcomeTotals.totalUsd += signal.totalUsd;
+    outcomeTotals.totalShares += signal.totalShares;
+    marketOutcomeTotals.set(signal.outcome, outcomeTotals);
+    outcomeTotalsByMarket.set(signal.marketSlug, marketOutcomeTotals);
+
     const marketOutcomeTraders =
       traderOutcomeSpendByMarket.get(signal.marketSlug) ??
       new Map<string, Map<string, { totalUsd: number; trader: TraderSummary }>>();
@@ -1318,6 +1328,7 @@ const aggregateMarkets = (signals: WhaleSignal[]): MarketAggregate[] => {
 
   for (const [marketSlug, aggregate] of markets) {
     const traders = traderSpendByMarket.get(marketSlug);
+    const outcomeTotals = outcomeTotalsByMarket.get(marketSlug);
     const outcomeTraders = traderOutcomeSpendByMarket.get(marketSlug);
     if (!traders) {
       continue;
@@ -1377,6 +1388,12 @@ const aggregateMarkets = (signals: WhaleSignal[]): MarketAggregate[] => {
     aggregate.outcomeWeights = Array.from(outcomeWeights.entries())
       .map(([outcome, weight]) => ({ outcome, weight }))
       .sort((left, right) => right.weight - left.weight);
+    const leadingOutcome = aggregate.outcomeWeights[0]?.outcome;
+    const leadingOutcomeTotals = leadingOutcome ? outcomeTotals?.get(leadingOutcome) : undefined;
+    aggregate.observedAvgEntry =
+      leadingOutcomeTotals && leadingOutcomeTotals.totalShares > 0
+        ? leadingOutcomeTotals.totalUsd / leadingOutcomeTotals.totalShares
+        : null;
     aggregate.participantCount = participantCount;
   }
 

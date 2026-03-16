@@ -90,6 +90,7 @@ export type MarketAggregate = {
   pros: number;
   weightedScore: number;
   outcomeWeights: Array<{ outcome: string; weight: number }>;
+  observedAvgEntry: number | null;
   participantCount: number;
   latestSignal: WhaleSignal;
 };
