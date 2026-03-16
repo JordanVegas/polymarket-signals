@@ -118,6 +118,10 @@ export class SignalStorage {
     return result.upsertedCount > 0;
   }
 
+  async hasProcessedTrade(tradeId: string): Promise<boolean> {
+    return (await this.tradeCollection().countDocuments({ tradeId }, { limit: 1 })) > 0;
+  }
+
   async saveObservedTrade(trade: PersistedObservedTrade): Promise<boolean> {
     const result = await this.observedTradeCollection().updateOne(
       { tradeId: trade.tradeId },

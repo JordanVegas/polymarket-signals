@@ -163,6 +163,8 @@ const logFetchFailure = (context: string, error: unknown) => {
   console.error(`[polysignals] ${context}`, error);
 };
 
+type IngestResult = "ingested" | "queued";
+
 export class PolymarketSignalService {
   private readonly marketsByAssetId = new Map<string, MarketRecord>();
   private readonly activeAssetIds = new Set<string>();
@@ -191,6 +193,7 @@ export class PolymarketSignalService {
     await this.syncMarkets();
     this.captureInitialActiveMarkets();
     this.startTradePolling();
+    this.runBackgroundTask("recent catch-up", this.catchUpRecentTrades());
     if (config.historicalFetchEnabled) {
       this.runBackgroundTask("historical backfill", this.backfillHistoricalSignals());
     }
@@ -511,21 +514,65 @@ export class PolymarketSignalService {
         tradeId,
         createdAt: new Date(),
       });
-      const inserted = await this.storage.markTradeProcessed({
-        tradeId,
-        proxyWallet: trade.proxyWallet,
-        asset: trade.asset,
-        side: trade.side,
-        timestamp: trade.timestamp,
-        totalUsd: trade.price * trade.size,
-        createdAt: new Date(),
-      });
-      if (!inserted) {
+      if (await this.storage.hasProcessedTrade(tradeId)) {
         continue;
       }
 
-      this.lastTradeTimestampSec = Math.max(this.lastTradeTimestampSec, trade.timestamp);
-      await this.ingestTrade(trade);
+      const result = await this.ingestTrade(trade);
+      if (result === "ingested") {
+        await this.markTradeProcessed(trade);
+      }
+    }
+  }
+
+  private async catchUpRecentTrades(): Promise<void> {
+    const lookbackCutoffSec =
+      Math.floor(Date.now() / 1000) - config.recentCatchupLookbackMinutes * 60;
+    const maxOffset = Math.max(0, config.recentCatchupMaxOffset);
+    const batchSize = 500;
+    const trades: TradeRecord[] = [];
+
+    for (let offset = 0; offset <= maxOffset; offset += batchSize) {
+      const url = new URL(`${DATA_API_URL}/trades`);
+      url.searchParams.set("limit", String(batchSize));
+      url.searchParams.set("offset", String(offset));
+
+      const response = await this.safeFetch(url, "recent catch-up");
+      if (!response || !response.ok) {
+        break;
+      }
+
+      const batch = (await response.json()) as TradeRecord[];
+      if (batch.length === 0) {
+        break;
+      }
+
+      trades.push(...batch);
+      const oldestTrade = batch[batch.length - 1];
+      if (!oldestTrade || oldestTrade.timestamp < lookbackCutoffSec) {
+        break;
+      }
+    }
+
+    const recentTrades = dedupeTrades(trades)
+      .filter((trade) => trade.timestamp >= lookbackCutoffSec)
+      .sort((left, right) => left.timestamp - right.timestamp);
+
+    for (const trade of recentTrades) {
+      const tradeId = getTradeId(trade);
+      await this.storage.saveObservedTrade({
+        ...trade,
+        tradeId,
+        createdAt: new Date(),
+      });
+      if (await this.storage.hasProcessedTrade(tradeId)) {
+        continue;
+      }
+
+      const result = await this.ingestTrade(trade);
+      if (result === "ingested") {
+        await this.markTradeProcessed(trade);
+      }
     }
   }
 
@@ -706,32 +753,26 @@ export class PolymarketSignalService {
         });
       }
 
-      const inserted = await this.storage.markTradeProcessed({
-        tradeId,
-        proxyWallet: trade.proxyWallet,
-        asset: trade.asset,
-        side: trade.side,
-        timestamp: trade.timestamp,
-        totalUsd: trade.price * trade.size,
-        createdAt: new Date(),
-      });
-      if (!inserted) {
+      if (await this.storage.hasProcessedTrade(tradeId)) {
         continue;
       }
 
-      this.lastTradeTimestampSec = Math.max(this.lastTradeTimestampSec, trade.timestamp);
-      await this.ingestTrade(trade);
+      const result = await this.ingestTrade(trade);
+      if (result === "ingested") {
+        await this.markTradeProcessed(trade);
+      }
     }
   }
 
-  private async ingestTrade(trade: TradeRecord): Promise<boolean> {
+  private async ingestTrade(trade: TradeRecord): Promise<IngestResult> {
     if (!this.marketsByAssetId.has(trade.asset)) {
       this.queueUnknownAssetTrade(trade);
       await this.ensureMarketForAsset(trade.asset);
-      return false;
+      return "queued";
     }
 
-    return this.ingestKnownTrade(trade);
+    await this.ingestKnownTrade(trade);
+    return "ingested";
   }
 
   private queueUnknownAssetTrade(trade: TradeRecord): void {
@@ -788,6 +829,7 @@ export class PolymarketSignalService {
 
     for (const trade of pendingTrades) {
       await this.ingestKnownTrade(trade);
+      await this.markTradeProcessed(trade);
     }
   }
 
@@ -848,6 +890,20 @@ export class PolymarketSignalService {
     const emitted = await this.tryEmitSignal(nextAccumulator);
     this.pruneAccumulators();
     return emitted;
+  }
+
+  private async markTradeProcessed(trade: TradeRecord): Promise<void> {
+    const tradeId = getTradeId(trade);
+    await this.storage.markTradeProcessed({
+      tradeId,
+      proxyWallet: trade.proxyWallet,
+      asset: trade.asset,
+      side: trade.side,
+      timestamp: trade.timestamp,
+      totalUsd: trade.price * trade.size,
+      createdAt: new Date(),
+    });
+    this.lastTradeTimestampSec = Math.max(this.lastTradeTimestampSec, trade.timestamp);
   }
 
   private async tryEmitSignal(accumulator: SignalAccumulator): Promise<boolean> {
