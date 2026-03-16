@@ -380,10 +380,13 @@ function App() {
 
   const toggleSellAlerts = async (market: MarketAggregate) => {
     setAlertActionMarketSlug(market.marketSlug);
+    const watchedOutcome = market.outcomeWeights[0]?.outcome ?? market.latestSignal.outcome;
 
     try {
       if (market.isWatched) {
-        const response = await fetch(`/api/market-alerts/watch/${encodeURIComponent(market.marketSlug)}`, {
+        const url = new URL(`/api/market-alerts/watch/${encodeURIComponent(market.marketSlug)}`, window.location.origin);
+        url.searchParams.set("outcome", watchedOutcome);
+        const response = await fetch(url, {
           method: "DELETE",
         });
         const payload = (await response.json()) as { error?: string };
@@ -398,6 +401,7 @@ function App() {
           },
           body: JSON.stringify({
             marketSlug: market.marketSlug,
+            outcome: watchedOutcome,
           }),
         });
         const payload = (await response.json()) as { error?: string };

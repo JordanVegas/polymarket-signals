@@ -104,18 +104,19 @@ app.get("/api/markets", async (request, response) => {
 app.post("/api/market-alerts/watch", async (request, response) => {
   try {
     const marketSlug = String(request.body.marketSlug ?? "").trim();
+    const outcome = String(request.body.outcome ?? "").trim();
 
     if (!request.sessionUser?.username) {
       response.status(401).json({ error: "Unauthorized" });
       return;
     }
 
-    if (!marketSlug) {
-      response.status(400).json({ error: "Market slug is required" });
+    if (!marketSlug || !outcome) {
+      response.status(400).json({ error: "Market slug and outcome are required" });
       return;
     }
 
-    response.json(await service.watchMarket(request.sessionUser.username, marketSlug));
+    response.json(await service.watchMarket(request.sessionUser.username, marketSlug, outcome));
   } catch (error) {
     response.status(400).json({
       error: error instanceof Error ? error.message : "Unable to enable sell alerts",
@@ -126,18 +127,19 @@ app.post("/api/market-alerts/watch", async (request, response) => {
 app.delete("/api/market-alerts/watch/:marketSlug", async (request, response) => {
   try {
     const marketSlug = String(request.params.marketSlug ?? "").trim();
+    const outcome = String(request.query.outcome ?? "").trim();
 
     if (!request.sessionUser?.username) {
       response.status(401).json({ error: "Unauthorized" });
       return;
     }
 
-    if (!marketSlug) {
-      response.status(400).json({ error: "Market slug is required" });
+    if (!marketSlug || !outcome) {
+      response.status(400).json({ error: "Market slug and outcome are required" });
       return;
     }
 
-    response.json(await service.unwatchMarket(request.sessionUser.username, marketSlug));
+    response.json(await service.unwatchMarket(request.sessionUser.username, marketSlug, outcome));
   } catch (error) {
     response.status(400).json({
       error: error instanceof Error ? error.message : "Unable to disable sell alerts",

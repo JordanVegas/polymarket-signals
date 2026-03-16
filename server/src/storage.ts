@@ -73,6 +73,7 @@ export type PersistedUserWebhookSetting = {
 export type PersistedMarketAlertWatch = {
   username: string;
   marketSlug: string;
+  outcome: string;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -80,6 +81,7 @@ export type PersistedMarketAlertWatch = {
 export type PersistedAlertDelivery = {
   username: string;
   marketSlug: string;
+  outcome: string;
   signalId: string;
   sentAt: Date;
 };
@@ -106,10 +108,13 @@ export class SignalStorage {
     await this.clusterCollection().createIndex({ updatedAt: -1 });
     await this.clusterCollection().createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
     await this.userWebhookCollection().createIndex({ username: 1 }, { unique: true });
-    await this.marketAlertWatchCollection().createIndex({ username: 1, marketSlug: 1 }, { unique: true });
-    await this.marketAlertWatchCollection().createIndex({ marketSlug: 1, username: 1 });
+    await this.marketAlertWatchCollection().createIndex(
+      { username: 1, marketSlug: 1, outcome: 1 },
+      { unique: true },
+    );
+    await this.marketAlertWatchCollection().createIndex({ marketSlug: 1, outcome: 1, username: 1 });
     await this.alertDeliveryCollection().createIndex(
-      { username: 1, marketSlug: 1, signalId: 1 },
+      { username: 1, marketSlug: 1, outcome: 1, signalId: 1 },
       { unique: true },
     );
   }
@@ -270,13 +275,14 @@ export class SignalStorage {
     return row?.webhookUrl ?? null;
   }
 
-  async watchMarket(username: string, marketSlug: string): Promise<void> {
+  async watchMarket(username: string, marketSlug: string, outcome: string): Promise<void> {
     await this.marketAlertWatchCollection().updateOne(
-      { username, marketSlug },
+      { username, marketSlug, outcome },
       {
         $set: {
           username,
           marketSlug,
+          outcome,
           updatedAt: new Date(),
         },
         $setOnInsert: {
@@ -287,26 +293,35 @@ export class SignalStorage {
     );
   }
 
-  async unwatchMarket(username: string, marketSlug: string): Promise<void> {
-    await this.marketAlertWatchCollection().deleteOne({ username, marketSlug });
+  async unwatchMarket(username: string, marketSlug: string, outcome: string): Promise<void> {
+    await this.marketAlertWatchCollection().deleteOne({ username, marketSlug, outcome });
   }
 
-  async loadWatchedMarketSlugs(username: string): Promise<Set<string>> {
+  async loadWatchedOutcomesByMarket(username: string): Promise<Map<string, Set<string>>> {
     const rows = await this.marketAlertWatchCollection()
-      .find({ username }, { projection: { marketSlug: 1 } })
+      .find({ username }, { projection: { marketSlug: 1, outcome: 1 } })
       .toArray();
-    return new Set(rows.map((row) => row.marketSlug));
+
+    const watchedOutcomesByMarket = new Map<string, Set<string>>();
+    for (const row of rows) {
+      const current = watchedOutcomesByMarket.get(row.marketSlug) ?? new Set<string>();
+      current.add(row.outcome);
+      watchedOutcomesByMarket.set(row.marketSlug, current);
+    }
+
+    return watchedOutcomesByMarket;
   }
 
   async loadWatchersForMarket(
     marketSlug: string,
+    outcome: string,
   ): Promise<Array<{ username: string; webhookUrl: string }>> {
     const rows = await this.marketAlertWatchCollection()
       .aggregate<{
         username: string;
         webhookUrl: string;
       }>([
-        { $match: { marketSlug } },
+        { $match: { marketSlug, outcome } },
         {
           $lookup: {
             from: "user_webhooks",
@@ -329,13 +344,19 @@ export class SignalStorage {
     return rows.filter((row) => Boolean(row.webhookUrl));
   }
 
-  async markAlertDelivered(username: string, marketSlug: string, signalId: string): Promise<boolean> {
+  async markAlertDelivered(
+    username: string,
+    marketSlug: string,
+    outcome: string,
+    signalId: string,
+  ): Promise<boolean> {
     const result = await this.alertDeliveryCollection().updateOne(
-      { username, marketSlug, signalId },
+      { username, marketSlug, outcome, signalId },
       {
         $setOnInsert: {
           username,
           marketSlug,
+          outcome,
           signalId,
           sentAt: new Date(),
         },

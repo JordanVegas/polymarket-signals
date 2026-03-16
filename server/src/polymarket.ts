@@ -292,11 +292,11 @@ export class PolymarketSignalService {
     const signals = resolveActiveBuySignals(
       (await this.storage.loadSignalsForMarketSlugs(activeMarketSlugs)).map(applySignalLabelStyle),
     );
-    const watchedMarketSlugs = username
-      ? await this.storage.loadWatchedMarketSlugs(username)
-      : new Set<string>();
+    const watchedOutcomesByMarket = username
+      ? await this.storage.loadWatchedOutcomesByMarket(username)
+      : new Map<string, Set<string>>();
     const markets = filterMarkets(
-      sortMarkets(applyWatchState(aggregateMarkets(signals), watchedMarketSlugs), sort),
+      sortMarkets(applyWatchState(aggregateMarkets(signals), watchedOutcomesByMarket), sort),
       search,
     );
     const safePage = Math.max(1, page);
@@ -316,11 +316,13 @@ export class PolymarketSignalService {
   async watchMarket(
     username: string,
     marketSlug: string,
+    outcome: string,
   ): Promise<WatchMarketResult> {
     const normalizedUsername = username.trim();
     const normalizedMarketSlug = marketSlug.trim();
-    if (!normalizedUsername || !normalizedMarketSlug) {
-      throw new Error("Username and market slug are required");
+    const normalizedOutcome = outcome.trim();
+    if (!normalizedUsername || !normalizedMarketSlug || !normalizedOutcome) {
+      throw new Error("Username, market slug, and outcome are required");
     }
 
     const savedWebhookUrl = await this.storage.getUserWebhook(normalizedUsername);
@@ -328,21 +330,22 @@ export class PolymarketSignalService {
       throw new Error("Add your Discord webhook URL in Profile before enabling sell alerts");
     }
 
-    await this.storage.watchMarket(normalizedUsername, normalizedMarketSlug);
+    await this.storage.watchMarket(normalizedUsername, normalizedMarketSlug, normalizedOutcome);
     return {
       isWatched: true,
       webhookConfigured: true,
     };
   }
 
-  async unwatchMarket(username: string, marketSlug: string): Promise<WatchMarketResult> {
+  async unwatchMarket(username: string, marketSlug: string, outcome: string): Promise<WatchMarketResult> {
     const normalizedUsername = username.trim();
     const normalizedMarketSlug = marketSlug.trim();
-    if (!normalizedUsername || !normalizedMarketSlug) {
-      throw new Error("Username and market slug are required");
+    const normalizedOutcome = outcome.trim();
+    if (!normalizedUsername || !normalizedMarketSlug || !normalizedOutcome) {
+      throw new Error("Username, market slug, and outcome are required");
     }
 
-    await this.storage.unwatchMarket(normalizedUsername, normalizedMarketSlug);
+    await this.storage.unwatchMarket(normalizedUsername, normalizedMarketSlug, normalizedOutcome);
     const savedWebhookUrl = await this.storage.getUserWebhook(normalizedUsername);
     return {
       isWatched: false,
@@ -1335,7 +1338,7 @@ export class PolymarketSignalService {
   }
 
   private async sendSellSignalAlerts(signal: WhaleSignal): Promise<void> {
-    const watchers = await this.storage.loadWatchersForMarket(signal.marketSlug);
+    const watchers = await this.storage.loadWatchersForMarket(signal.marketSlug, signal.outcome);
     if (watchers.length === 0) {
       return;
     }
@@ -1344,6 +1347,7 @@ export class PolymarketSignalService {
       const shouldSend = await this.storage.markAlertDelivered(
         watcher.username,
         signal.marketSlug,
+        signal.outcome,
         signal.id,
       );
       if (!shouldSend) {
@@ -1534,11 +1538,14 @@ const aggregateMarkets = (signals: WhaleSignal[]): MarketAggregate[] => {
 
 const applyWatchState = (
   markets: MarketAggregate[],
-  watchedMarketSlugs: Set<string>,
+  watchedOutcomesByMarket: Map<string, Set<string>>,
 ): MarketAggregate[] =>
   markets.map((market) => ({
     ...market,
-    isWatched: watchedMarketSlugs.has(market.marketSlug),
+    isWatched: Boolean(
+      getMarketWatchOutcome(market) &&
+        watchedOutcomesByMarket.get(market.marketSlug)?.has(getMarketWatchOutcome(market)!),
+    ),
   }));
 
 const sortMarkets = (markets: MarketAggregate[], sort: MarketSortOption): MarketAggregate[] => {
@@ -1631,6 +1638,9 @@ const filterMarkets = (markets: MarketAggregate[], query: string): MarketAggrega
     return haystack.includes(normalizedQuery);
   });
 };
+
+const getMarketWatchOutcome = (market: MarketAggregate): string =>
+  market.outcomeWeights[0]?.outcome ?? market.latestSignal.outcome;
 
 const isValidDiscordWebhookUrl = (value: string): boolean => {
   try {
