@@ -457,6 +457,12 @@ function App() {
       <div className="ambient ambient-right" />
 
       <main className="page">
+        <div className="page-topbar">
+          <button type="button" className="nav-button" onClick={() => navigateTo("/profile")}>
+            Profile
+          </button>
+        </div>
+
         <section className="hero">
           <div className="hero-panel">
             <StatusRow
@@ -561,9 +567,6 @@ function App() {
               />
             </label>
             <div className="feed-controls">
-              <button type="button" className="nav-button" onClick={() => navigateTo("/profile")}>
-                Profile
-              </button>
               <label className="sort-control">
                 <span>Sort</span>
                 <select value={marketSort} onChange={(event) => setMarketSort(event.target.value as MarketSortOption)}>

@@ -68,6 +68,12 @@ a {
   padding: 48px 24px 72px;
 }
 
+.page-topbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 14px;
+}
+
 .hero {
   display: block;
 }
@@ -591,6 +597,10 @@ a {
 @media (max-width: 720px) {
   .page {
     padding: 20px 14px 40px;
+  }
+
+  .page-topbar {
+    margin-bottom: 10px;
   }
 
   .hero-copy,
