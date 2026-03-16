@@ -66,6 +66,10 @@ export const config = {
     process.env.MARKET_HISTORY_CATCHUP_ENABLED,
     false,
   ),
+  traderHistoryCatchupEnabled: parseBoolean(
+    process.env.TRADER_HISTORY_CATCHUP_ENABLED,
+    false,
+  ),
   historicalBackfillLimit: parseNumber(process.env.HISTORICAL_BACKFILL_LIMIT, 2_000),
   historicalBackfillLookbackHours: parseNumber(
     process.env.HISTORICAL_BACKFILL_LOOKBACK_HOURS,

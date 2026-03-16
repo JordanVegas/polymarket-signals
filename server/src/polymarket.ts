@@ -830,7 +830,7 @@ export class PolymarketSignalService {
   }
 
   private async backfillTraderHistory(trader: TraderSummary): Promise<void> {
-    if (!config.historicalFetchEnabled) {
+    if (!config.historicalFetchEnabled || !config.traderHistoryCatchupEnabled) {
       return;
     }
 
@@ -1051,7 +1051,7 @@ export class PolymarketSignalService {
     }
 
     const lastFetchAt = this.lastMarketTradeFetchAt.get(marketConditionId) ?? 0;
-    if (Date.now() - lastFetchAt < 1_500) {
+    if (Date.now() - lastFetchAt < 10_000) {
       return;
     }
 
