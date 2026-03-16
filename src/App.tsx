@@ -143,6 +143,7 @@ function App() {
   });
   const [feedConnected, setFeedConnected] = useState(false);
   const [marketSort, setMarketSort] = useState<MarketSortOption>("recent");
+  const [searchQuery, setSearchQuery] = useState("");
   const [visibleMarketCount, setVisibleMarketCount] = useState(MARKET_PAGE_SIZE);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
@@ -253,22 +254,22 @@ function App() {
     () => snapshot.signals.filter((signal) => signal.side === "BUY"),
     [snapshot.signals],
   );
-  const marketAggregates = useMemo(
-    () => sortMarkets(aggregateMarkets(visibleSignals), marketSort),
-    [visibleSignals, marketSort],
+  const filteredMarketAggregates = useMemo(
+    () => filterMarkets(sortMarkets(aggregateMarkets(visibleSignals), marketSort), searchQuery),
+    [visibleSignals, marketSort, searchQuery],
   );
   const visibleMarkets = useMemo(
-    () => marketAggregates.slice(0, visibleMarketCount),
-    [marketAggregates, visibleMarketCount],
+    () => filteredMarketAggregates.slice(0, visibleMarketCount),
+    [filteredMarketAggregates, visibleMarketCount],
   );
 
   useEffect(() => {
     setVisibleMarketCount(MARKET_PAGE_SIZE);
-  }, [marketSort, snapshot.signals]);
+  }, [marketSort, snapshot.signals, searchQuery]);
 
   useEffect(() => {
     const sentinel = loadMoreRef.current;
-    if (!sentinel || visibleMarketCount >= marketAggregates.length) {
+    if (!sentinel || visibleMarketCount >= filteredMarketAggregates.length) {
       return;
     }
 
@@ -280,7 +281,7 @@ function App() {
         }
 
         setVisibleMarketCount((current) =>
-          Math.min(current + MARKET_PAGE_SIZE, marketAggregates.length),
+          Math.min(current + MARKET_PAGE_SIZE, filteredMarketAggregates.length),
         );
       },
       {
@@ -292,7 +293,7 @@ function App() {
     return () => {
       observer.disconnect();
     };
-  }, [marketAggregates.length, visibleMarketCount]);
+  }, [filteredMarketAggregates.length, visibleMarketCount]);
 
   return (
     <div className="app-shell">
@@ -323,7 +324,7 @@ function App() {
             />
             <StatusRow
               label="Signals surfaced"
-              value={marketAggregates.length.toString()}
+              value={filteredMarketAggregates.length.toString()}
               tone="neutral"
             />
             <StatusRow
@@ -351,6 +352,15 @@ function App() {
               <h2>Whale alerts</h2>
             </div>
             <div className="feed-controls">
+              <label className="search-control">
+                <span>Search</span>
+                <input
+                  type="search"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Markets, outcomes, traders"
+                />
+              </label>
               <p className="feed-meta">Triggered by whale, shark, and pro tiers with a $1,000 minimum cluster</p>
               <label className="sort-control">
                 <span>Sort</span>
@@ -365,7 +375,7 @@ function App() {
             </div>
           </div>
 
-          {marketAggregates.length === 0 ? (
+          {filteredMarketAggregates.length === 0 ? (
             <div className="empty-state">
               <div className="empty-pulse" />
               <h3>Watching the tape</h3>
@@ -474,7 +484,7 @@ function App() {
                 );
                 })}
               </div>
-              {visibleMarketCount < marketAggregates.length ? (
+              {visibleMarketCount < filteredMarketAggregates.length ? (
                 <div className="load-more-sentinel" ref={loadMoreRef}>
                   Loading more markets...
                 </div>
@@ -779,6 +789,28 @@ function sortMarkets(markets: MarketAggregate[], sort: MarketSortOption) {
   });
 
   return sorted;
+}
+
+function filterMarkets(markets: MarketAggregate[], query: string) {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return markets;
+  }
+
+  return markets.filter((market) => {
+    const haystack = [
+      market.marketQuestion,
+      market.marketSlug,
+      market.latestSignal.displayName,
+      market.latestSignal.outcome,
+      ...market.outcomeWeights.map((entry) => entry.outcome),
+      ...market.outcomeStats.map((entry) => entry.outcome),
+    ]
+      .join(" ")
+      .toLowerCase();
+
+    return haystack.includes(normalizedQuery);
+  });
 }
 
 function normalizeSecureUrl(value?: string) {

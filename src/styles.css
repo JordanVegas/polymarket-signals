@@ -145,6 +145,7 @@ a {
   display: flex;
   align-items: center;
   gap: 14px;
+  flex-wrap: wrap;
 }
 
 .feed-header h2 {
@@ -155,6 +156,35 @@ a {
 .sort-control {
   display: grid;
   gap: 6px;
+}
+
+.search-control {
+  display: grid;
+  gap: 6px;
+  min-width: min(320px, 100%);
+  flex: 1 1 280px;
+}
+
+.search-control span {
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.68rem;
+}
+
+.search-control input {
+  min-height: 36px;
+  width: 100%;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: inherit;
+  padding: 0 14px;
+  font: inherit;
+}
+
+.search-control input::placeholder {
+  color: rgba(146, 170, 185, 0.8);
 }
 
 .sort-control span {
