@@ -57,6 +57,8 @@ type MarketAggregate = {
   sharks: number;
   pros: number;
   weightedScore: number;
+  buyWeight: number;
+  sellWeight: number;
   participantCount: number;
   latestSignal: WhaleSignal;
 };
@@ -281,6 +283,12 @@ function App() {
                       </div>
 
                       <div className="metric-row">
+                        <Metric label="Buy weight" value={market.buyWeight.toString()} />
+                        <Metric label="Sell weight" value={market.sellWeight.toString()} />
+                        <Metric label="Edge" value={formatWeightEdge(market.buyWeight, market.sellWeight)} />
+                      </div>
+
+                      <div className="metric-row">
                         <Metric label="Weighted" value={market.weightedScore.toString()} />
                         <Metric label="Last trader" value={signal.displayName} />
                         <Metric label="Last tier" value={`${signal.trader.tier.toUpperCase()} x${signal.trader.weight}`} />
@@ -381,6 +389,18 @@ function formatRelativeTime(timestamp: number) {
   return `${Math.floor(diffMinutes / 60)}h ago`;
 }
 
+function formatWeightEdge(buyWeight: number, sellWeight: number) {
+  if (buyWeight === sellWeight) {
+    return "Even";
+  }
+
+  if (buyWeight > sellWeight) {
+    return `Buy +${buyWeight - sellWeight}`;
+  }
+
+  return `Sell +${sellWeight - buyWeight}`;
+}
+
 function upsertSignal(signals: WhaleSignal[], nextSignal: WhaleSignal) {
   const remaining = signals.filter((signal) => signal.id !== nextSignal.id);
   return [nextSignal, ...remaining];
@@ -389,6 +409,10 @@ function upsertSignal(signals: WhaleSignal[], nextSignal: WhaleSignal) {
 function aggregateMarkets(signals: WhaleSignal[]): MarketAggregate[] {
   const markets = new Map<string, MarketAggregate>();
   const traderSpendByMarket = new Map<string, Map<string, { totalUsd: number; trader: TraderSummary }>>();
+  const traderSideSpendByMarket = new Map<
+    string,
+    Map<string, { buyUsd: number; sellUsd: number; trader: TraderSummary }>
+  >();
 
   for (const signal of signals) {
     const existing = markets.get(signal.marketSlug);
@@ -405,6 +429,8 @@ function aggregateMarkets(signals: WhaleSignal[]): MarketAggregate[] {
         sharks: 0,
         pros: 0,
         weightedScore: 0,
+        buyWeight: 0,
+        sellWeight: 0,
         participantCount: 0,
         latestSignal: signal,
       });
@@ -429,10 +455,34 @@ function aggregateMarkets(signals: WhaleSignal[]): MarketAggregate[] {
       marketTraders.set(signal.wallet, { totalUsd: signal.totalUsd, trader: signal.trader });
     }
     traderSpendByMarket.set(signal.marketSlug, marketTraders);
+
+    const marketSideTraders =
+      traderSideSpendByMarket.get(signal.marketSlug) ??
+      new Map<string, { buyUsd: number; sellUsd: number; trader: TraderSummary }>();
+    const sideTraderEntry = marketSideTraders.get(signal.wallet);
+    if (sideTraderEntry) {
+      if (signal.side === "BUY") {
+        sideTraderEntry.buyUsd += signal.totalUsd;
+      } else {
+        sideTraderEntry.sellUsd += signal.totalUsd;
+      }
+
+      if (signal.trader.weight > sideTraderEntry.trader.weight) {
+        sideTraderEntry.trader = signal.trader;
+      }
+    } else {
+      marketSideTraders.set(signal.wallet, {
+        buyUsd: signal.side === "BUY" ? signal.totalUsd : 0,
+        sellUsd: signal.side === "SELL" ? signal.totalUsd : 0,
+        trader: signal.trader,
+      });
+    }
+    traderSideSpendByMarket.set(signal.marketSlug, marketSideTraders);
   }
 
   for (const [marketSlug, aggregate] of markets) {
     const traders = traderSpendByMarket.get(marketSlug);
+    const sideTraders = traderSideSpendByMarket.get(marketSlug);
     if (!traders) {
       continue;
     }
@@ -441,6 +491,8 @@ function aggregateMarkets(signals: WhaleSignal[]): MarketAggregate[] {
     let sharks = 0;
     let pros = 0;
     let weightedScore = 0;
+    let buyWeight = 0;
+    let sellWeight = 0;
     let participantCount = 0;
 
     for (const { totalUsd, trader } of traders.values()) {
@@ -459,10 +511,26 @@ function aggregateMarkets(signals: WhaleSignal[]): MarketAggregate[] {
       }
     }
 
+    if (sideTraders) {
+      for (const { buyUsd, sellUsd, trader } of sideTraders.values()) {
+        if (buyUsd + sellUsd < 1_000 || trader.tier === "none") {
+          continue;
+        }
+
+        if (buyUsd > sellUsd) {
+          buyWeight += trader.weight;
+        } else if (sellUsd > buyUsd) {
+          sellWeight += trader.weight;
+        }
+      }
+    }
+
     aggregate.whales = whales;
     aggregate.sharks = sharks;
     aggregate.pros = pros;
     aggregate.weightedScore = weightedScore;
+    aggregate.buyWeight = buyWeight;
+    aggregate.sellWeight = sellWeight;
     aggregate.participantCount = participantCount;
   }
 
