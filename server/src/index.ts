@@ -1,6 +1,7 @@
 import cors from "cors";
 import express from "express";
 import { createServer } from "node:http";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
@@ -21,6 +22,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const clientDistDir = path.resolve(__dirname, "../");
 const builtClientIndex = path.join(clientDistDir, "index.html");
+const hasBuiltClient = fs.existsSync(builtClientIndex);
 
 const service = new PolymarketSignalService();
 
@@ -36,7 +38,7 @@ app.get("/api/snapshot", async (_request, response) => {
   response.json(await service.getSnapshot());
 });
 
-if (process.env.NODE_ENV === "production") {
+if (hasBuiltClient) {
   app.use(express.static(clientDistDir));
 
   app.get("*", (request, response, next) => {
