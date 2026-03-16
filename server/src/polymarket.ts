@@ -183,6 +183,8 @@ const logFetchFailure = (context: string, error: unknown) => {
 
 const positiveOutcomeKeywords = ["yes", "up", "above", "over", "higher", "more", "long"];
 const negativeOutcomeKeywords = ["no", "down", "below", "under", "lower", "less", "short"];
+const TRADER_MEMORY_CACHE_TTL_MS = 5 * 60_000;
+const TRADER_DB_CACHE_TTL_MS = 15 * 60_000;
 
 type IngestResult = "ingested" | "queued";
 
@@ -1254,8 +1256,19 @@ export class PolymarketSignalService {
     fallbackProfileImage?: string,
   ): Promise<TraderSummary> {
     const cached = this.traderCache.get(wallet);
-    if (cached && Date.now() - cached.fetchedAt < 5 * 60_000) {
+    if (cached && Date.now() - cached.fetchedAt < TRADER_MEMORY_CACHE_TTL_MS) {
       return cached.summary;
+    }
+
+    const persisted = await this.storage.loadTraderSummary(wallet);
+    if (persisted && Date.now() - persisted.updatedAt < TRADER_DB_CACHE_TTL_MS) {
+      const summary = {
+        ...persisted.summary,
+        displayName: persisted.summary.displayName || fallbackName || wallet,
+        profileImage: persisted.summary.profileImage ?? fallbackProfileImage,
+      };
+      this.traderCache.set(wallet, { summary, fetchedAt: Date.now() });
+      return summary;
     }
 
     const [positionsRes, closedPositionsRes, valueRes] = await Promise.all([
@@ -1299,6 +1312,7 @@ export class PolymarketSignalService {
     };
 
     this.traderCache.set(wallet, { summary, fetchedAt: Date.now() });
+    await this.storage.saveTraderSummary(summary);
     return summary;
   }
 

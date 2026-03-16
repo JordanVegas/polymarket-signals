@@ -1,6 +1,6 @@
 import { MongoClient } from "mongodb";
 import { config } from "./config.js";
-import type { TradeRecord, WhaleSignal } from "./types.js";
+import type { TradeRecord, TraderSummary, WhaleSignal } from "./types.js";
 
 type PersistedSignal = WhaleSignal & {
   updatedAt: Date;
@@ -71,6 +71,10 @@ export type PersistedUserWebhookSetting = {
   updatedAt: Date;
 };
 
+export type PersistedTraderSummary = TraderSummary & {
+  updatedAt: Date;
+};
+
 export type PersistedMarketAlertWatch = {
   username: string;
   marketSlug: string;
@@ -110,6 +114,8 @@ export class SignalStorage {
     await this.clusterCollection().createIndex({ updatedAt: -1 });
     await this.clusterCollection().createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
     await this.userWebhookCollection().createIndex({ username: 1 }, { unique: true });
+    await this.traderSummaryCollection().createIndex({ wallet: 1 }, { unique: true });
+    await this.traderSummaryCollection().createIndex({ updatedAt: -1 });
     await this.marketAlertWatchCollection().createIndex(
       { username: 1, marketSlug: 1, outcome: 1, source: 1 },
       { unique: true },
@@ -283,6 +289,32 @@ export class SignalStorage {
       webhookUrl: row?.webhookUrl ?? null,
       monitoredWallet: row?.monitoredWallet ?? null,
     };
+  }
+
+  async loadTraderSummary(wallet: string): Promise<{ summary: TraderSummary; updatedAt: number } | null> {
+    const row = await this.traderSummaryCollection().findOne({ wallet });
+    if (!row) {
+      return null;
+    }
+
+    const { _id: _ignored, updatedAt, ...summary } = row;
+    return {
+      summary,
+      updatedAt: updatedAt.getTime(),
+    };
+  }
+
+  async saveTraderSummary(summary: TraderSummary): Promise<void> {
+    const payload: PersistedTraderSummary = {
+      ...summary,
+      updatedAt: new Date(),
+    };
+
+    await this.traderSummaryCollection().updateOne(
+      { wallet: summary.wallet },
+      { $set: payload },
+      { upsert: true },
+    );
   }
 
   async watchMarket(username: string, marketSlug: string, outcome: string): Promise<void> {
@@ -540,6 +572,16 @@ export class SignalStorage {
     return this.client
       .db(config.mongoDbName)
       .collection<PersistedMarketAlertWatch>("market_alert_watches");
+  }
+
+  private traderSummaryCollection() {
+    if (!this.client) {
+      throw new Error("Mongo client not connected");
+    }
+
+    return this.client
+      .db(config.mongoDbName)
+      .collection<PersistedTraderSummary>("trader_summaries");
   }
 
   private alertDeliveryCollection() {
