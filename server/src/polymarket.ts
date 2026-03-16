@@ -286,9 +286,9 @@ export class PolymarketSignalService {
     const activeMarketSlugs = Array.from(
       new Set(Array.from(this.marketsByAssetId.values(), (market) => market.slug)),
     );
-    const signals = (await this.storage.loadSignalsForMarketSlugs(activeMarketSlugs))
-      .map(applySignalLabelStyle)
-      .filter((signal) => signal.side === "BUY");
+    const signals = resolveActiveBuySignals(
+      (await this.storage.loadSignalsForMarketSlugs(activeMarketSlugs)).map(applySignalLabelStyle),
+    );
     const markets = filterMarkets(sortMarkets(aggregateMarkets(signals), sort), search);
     const safePage = Math.max(1, page);
     const safePageSize = Math.max(1, Math.min(pageSize, 100));
@@ -1423,6 +1423,34 @@ const sortMarkets = (markets: MarketAggregate[], sort: MarketSortOption): Market
   });
 
   return sorted;
+};
+
+const resolveActiveBuySignals = (signals: WhaleSignal[]): WhaleSignal[] => {
+  const orderedSignals = [...signals].sort((left, right) => {
+    if (left.timestamp !== right.timestamp) {
+      return left.timestamp - right.timestamp;
+    }
+
+    return left.id.localeCompare(right.id);
+  });
+  const activeSignalsByPosition = new Map<string, WhaleSignal[]>();
+
+  for (const signal of orderedSignals) {
+    const positionKey = `${signal.wallet}:${signal.marketSlug}:${signal.outcome}`;
+
+    if (signal.side === "SELL") {
+      activeSignalsByPosition.delete(positionKey);
+      continue;
+    }
+
+    const currentSignals = activeSignalsByPosition.get(positionKey) ?? [];
+    currentSignals.push(signal);
+    activeSignalsByPosition.set(positionKey, currentSignals);
+  }
+
+  return Array.from(activeSignalsByPosition.values())
+    .flat()
+    .sort((left, right) => right.timestamp - left.timestamp);
 };
 
 const filterMarkets = (markets: MarketAggregate[], query: string): MarketAggregate[] => {
