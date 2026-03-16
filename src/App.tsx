@@ -496,7 +496,7 @@ function App() {
                             value={(secondaryOutcome?.weight ?? 0).toString()}
                           />
                           <Metric
-                            label="Observed avg entry"
+                            label="Avg entry"
                             value={market.observedAvgEntry !== null ? market.observedAvgEntry.toFixed(3) : "—"}
                           />
                         </div>
