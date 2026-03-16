@@ -82,6 +82,12 @@ type MarketPageResponse = {
 type UserProfileResponse = {
   username: string;
   webhookUrl: string;
+  watches: Array<{
+    marketSlug: string;
+    outcome: string;
+    marketQuestion: string;
+    marketUrl: string;
+  }>;
 };
 
 type Language = "en" | "he";
@@ -140,6 +146,10 @@ const copy = {
     saveWebhook: "Save webhook",
     saving: "Saving...",
     discordWebhookSaved: "Discord webhook saved",
+    activeWatches: "Active watches",
+    noActiveWatches: "No sell-alert watches are active yet.",
+    watchedOutcome: "Watched outcome",
+    openWatchedMarket: "Open watched market",
     signalFeed: "Signal feed",
     vegasMonitor: "Vegas Monitor",
     search: "Search",
@@ -207,6 +217,10 @@ const copy = {
     saveWebhook: "שמור וובהוק",
     saving: "שומר...",
     discordWebhookSaved: "וובהוק דיסקורד נשמר",
+    activeWatches: "מעקבים פעילים",
+    noActiveWatches: "עדיין אין מעקבי התראות מכירה פעילים.",
+    watchedOutcome: "תוצאה במעקב",
+    openWatchedMarket: "פתח שוק במעקב",
     signalFeed: "פיד סיגנלים",
     vegasMonitor: "Vegas Monitor",
     search: "חיפוש",
@@ -714,6 +728,31 @@ function App() {
                 >
                   {isSavingProfile ? t.saving : t.saveWebhook}
                 </button>
+              </div>
+
+              <div className="profile-watches">
+                <div className="profile-watches-header">
+                  <p className="section-kicker">{t.activeWatches}</p>
+                </div>
+                {profile?.watches?.length ? (
+                  <div className="profile-watch-list">
+                    {profile.watches.map((watch) => (
+                      <article className="profile-watch-item" key={`${watch.marketSlug}:${watch.outcome}`}>
+                        <div className="profile-watch-copy">
+                          <strong>{watch.marketQuestion}</strong>
+                          <span>
+                            {t.watchedOutcome}: {watch.outcome}
+                          </span>
+                        </div>
+                        <a href={normalizeSecureUrl(watch.marketUrl) ?? watch.marketUrl} target="_blank" rel="noreferrer">
+                          {t.openWatchedMarket}
+                        </a>
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="profile-empty">{t.noActiveWatches}</p>
+                )}
               </div>
             </div>
           </section>

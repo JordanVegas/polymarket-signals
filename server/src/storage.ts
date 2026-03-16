@@ -312,6 +312,22 @@ export class SignalStorage {
     return watchedOutcomesByMarket;
   }
 
+  async loadWatchedMarkets(
+    username: string,
+  ): Promise<Array<{ marketSlug: string; outcome: string; createdAt?: Date; updatedAt?: Date }>> {
+    const rows = await this.marketAlertWatchCollection()
+      .find({ username }, { projection: { _id: 0, marketSlug: 1, outcome: 1, createdAt: 1, updatedAt: 1 } })
+      .sort({ updatedAt: -1, createdAt: -1 })
+      .toArray();
+
+    return rows.map((row) => ({
+      marketSlug: row.marketSlug,
+      outcome: row.outcome,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    }));
+  }
+
   async loadWatchersForMarket(
     marketSlug: string,
     outcome: string,

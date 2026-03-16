@@ -114,4 +114,10 @@ export type WatchMarketResult = {
 export type UserProfileResponse = {
   username: string;
   webhookUrl: string;
+  watches: Array<{
+    marketSlug: string;
+    outcome: string;
+    marketQuestion: string;
+    marketUrl: string;
+  }>;
 };

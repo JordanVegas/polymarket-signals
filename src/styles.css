@@ -302,6 +302,72 @@ a {
   justify-content: flex-start;
 }
 
+.profile-watches {
+  display: grid;
+  gap: 12px;
+}
+
+.profile-watches-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.profile-watch-list {
+  display: grid;
+  gap: 10px;
+}
+
+.profile-watch-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.profile-watch-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.profile-watch-copy strong,
+.profile-watch-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-watch-copy span,
+.profile-empty {
+  color: #d0e1eb;
+}
+
+.profile-watch-item a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  text-decoration: none;
+  font-size: 0.75rem;
+  flex: 0 0 auto;
+}
+
+.profile-watch-item a:hover {
+  border-color: rgba(255, 255, 255, 0.24);
+}
+
+.profile-empty {
+  margin: 0;
+}
+
 .load-more-sentinel {
   margin-top: 18px;
   text-align: center;
@@ -440,6 +506,7 @@ a {
 .app-shell-he .metric,
 .app-shell-he .profile-field,
 .app-shell-he .profile-copy,
+.app-shell-he .profile-watch-copy,
 .app-shell-he .empty-state,
 .app-shell-he .signal-body {
   text-align: right;
@@ -670,8 +737,14 @@ a {
   }
 
   .signal-actions a,
-  .signal-actions button {
+  .signal-actions button,
+  .profile-watch-item a {
     width: 100%;
+  }
+
+  .profile-watch-item {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .signal-media {

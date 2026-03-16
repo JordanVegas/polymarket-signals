@@ -359,9 +359,23 @@ export class PolymarketSignalService {
       throw new Error("Username is required");
     }
 
+    const watchedMarkets = await this.storage.loadWatchedMarkets(normalizedUsername);
+    const activeMarketsBySlug = new Map(
+      Array.from(this.marketsByAssetId.values(), (market) => [market.slug, market] as const),
+    );
+
     return {
       username: normalizedUsername,
       webhookUrl: (await this.storage.getUserWebhook(normalizedUsername)) ?? "",
+      watches: watchedMarkets.map((watch) => {
+        const market = activeMarketsBySlug.get(watch.marketSlug);
+        return {
+          marketSlug: watch.marketSlug,
+          outcome: watch.outcome,
+          marketQuestion: market?.question ?? watch.marketSlug,
+          marketUrl: market ? `https://polymarket.com/event/${market.slug}` : `https://polymarket.com/event/${watch.marketSlug}`,
+        };
+      }),
     };
   }
 
@@ -384,6 +398,7 @@ export class PolymarketSignalService {
     return {
       username: normalizedUsername,
       webhookUrl: normalizedWebhookUrl,
+      watches: (await this.getUserProfile(normalizedUsername)).watches,
     };
   }
 
