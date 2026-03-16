@@ -476,5 +476,6 @@ a {
 
   .signal-media {
     min-height: 84px;
+    max-height: 84px;
   }
 }
