@@ -611,6 +611,12 @@ export class PolymarketSignalService {
       return;
     }
 
+    const price = Number(message.price);
+    const size = Number(message.size);
+    if (!Number.isFinite(price) || !Number.isFinite(size) || price * size < 15) {
+      return;
+    }
+
     this.lastTradeAt = Date.now();
     const seenAt = Date.now();
     this.lastWebsocketMessageAt = seenAt;
