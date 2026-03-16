@@ -48,12 +48,13 @@ type Snapshot = {
     websocketAssetsSeenRecentlyCount: number;
     lastWebsocketMessageAt: number | null;
   };
-  marketPrices: Record<string, number>;
+  marketPrices: Record<string, Record<string, number>>;
   signals: WhaleSignal[];
 };
 
 type MarketPriceUpdate = {
   marketSlug: string;
+  outcome: string;
   price: number;
 };
 
@@ -196,7 +197,10 @@ function App() {
             ...current,
             marketPrices: {
               ...current.marketPrices,
-              [priceUpdate.marketSlug]: priceUpdate.price,
+              [priceUpdate.marketSlug]: {
+                ...(current.marketPrices[priceUpdate.marketSlug] ?? {}),
+                [priceUpdate.outcome]: priceUpdate.price,
+              },
             },
           }));
           return;
@@ -322,6 +326,9 @@ function App() {
                   weight: number;
                 }>;
                 const edgeLabel = formatOutcomeEdge(visibleOutcomeWeights);
+                const edgeOutcome = getEdgeOutcome(visibleOutcomeWeights);
+                const liveEdgePrice =
+                  edgeOutcome ? snapshot.marketPrices[market.marketSlug]?.[edgeOutcome] : undefined;
                 return (
                   <article className="signal-card" key={market.marketSlug}>
                     <div className="signal-media">
@@ -354,7 +361,13 @@ function App() {
                         <Metric label="Market flow" value={currencyFormatter.format(market.totalUsd)} />
                         <Metric
                           label="Last price"
-                          value={(snapshot.marketPrices[market.marketSlug] ?? signal.averagePrice).toFixed(3)}
+                          value={
+                            liveEdgePrice !== undefined
+                              ? liveEdgePrice.toFixed(3)
+                              : edgeOutcome === signal.outcome
+                                ? signal.averagePrice.toFixed(3)
+                                : "—"
+                          }
                         />
                         <Metric label="Weighted" value={market.weightedScore.toString()} />
                       </div>
@@ -463,6 +476,21 @@ function formatOutcomeEdge(outcomeWeights: Array<{ outcome: string; weight: numb
   }
 
   return `${first.outcome} +${first.weight - second.weight}`;
+}
+
+function getEdgeOutcome(outcomeWeights: Array<{ outcome: string; weight: number }>) {
+  const first = outcomeWeights[0];
+  const second = outcomeWeights[1];
+
+  if (!first) {
+    return undefined;
+  }
+
+  if (!second || first.weight > second.weight) {
+    return first.outcome;
+  }
+
+  return undefined;
 }
 
 function upsertSignal(signals: WhaleSignal[], nextSignal: WhaleSignal) {

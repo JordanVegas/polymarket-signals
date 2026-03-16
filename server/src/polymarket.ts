@@ -177,7 +177,7 @@ export class PolymarketSignalService {
   private readonly activeAssetIds = new Set<string>();
   private readonly initialActiveConditionIds = new Set<string>();
   private readonly websocketAssetSeenAt = new Map<string, number>();
-  private readonly marketPrices = new Map<string, number>();
+  private readonly marketPrices = new Map<string, Map<string, number>>();
   private readonly accumulators = new Map<string, SignalAccumulator>();
   private readonly traderCache = new Map<string, { summary: TraderSummary; fetchedAt: number }>();
   private readonly storage = new SignalStorage();
@@ -284,7 +284,12 @@ export class PolymarketSignalService {
         websocketAssetsSeenRecentlyCount,
         lastWebsocketMessageAt: this.lastWebsocketMessageAt,
       },
-      marketPrices: Object.fromEntries(this.marketPrices),
+      marketPrices: Object.fromEntries(
+        Array.from(this.marketPrices.entries(), ([marketSlug, pricesByOutcome]) => [
+          marketSlug,
+          Object.fromEntries(pricesByOutcome),
+        ]),
+      ),
       signals: recentSignals,
     };
   }
@@ -517,14 +522,22 @@ export class PolymarketSignalService {
       return;
     }
 
-    const previousPrice = this.marketPrices.get(market.slug);
+    const outcome = market.outcomeByAssetId[message.asset_id ?? ""];
+    if (!outcome) {
+      return;
+    }
+
+    const pricesByOutcome = this.marketPrices.get(market.slug) ?? new Map<string, number>();
+    const previousPrice = pricesByOutcome.get(outcome);
     if (previousPrice === price) {
       return;
     }
 
-    this.marketPrices.set(market.slug, price);
+    pricesByOutcome.set(outcome, price);
+    this.marketPrices.set(market.slug, pricesByOutcome);
     const payload: MarketPriceUpdate = {
       marketSlug: market.slug,
+      outcome,
       price,
     };
 
