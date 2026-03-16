@@ -63,13 +63,15 @@ type MarketAggregate = {
   sharks: number;
   pros: number;
   weightedScore: number;
-  buyWeight: number;
-  sellWeight: number;
+  outcomeWeights: Array<{ outcome: string; weight: number }>;
   participantCount: number;
   latestSignal: WhaleSignal;
 };
 
 type MarketSortOption = "recent" | "weighted" | "buyWeight" | "flow" | "participants";
+
+const positiveOutcomeKeywords = ["yes", "up", "above", "over", "higher", "more", "long"];
+const negativeOutcomeKeywords = ["no", "down", "below", "under", "lower", "less", "short"];
 
 const currencyFormatter = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -300,7 +302,7 @@ function App() {
                 <select value={marketSort} onChange={(event) => setMarketSort(event.target.value as MarketSortOption)}>
                   <option value="recent">Most recent</option>
                   <option value="weighted">Highest weight</option>
-                  <option value="buyWeight">Strongest buy side</option>
+                  <option value="buyWeight">Top outcome weight</option>
                   <option value="flow">Largest flow</option>
                   <option value="participants">Most traders</option>
                 </select>
@@ -343,7 +345,9 @@ function App() {
                         <strong>{signal.displayName}</strong>
                         <span className="signal-thesis-trade">
                           <span>{`last ${signal.side.toLowerCase()}`}</span>
-                          <span className="outcome-chip">{signal.outcome}</span>
+                          <span className={`outcome-chip outcome-chip-${getOutcomeTone(signal.outcome)}`}>
+                            {signal.outcome}
+                          </span>
                         </span>
                       </p>
 
@@ -360,9 +364,15 @@ function App() {
                       </div>
 
                       <div className="metric-row">
-                        <Metric label="Buy weight" value={market.buyWeight.toString()} />
-                        <Metric label="Sell weight" value={market.sellWeight.toString()} />
-                        <Metric label="Edge" value={formatWeightEdge(market.buyWeight, market.sellWeight)} />
+                        <Metric
+                          label={market.outcomeWeights[0]?.outcome ?? "Outcome 1"}
+                          value={(market.outcomeWeights[0]?.weight ?? 0).toString()}
+                        />
+                        <Metric
+                          label={market.outcomeWeights[1]?.outcome ?? "Outcome 2"}
+                          value={(market.outcomeWeights[1]?.weight ?? 0).toString()}
+                        />
+                        <Metric label="Edge" value={formatOutcomeEdge(market.outcomeWeights)} />
                       </div>
 
                       <div className="metric-row">
@@ -466,16 +476,19 @@ function formatRelativeTime(timestamp: number) {
   return `${Math.floor(diffMinutes / 60)}h ago`;
 }
 
-function formatWeightEdge(buyWeight: number, sellWeight: number) {
-  if (buyWeight === sellWeight) {
+function formatOutcomeEdge(outcomeWeights: Array<{ outcome: string; weight: number }>) {
+  const first = outcomeWeights[0];
+  const second = outcomeWeights[1];
+
+  if (!first) {
     return "Even";
   }
 
-  if (buyWeight > sellWeight) {
-    return `Buy +${buyWeight - sellWeight}`;
+  if (!second || first.weight === second.weight) {
+    return "Even";
   }
 
-  return `Sell +${sellWeight - buyWeight}`;
+  return `${first.outcome} +${first.weight - second.weight}`;
 }
 
 function upsertSignal(signals: WhaleSignal[], nextSignal: WhaleSignal) {
@@ -486,9 +499,9 @@ function upsertSignal(signals: WhaleSignal[], nextSignal: WhaleSignal) {
 function aggregateMarkets(signals: WhaleSignal[]): MarketAggregate[] {
   const markets = new Map<string, MarketAggregate>();
   const traderSpendByMarket = new Map<string, Map<string, { totalUsd: number; trader: TraderSummary }>>();
-  const traderSideSpendByMarket = new Map<
+  const traderOutcomeSpendByMarket = new Map<
     string,
-    Map<string, { buyUsd: number; sellUsd: number; trader: TraderSummary }>
+    Map<string, Map<string, { totalUsd: number; trader: TraderSummary }>>
   >();
 
   for (const signal of signals) {
@@ -506,8 +519,7 @@ function aggregateMarkets(signals: WhaleSignal[]): MarketAggregate[] {
         sharks: 0,
         pros: 0,
         weightedScore: 0,
-        buyWeight: 0,
-        sellWeight: 0,
+        outcomeWeights: [],
         participantCount: 0,
         latestSignal: signal,
       });
@@ -533,33 +545,28 @@ function aggregateMarkets(signals: WhaleSignal[]): MarketAggregate[] {
     }
     traderSpendByMarket.set(signal.marketSlug, marketTraders);
 
-    const marketSideTraders =
-      traderSideSpendByMarket.get(signal.marketSlug) ??
-      new Map<string, { buyUsd: number; sellUsd: number; trader: TraderSummary }>();
-    const sideTraderEntry = marketSideTraders.get(signal.wallet);
-    if (sideTraderEntry) {
-      if (signal.side === "BUY") {
-        sideTraderEntry.buyUsd += signal.totalUsd;
-      } else {
-        sideTraderEntry.sellUsd += signal.totalUsd;
-      }
-
-      if (signal.trader.weight > sideTraderEntry.trader.weight) {
-        sideTraderEntry.trader = signal.trader;
+    const marketOutcomeTraders =
+      traderOutcomeSpendByMarket.get(signal.marketSlug) ??
+      new Map<string, Map<string, { totalUsd: number; trader: TraderSummary }>>();
+    const traderOutcomes =
+      marketOutcomeTraders.get(signal.wallet) ??
+      new Map<string, { totalUsd: number; trader: TraderSummary }>();
+    const outcomeEntry = traderOutcomes.get(signal.outcome);
+    if (outcomeEntry) {
+      outcomeEntry.totalUsd += signal.totalUsd;
+      if (signal.trader.weight > outcomeEntry.trader.weight) {
+        outcomeEntry.trader = signal.trader;
       }
     } else {
-      marketSideTraders.set(signal.wallet, {
-        buyUsd: signal.side === "BUY" ? signal.totalUsd : 0,
-        sellUsd: signal.side === "SELL" ? signal.totalUsd : 0,
-        trader: signal.trader,
-      });
+      traderOutcomes.set(signal.outcome, { totalUsd: signal.totalUsd, trader: signal.trader });
     }
-    traderSideSpendByMarket.set(signal.marketSlug, marketSideTraders);
+    marketOutcomeTraders.set(signal.wallet, traderOutcomes);
+    traderOutcomeSpendByMarket.set(signal.marketSlug, marketOutcomeTraders);
   }
 
   for (const [marketSlug, aggregate] of markets) {
     const traders = traderSpendByMarket.get(marketSlug);
-    const sideTraders = traderSideSpendByMarket.get(marketSlug);
+    const outcomeTraders = traderOutcomeSpendByMarket.get(marketSlug);
     if (!traders) {
       continue;
     }
@@ -568,9 +575,8 @@ function aggregateMarkets(signals: WhaleSignal[]): MarketAggregate[] {
     let sharks = 0;
     let pros = 0;
     let weightedScore = 0;
-    let buyWeight = 0;
-    let sellWeight = 0;
     let participantCount = 0;
+    const outcomeWeights = new Map<string, number>();
 
     for (const { totalUsd, trader } of traders.values()) {
       if (totalUsd < 1_000 || trader.tier === "none") {
@@ -588,16 +594,26 @@ function aggregateMarkets(signals: WhaleSignal[]): MarketAggregate[] {
       }
     }
 
-    if (sideTraders) {
-      for (const { buyUsd, sellUsd, trader } of sideTraders.values()) {
-        if (buyUsd + sellUsd < 1_000 || trader.tier === "none") {
-          continue;
+    if (outcomeTraders) {
+      for (const traderOutcomes of outcomeTraders.values()) {
+        let leadingOutcome: string | null = null;
+        let leadingUsd = 0;
+        let leadingWeight = 0;
+
+        for (const [outcome, { totalUsd, trader }] of traderOutcomes.entries()) {
+          if (totalUsd < 1_000 || trader.tier === "none") {
+            continue;
+          }
+
+          if (totalUsd > leadingUsd) {
+            leadingOutcome = outcome;
+            leadingUsd = totalUsd;
+            leadingWeight = trader.weight;
+          }
         }
 
-        if (buyUsd > sellUsd) {
-          buyWeight += trader.weight;
-        } else if (sellUsd > buyUsd) {
-          sellWeight += trader.weight;
+        if (leadingOutcome) {
+          outcomeWeights.set(leadingOutcome, (outcomeWeights.get(leadingOutcome) ?? 0) + leadingWeight);
         }
       }
     }
@@ -606,8 +622,9 @@ function aggregateMarkets(signals: WhaleSignal[]): MarketAggregate[] {
     aggregate.sharks = sharks;
     aggregate.pros = pros;
     aggregate.weightedScore = weightedScore;
-    aggregate.buyWeight = buyWeight;
-    aggregate.sellWeight = sellWeight;
+    aggregate.outcomeWeights = Array.from(outcomeWeights.entries())
+      .map(([outcome, weight]) => ({ outcome, weight }))
+      .sort((left, right) => right.weight - left.weight);
     aggregate.participantCount = participantCount;
   }
 
@@ -621,14 +638,14 @@ function sortMarkets(markets: MarketAggregate[], sort: MarketSortOption) {
     if (sort === "weighted") {
       return (
         right.weightedScore - left.weightedScore ||
-        right.buyWeight - left.buyWeight ||
+        (right.outcomeWeights[0]?.weight ?? 0) - (left.outcomeWeights[0]?.weight ?? 0) ||
         right.latestTimestamp - left.latestTimestamp
       );
     }
 
     if (sort === "buyWeight") {
       return (
-        right.buyWeight - left.buyWeight ||
+        (right.outcomeWeights[0]?.weight ?? 0) - (left.outcomeWeights[0]?.weight ?? 0) ||
         right.weightedScore - left.weightedScore ||
         right.latestTimestamp - left.latestTimestamp
       );
@@ -666,6 +683,20 @@ function normalizeSecureUrl(value?: string) {
   }
 
   return value;
+}
+
+function getOutcomeTone(outcome: string) {
+  const normalized = outcome.trim().toLowerCase();
+
+  if (positiveOutcomeKeywords.some((keyword) => normalized === keyword || normalized.includes(keyword))) {
+    return "positive";
+  }
+
+  if (negativeOutcomeKeywords.some((keyword) => normalized === keyword || normalized.includes(keyword))) {
+    return "negative";
+  }
+
+  return "neutral";
 }
 
 export default App;

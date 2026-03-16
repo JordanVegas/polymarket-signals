@@ -382,6 +382,18 @@ a {
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+.outcome-chip-positive {
+  background: rgba(67, 232, 154, 0.14);
+  color: var(--green);
+  border-color: rgba(67, 232, 154, 0.26);
+}
+
+.outcome-chip-negative {
+  background: rgba(255, 92, 92, 0.14);
+  color: #ff8d8d;
+  border-color: rgba(255, 92, 92, 0.24);
+}
+
 .metric-row {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
