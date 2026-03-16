@@ -135,6 +135,7 @@ export class PolymarketSignalService {
   private readonly accumulators = new Map<string, SignalAccumulator>();
   private readonly traderCache = new Map<string, { summary: TraderSummary; fetchedAt: number }>();
   private readonly storage = new SignalStorage();
+  private readonly pendingUnknownAssetTrades = new Map<string, TradeRecord[]>();
   private ws: WebSocket | null = null;
   private marketSyncTimer: NodeJS.Timeout | null = null;
   private tradePollTimer: NodeJS.Timeout | null = null;
@@ -143,6 +144,8 @@ export class PolymarketSignalService {
   private websocketConnected = false;
   private lastMarketSyncAt: number | null = null;
   private lastTradeAt: number | null = null;
+  private lastForcedMarketSyncAt = 0;
+  private forcingMarketSync: Promise<void> | null = null;
   private listeners = new Set<(payload: WhaleSignal) => void>();
 
   async start(): Promise<void> {
@@ -439,7 +442,6 @@ export class PolymarketSignalService {
 
     const historicalTrades = dedupeTrades(trades)
       .filter((trade) => trade.timestamp >= lookbackCutoffSec)
-      .filter((trade) => this.activeAssetIds.has(trade.asset))
       .sort((left, right) => left.timestamp - right.timestamp);
 
     for (const trade of historicalTrades) {
@@ -468,6 +470,73 @@ export class PolymarketSignalService {
   }
 
   private async ingestTrade(trade: TradeRecord): Promise<boolean> {
+    if (!this.marketsByAssetId.has(trade.asset)) {
+      this.queueUnknownAssetTrade(trade);
+      await this.ensureMarketForAsset(trade.asset);
+      return false;
+    }
+
+    return this.ingestKnownTrade(trade);
+  }
+
+  private queueUnknownAssetTrade(trade: TradeRecord): void {
+    const pendingTrades = this.pendingUnknownAssetTrades.get(trade.asset) ?? [];
+    pendingTrades.push(trade);
+    pendingTrades.sort((left, right) => left.timestamp - right.timestamp);
+    this.pendingUnknownAssetTrades.set(trade.asset, pendingTrades.slice(-50));
+  }
+
+  private async ensureMarketForAsset(assetId: string): Promise<void> {
+    if (this.marketsByAssetId.has(assetId)) {
+      await this.flushPendingTradesForAsset(assetId);
+      return;
+    }
+
+    const now = Date.now();
+    if (
+      this.forcingMarketSync &&
+      now - this.lastForcedMarketSyncAt < 60_000
+    ) {
+      await this.forcingMarketSync;
+      await this.flushPendingTradesForAsset(assetId);
+      return;
+    }
+
+    if (now - this.lastForcedMarketSyncAt < 60_000) {
+      return;
+    }
+
+    this.lastForcedMarketSyncAt = now;
+    this.forcingMarketSync = (async () => {
+      try {
+        await this.syncMarkets();
+      } finally {
+        this.forcingMarketSync = null;
+      }
+    })();
+
+    await this.forcingMarketSync;
+    await this.flushPendingTradesForAsset(assetId);
+  }
+
+  private async flushPendingTradesForAsset(assetId: string): Promise<void> {
+    if (!this.marketsByAssetId.has(assetId)) {
+      return;
+    }
+
+    const pendingTrades = this.pendingUnknownAssetTrades.get(assetId);
+    if (!pendingTrades || pendingTrades.length === 0) {
+      return;
+    }
+
+    this.pendingUnknownAssetTrades.delete(assetId);
+
+    for (const trade of pendingTrades) {
+      await this.ingestKnownTrade(trade);
+    }
+  }
+
+  private async ingestKnownTrade(trade: TradeRecord): Promise<boolean> {
     const market = this.marketsByAssetId.get(trade.asset);
     if (!market) {
       return false;
