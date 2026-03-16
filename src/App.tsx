@@ -48,26 +48,7 @@ type Snapshot = {
     websocketAssetsSeenRecentlyCount: number;
     lastWebsocketMessageAt: number | null;
   };
-  marketQuotes: Record<
-    string,
-    Record<
-      string,
-      {
-        lastTradePrice?: number;
-        bestBid?: number;
-        bestAsk?: number;
-      }
-    >
-  >;
   signals: WhaleSignal[];
-};
-
-type MarketQuoteUpdate = {
-  marketSlug: string;
-  outcome: string;
-  lastTradePrice?: number;
-  bestBid?: number;
-  bestAsk?: number;
 };
 
 type MarketAggregate = {
@@ -83,7 +64,6 @@ type MarketAggregate = {
   pros: number;
   weightedScore: number;
   outcomeWeights: Array<{ outcome: string; weight: number }>;
-  outcomeStats: Array<{ outcome: string; totalUsd: number; totalShares: number; averageEntry: number }>;
   participantCount: number;
   latestSignal: WhaleSignal;
 };
@@ -138,7 +118,6 @@ function App() {
       websocketAssetsSeenRecentlyCount: 0,
       lastWebsocketMessageAt: null,
     },
-    marketQuotes: {},
     signals: [],
   });
   const [feedConnected, setFeedConnected] = useState(false);
@@ -201,33 +180,11 @@ function App() {
 
       socket.addEventListener("message", (event) => {
         const message = JSON.parse(event.data) as {
-          type: "snapshot" | "signal" | "quote";
-          payload: Snapshot | WhaleSignal | MarketQuoteUpdate;
+          type: "snapshot" | "signal";
+          payload: Snapshot | WhaleSignal;
         };
         if (message.type === "snapshot") {
           setSnapshot(message.payload as Snapshot);
-          return;
-        }
-
-        if (message.type === "quote") {
-          const quoteUpdate = message.payload as MarketQuoteUpdate;
-          setSnapshot((current) => ({
-            ...current,
-            marketQuotes: {
-              ...current.marketQuotes,
-              [quoteUpdate.marketSlug]: {
-                ...(current.marketQuotes[quoteUpdate.marketSlug] ?? {}),
-                [quoteUpdate.outcome]: {
-                  ...(current.marketQuotes[quoteUpdate.marketSlug]?.[quoteUpdate.outcome] ?? {}),
-                  ...(quoteUpdate.lastTradePrice !== undefined
-                    ? { lastTradePrice: quoteUpdate.lastTradePrice }
-                    : {}),
-                  ...(quoteUpdate.bestBid !== undefined ? { bestBid: quoteUpdate.bestBid } : {}),
-                  ...(quoteUpdate.bestAsk !== undefined ? { bestAsk: quoteUpdate.bestAsk } : {}),
-                },
-              },
-            },
-          }));
           return;
         }
 
@@ -398,21 +355,6 @@ function App() {
                   weight: number;
                 }>;
                 const edgeLabel = formatOutcomeEdge(visibleOutcomeWeights);
-                const edgeOutcome = getEdgeOutcome(visibleOutcomeWeights);
-                const edgeStats = edgeOutcome
-                  ? market.outcomeStats.find((entry) => entry.outcome === edgeOutcome)
-                  : undefined;
-                const liveEdgeQuote = edgeOutcome
-                  ? snapshot.marketQuotes[market.marketSlug]?.[edgeOutcome]
-                  : undefined;
-                const observedAverageEntry =
-                  edgeStats?.averageEntry ??
-                  (edgeOutcome === signal.outcome ? signal.averagePrice : undefined);
-                const bestExitPrice = liveEdgeQuote?.bestBid;
-                const unrealizedEdge =
-                  observedAverageEntry && bestExitPrice !== undefined
-                    ? bestExitPrice / observedAverageEntry - 1
-                    : null;
                 return (
                   <article className="signal-card" key={market.marketSlug}>
                     <div className="signal-media">
@@ -438,25 +380,16 @@ function App() {
                           <span className={`outcome-chip outcome-chip-${getOutcomeTone(edgeLabel)}`}>
                             {edgeLabel}
                           </span>
-                          {unrealizedEdge !== null ? (
-                            <span
-                              className={`edge-return ${
-                                unrealizedEdge >= 0 ? "edge-return-positive" : "edge-return-negative"
-                              }`}
-                            >
-                              {formatSignedPercent(unrealizedEdge)}
-                            </span>
-                          ) : null}
                         </span>
                       </p>
 
                       <div className="metric-row">
                         <Metric label="Market flow" value={currencyFormatter.format(market.totalUsd)} />
                         <Metric
-                          label="Avg entry"
-                          value={observedAverageEntry !== undefined ? observedAverageEntry.toFixed(3) : "—"}
+                          label="Last price"
+                          value={signal.averagePrice.toFixed(3)}
                         />
-                        <Metric label="Best exit" value={bestExitPrice !== undefined ? bestExitPrice.toFixed(3) : "—"} />
+                        <Metric label="Weighted" value={market.weightedScore.toString()} />
                       </div>
 
                       <div className="metric-row">
@@ -552,12 +485,6 @@ function formatRelativeTime(timestamp: number) {
   return `${Math.floor(diffMinutes / 60)}h ago`;
 }
 
-function formatSignedPercent(value: number) {
-  const percent = value * 100;
-  const rounded = Math.abs(percent) >= 10 ? percent.toFixed(1) : percent.toFixed(2);
-  return `${percent >= 0 ? "+" : ""}${rounded}%`;
-}
-
 function formatOutcomeEdge(outcomeWeights: Array<{ outcome: string; weight: number }>) {
   const first = outcomeWeights[0];
   const second = outcomeWeights[1];
@@ -577,21 +504,6 @@ function formatOutcomeEdge(outcomeWeights: Array<{ outcome: string; weight: numb
   return `${first.outcome} +${first.weight - second.weight}`;
 }
 
-function getEdgeOutcome(outcomeWeights: Array<{ outcome: string; weight: number }>) {
-  const first = outcomeWeights[0];
-  const second = outcomeWeights[1];
-
-  if (!first) {
-    return undefined;
-  }
-
-  if (!second || first.weight > second.weight) {
-    return first.outcome;
-  }
-
-  return undefined;
-}
-
 function upsertSignal(signals: WhaleSignal[], nextSignal: WhaleSignal) {
   const remaining = signals.filter((signal) => signal.id !== nextSignal.id);
   return [nextSignal, ...remaining];
@@ -600,7 +512,6 @@ function upsertSignal(signals: WhaleSignal[], nextSignal: WhaleSignal) {
 function aggregateMarkets(signals: WhaleSignal[]): MarketAggregate[] {
   const markets = new Map<string, MarketAggregate>();
   const traderSpendByMarket = new Map<string, Map<string, { totalUsd: number; trader: TraderSummary }>>();
-  const outcomeEntriesByMarket = new Map<string, Map<string, { totalUsd: number; totalShares: number }>>();
   const traderOutcomeSpendByMarket = new Map<
     string,
     Map<string, Map<string, { totalUsd: number; trader: TraderSummary }>>
@@ -622,7 +533,6 @@ function aggregateMarkets(signals: WhaleSignal[]): MarketAggregate[] {
         pros: 0,
         weightedScore: 0,
         outcomeWeights: [],
-        outcomeStats: [],
         participantCount: 0,
         latestSignal: signal,
       });
@@ -648,14 +558,6 @@ function aggregateMarkets(signals: WhaleSignal[]): MarketAggregate[] {
     }
     traderSpendByMarket.set(signal.marketSlug, marketTraders);
 
-    const marketOutcomeEntries =
-      outcomeEntriesByMarket.get(signal.marketSlug) ?? new Map<string, { totalUsd: number; totalShares: number }>();
-    const outcomeEntryTotals = marketOutcomeEntries.get(signal.outcome) ?? { totalUsd: 0, totalShares: 0 };
-    outcomeEntryTotals.totalUsd += signal.totalUsd;
-    outcomeEntryTotals.totalShares += signal.totalShares;
-    marketOutcomeEntries.set(signal.outcome, outcomeEntryTotals);
-    outcomeEntriesByMarket.set(signal.marketSlug, marketOutcomeEntries);
-
     const marketOutcomeTraders =
       traderOutcomeSpendByMarket.get(signal.marketSlug) ??
       new Map<string, Map<string, { totalUsd: number; trader: TraderSummary }>>();
@@ -678,7 +580,6 @@ function aggregateMarkets(signals: WhaleSignal[]): MarketAggregate[] {
   for (const [marketSlug, aggregate] of markets) {
     const traders = traderSpendByMarket.get(marketSlug);
     const outcomeTraders = traderOutcomeSpendByMarket.get(marketSlug);
-    const outcomeEntries = outcomeEntriesByMarket.get(marketSlug) ?? new Map<string, { totalUsd: number; totalShares: number }>();
     if (!traders) {
       continue;
     }
@@ -737,12 +638,6 @@ function aggregateMarkets(signals: WhaleSignal[]): MarketAggregate[] {
     aggregate.outcomeWeights = Array.from(outcomeWeights.entries())
       .map(([outcome, weight]) => ({ outcome, weight }))
       .sort((left, right) => right.weight - left.weight);
-    aggregate.outcomeStats = Array.from(outcomeEntries.entries()).map(([outcome, entry]) => ({
-      outcome,
-      totalUsd: entry.totalUsd,
-      totalShares: entry.totalShares,
-      averageEntry: entry.totalShares > 0 ? entry.totalUsd / entry.totalShares : 0,
-    }));
     aggregate.participantCount = participantCount;
   }
 

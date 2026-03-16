@@ -75,24 +75,5 @@ export type AppSnapshot = {
     websocketAssetsSeenRecentlyCount: number;
     lastWebsocketMessageAt: number | null;
   };
-  marketQuotes: Record<
-    string,
-    Record<
-      string,
-      {
-        lastTradePrice?: number;
-        bestBid?: number;
-        bestAsk?: number;
-      }
-    >
-  >;
   signals: WhaleSignal[];
-};
-
-export type MarketQuoteUpdate = {
-  marketSlug: string;
-  outcome: string;
-  lastTradePrice?: number;
-  bestBid?: number;
-  bestAsk?: number;
 };

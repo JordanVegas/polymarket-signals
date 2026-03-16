@@ -74,7 +74,6 @@ const wss = new WebSocketServer({ noServer: true });
 
 wss.on("connection", (socket) => {
   let unsubscribeSignal = () => {};
-  let unsubscribeQuote = () => {};
 
   void (async () => {
     socket.send(JSON.stringify({ type: "snapshot", payload: await service.getSnapshot() }));
@@ -82,14 +81,10 @@ wss.on("connection", (socket) => {
     unsubscribeSignal = service.onSignal((signal) => {
       socket.send(JSON.stringify({ type: "signal", payload: signal }));
     });
-    unsubscribeQuote = service.onMarketQuote((quoteUpdate) => {
-      socket.send(JSON.stringify({ type: "quote", payload: quoteUpdate }));
-    });
   })();
 
   socket.on("close", () => {
     unsubscribeSignal();
-    unsubscribeQuote();
   });
 });
 
