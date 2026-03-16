@@ -415,7 +415,6 @@ function App() {
                   placeholder="Markets, outcomes, traders"
                 />
               </label>
-              <p className="feed-meta">Triggered by whale, shark, and pro tiers with a $1,000 minimum cluster</p>
               <label className="sort-control">
                 <span>Sort</span>
                 <select value={marketSort} onChange={(event) => setMarketSort(event.target.value as MarketSortOption)}>
