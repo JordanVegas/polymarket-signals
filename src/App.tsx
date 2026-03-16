@@ -72,6 +72,22 @@ type MarketSortOption = "recent" | "weighted" | "buyWeight" | "flow" | "particip
 
 const positiveOutcomeKeywords = ["yes", "up", "above", "over", "higher", "more", "long"];
 const negativeOutcomeKeywords = ["no", "down", "below", "under", "lower", "less", "short"];
+const outcomeOpposites: Record<string, string> = {
+  yes: "No",
+  no: "Yes",
+  up: "Down",
+  down: "Up",
+  above: "Below",
+  below: "Above",
+  over: "Under",
+  under: "Over",
+  higher: "Lower",
+  lower: "Higher",
+  more: "Less",
+  less: "More",
+  long: "Short",
+  short: "Long",
+};
 
 const currencyFormatter = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -323,6 +339,10 @@ function App() {
             <div className="signal-grid">
               {marketAggregates.map((market) => {
                 const signal = market.latestSignal;
+                const primaryOutcome = market.outcomeWeights[0];
+                const secondaryOutcome =
+                  market.outcomeWeights[1] ??
+                  inferMissingOutcome(primaryOutcome?.outcome, market.outcomeWeights);
                 return (
                   <article className="signal-card" key={market.marketSlug}>
                     <div className="signal-media">
@@ -365,12 +385,12 @@ function App() {
 
                       <div className="metric-row">
                         <Metric
-                          label={market.outcomeWeights[0]?.outcome ?? "Outcome 1"}
-                          value={(market.outcomeWeights[0]?.weight ?? 0).toString()}
+                          label={primaryOutcome?.outcome ?? "Outcome 1"}
+                          value={(primaryOutcome?.weight ?? 0).toString()}
                         />
                         <Metric
-                          label={market.outcomeWeights[1]?.outcome ?? "Outcome 2"}
-                          value={(market.outcomeWeights[1]?.weight ?? 0).toString()}
+                          label={secondaryOutcome?.outcome ?? "Outcome 2"}
+                          value={(secondaryOutcome?.weight ?? 0).toString()}
                         />
                         <Metric label="Edge" value={formatOutcomeEdge(market.outcomeWeights)} />
                       </div>
@@ -691,6 +711,26 @@ function getOutcomeTone(outcome: string) {
   }
 
   return "neutral";
+}
+
+function inferMissingOutcome(
+  primaryOutcome: string | undefined,
+  currentOutcomes: Array<{ outcome: string; weight: number }>,
+) {
+  if (!primaryOutcome) {
+    return undefined;
+  }
+
+  const opposite = outcomeOpposites[primaryOutcome.trim().toLowerCase()];
+  if (!opposite) {
+    return undefined;
+  }
+
+  const existing = currentOutcomes.find(
+    (entry) => entry.outcome.trim().toLowerCase() === opposite.toLowerCase(),
+  );
+
+  return existing ?? { outcome: opposite, weight: 0 };
 }
 
 export default App;
