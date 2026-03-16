@@ -176,11 +176,15 @@ function App() {
     };
   }, []);
 
-  const headerSignal = snapshot.signals[0];
-  const marketAggregates = useMemo(() => aggregateMarkets(snapshot.signals), [snapshot.signals]);
-  const profitableCount = useMemo(
-    () => snapshot.signals.filter((signal) => signal.trader.tier === "whale").length,
+  const visibleSignals = useMemo(
+    () => snapshot.signals.filter((signal) => signal.side === "BUY"),
     [snapshot.signals],
+  );
+  const headerSignal = visibleSignals[0];
+  const marketAggregates = useMemo(() => aggregateMarkets(visibleSignals), [visibleSignals]);
+  const profitableCount = useMemo(
+    () => visibleSignals.filter((signal) => signal.trader.tier === "whale").length,
+    [visibleSignals],
   );
 
   return (
