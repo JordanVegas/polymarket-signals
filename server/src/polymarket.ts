@@ -54,6 +54,7 @@ type RawActivity = {
 type MarketTradeMessage = {
   event_type?: string;
   asset_id?: string;
+  market?: string;
   price?: string;
   size?: string;
   side?: "BUY" | "SELL";
@@ -175,6 +176,8 @@ export class PolymarketSignalService {
   private readonly storage = new SignalStorage();
   private readonly pendingUnknownAssetTrades = new Map<string, TradeRecord[]>();
   private readonly marketSocketShards = new Map<number, MarketSocketShard>();
+  private readonly marketTradeFetchInFlight = new Map<string, Promise<void>>();
+  private readonly lastMarketTradeFetchAt = new Map<string, number>();
   private marketSyncTimer: NodeJS.Timeout | null = null;
   private tradePollTimer: NodeJS.Timeout | null = null;
   private lastTradeTimestampSec = 0;
@@ -481,16 +484,24 @@ export class PolymarketSignalService {
     this.lastTradeAt = Date.now();
     this.lastWebsocketMessageAt = seenAt;
     this.websocketAssetSeenAt.set(message.asset_id, seenAt);
+    this.scheduleMarketTradeFetch(message);
   }
 
   private startTradePolling(): void {
-    this.runBackgroundTask("initial trade poll", this.pollRecentTrades());
+    this.runBackgroundTask("initial fallback trade poll", this.pollRecentTrades());
     this.tradePollTimer = setInterval(() => {
-      this.runBackgroundTask("trade poll", this.pollRecentTrades());
+      this.runBackgroundTask("fallback trade poll", this.pollRecentTrades());
     }, config.tradePollMs);
   }
 
   private async pollRecentTrades(): Promise<void> {
+    if (
+      this.lastWebsocketMessageAt &&
+      Date.now() - this.lastWebsocketMessageAt < Math.max(config.tradePollMs * 4, 15_000)
+    ) {
+      return;
+    }
+
     const url = new URL(`${DATA_API_URL}/trades`);
     url.searchParams.set("limit", "250");
 
@@ -508,20 +519,7 @@ export class PolymarketSignalService {
       .sort((left, right) => left.timestamp - right.timestamp);
 
     for (const trade of trades) {
-      const tradeId = getTradeId(trade);
-      await this.storage.saveObservedTrade({
-        ...trade,
-        tradeId,
-        createdAt: new Date(),
-      });
-      if (await this.storage.hasProcessedTrade(tradeId)) {
-        continue;
-      }
-
-      const result = await this.ingestTrade(trade);
-      if (result === "ingested") {
-        await this.markTradeProcessed(trade);
-      }
+      await this.persistAndIngestTrade(trade);
     }
   }
 
@@ -559,20 +557,7 @@ export class PolymarketSignalService {
       .sort((left, right) => left.timestamp - right.timestamp);
 
     for (const trade of recentTrades) {
-      const tradeId = getTradeId(trade);
-      await this.storage.saveObservedTrade({
-        ...trade,
-        tradeId,
-        createdAt: new Date(),
-      });
-      if (await this.storage.hasProcessedTrade(tradeId)) {
-        continue;
-      }
-
-      const result = await this.ingestTrade(trade);
-      if (result === "ingested") {
-        await this.markTradeProcessed(trade);
-      }
+      await this.persistAndIngestTrade(trade);
     }
   }
 
@@ -890,6 +875,78 @@ export class PolymarketSignalService {
     const emitted = await this.tryEmitSignal(nextAccumulator);
     this.pruneAccumulators();
     return emitted;
+  }
+
+  private scheduleMarketTradeFetch(message: MarketTradeMessage): void {
+    const marketConditionId = String(message.market || "").trim();
+    const assetId = String(message.asset_id || "").trim();
+    const timestampMs = Number(message.timestamp);
+    const timestampSec = Math.floor(timestampMs / 1000);
+    if (!marketConditionId || !assetId || !Number.isFinite(timestampSec)) {
+      return;
+    }
+
+    const lastFetchAt = this.lastMarketTradeFetchAt.get(marketConditionId) ?? 0;
+    if (Date.now() - lastFetchAt < 1_500) {
+      return;
+    }
+
+    if (this.marketTradeFetchInFlight.has(marketConditionId)) {
+      return;
+    }
+
+    const task = this.fetchRecentTradesForMarket(marketConditionId, assetId, timestampSec)
+      .catch((error) => {
+        logFetchFailure(`market trade recovery ${marketConditionId}`, error);
+      })
+      .finally(() => {
+        this.marketTradeFetchInFlight.delete(marketConditionId);
+      });
+
+    this.lastMarketTradeFetchAt.set(marketConditionId, Date.now());
+    this.marketTradeFetchInFlight.set(marketConditionId, task);
+  }
+
+  private async fetchRecentTradesForMarket(
+    marketConditionId: string,
+    assetId: string,
+    timestampSec: number,
+  ): Promise<void> {
+    const url = new URL(`${DATA_API_URL}/trades`);
+    url.searchParams.set("market", marketConditionId);
+    url.searchParams.set("limit", "200");
+
+    const response = await this.safeFetch(url, `market trades ${marketConditionId}`);
+    if (!response || !response.ok) {
+      return;
+    }
+
+    const payload = (await response.json()) as TradeRecord[];
+    const trades = dedupeTrades(payload)
+      .filter((trade) => trade.asset === assetId)
+      .filter((trade) => trade.timestamp >= timestampSec - Math.ceil(config.tradeWindowMs / 1000))
+      .sort((left, right) => left.timestamp - right.timestamp);
+
+    for (const trade of trades) {
+      await this.persistAndIngestTrade(trade);
+    }
+  }
+
+  private async persistAndIngestTrade(trade: TradeRecord): Promise<void> {
+    const tradeId = getTradeId(trade);
+    await this.storage.saveObservedTrade({
+      ...trade,
+      tradeId,
+      createdAt: new Date(),
+    });
+    if (await this.storage.hasProcessedTrade(tradeId)) {
+      return;
+    }
+
+    const result = await this.ingestTrade(trade);
+    if (result === "ingested") {
+      await this.markTradeProcessed(trade);
+    }
   }
 
   private async markTradeProcessed(trade: TradeRecord): Promise<void> {
