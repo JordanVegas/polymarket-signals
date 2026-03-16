@@ -12,6 +12,7 @@ export const config = {
   mongoUri: process.env.MONGO_URI || "",
   mongoDbName: process.env.MONGO_DB_NAME || "polymarket_signals",
   mongoSignalsCollection: process.env.MONGO_SIGNALS_COLLECTION || "signals",
+  minSignalClusterUsd: parseNumber(process.env.MIN_SIGNAL_CLUSTER_USD, 1_000),
   whaleThresholdUsd: parseNumber(process.env.WHALE_THRESHOLD_USD, 200_000),
   profitableWhaleThresholdUsd: parseNumber(
     process.env.PROFITABLE_WHALE_THRESHOLD_USD,

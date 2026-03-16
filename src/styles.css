@@ -216,18 +216,18 @@ a {
 
 .signal-grid {
   display: grid;
-  gap: 18px;
+  gap: 12px;
 }
 
 .signal-card {
   display: grid;
-  grid-template-columns: 260px 1fr;
+  grid-template-columns: 180px 1fr;
   overflow: hidden;
 }
 
 .signal-media {
   position: relative;
-  min-height: 220px;
+  min-height: 160px;
 }
 
 .signal-media img,
@@ -247,11 +247,11 @@ a {
 
 .pill {
   position: absolute;
-  left: 16px;
-  top: 16px;
-  padding: 10px 14px;
+  left: 12px;
+  top: 12px;
+  padding: 8px 12px;
   border-radius: 999px;
-  font-size: 0.8rem;
+  font-size: 0.72rem;
   font-weight: 700;
   letter-spacing: 0.02em;
 }
@@ -275,7 +275,7 @@ a {
 }
 
 .signal-body {
-  padding: 26px;
+  padding: 18px;
 }
 
 .signal-topline {
@@ -285,15 +285,15 @@ a {
 }
 
 .signal-card h3 {
-  margin: 12px 0;
-  font-size: 1.55rem;
-  line-height: 1.15;
+  margin: 8px 0;
+  font-size: 1.05rem;
+  line-height: 1.2;
 }
 
 .signal-thesis {
-  margin: 0 0 18px;
+  margin: 0 0 12px;
   color: #ddedf7;
-  font-size: 1rem;
+  font-size: 0.92rem;
 }
 
 .outcome-chip {
@@ -308,39 +308,40 @@ a {
 .metric-row {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  margin-bottom: 14px;
+  gap: 8px;
+  margin-bottom: 10px;
 }
 
 .metric {
-  padding: 14px;
-  border-radius: 18px;
+  padding: 10px;
+  border-radius: 14px;
   background: rgba(255, 255, 255, 0.035);
   border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .metric strong {
   display: block;
-  margin-top: 8px;
+  margin-top: 6px;
   font-family: "IBM Plex Mono", monospace;
-  font-size: 1rem;
+  font-size: 0.88rem;
 }
 
 .signal-actions {
   display: flex;
-  gap: 12px;
-  margin-top: 6px;
+  gap: 8px;
+  margin-top: 2px;
 }
 
 .signal-actions a {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 44px;
-  padding: 0 16px;
+  min-height: 36px;
+  padding: 0 12px;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   text-decoration: none;
+  font-size: 0.85rem;
 }
 
 .signal-actions a:hover {

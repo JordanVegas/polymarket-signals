@@ -25,6 +25,7 @@ Backend: `http://localhost:3001`
 MONGO_URI=mongodb://127.0.0.1:27017
 MONGO_DB_NAME=polymarket_signals
 MONGO_SIGNALS_COLLECTION=signals
+MIN_SIGNAL_CLUSTER_USD=1000
 PROFITABLE_WHALE_THRESHOLD_USD=50000
 TRADE_WINDOW_MS=60000
 MARKET_REFRESH_MS=600000
@@ -45,3 +46,4 @@ HISTORICAL_BACKFILL_TARGET_SIGNALS=25
   - whale: `>= $100,000` profit and `>= 100` trades
   - shark: `>= $10,000` profit and `>= 50` trades
   - pro: `>= $2,000` profit and `>= 20` trades
+- Signals also require at least `$1,000` of clustered flow.

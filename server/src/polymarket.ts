@@ -528,6 +528,10 @@ export class PolymarketSignalService {
 
   private async tryEmitSignal(accumulator: SignalAccumulator): Promise<boolean> {
     const wasAlreadyEmitted = accumulator.emitted;
+    if (accumulator.totalUsd < config.minSignalClusterUsd) {
+      return false;
+    }
+
     const trader = await this.getTraderSummary(accumulator.wallet, accumulator.displayName, accumulator.profileImage);
     if (trader.tier === "none") {
       return false;

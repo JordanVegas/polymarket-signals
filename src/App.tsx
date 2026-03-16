@@ -218,7 +218,7 @@ function App() {
               <p className="section-kicker">Signal feed</p>
               <h2>Whale alerts</h2>
             </div>
-            <p className="feed-meta">Triggered by whale, shark, and pro profile tiers</p>
+            <p className="feed-meta">Triggered by whale, shark, and pro tiers with a $1,000 minimum cluster</p>
           </div>
 
           {snapshot.signals.length === 0 ? (
