@@ -74,12 +74,6 @@ const compactCurrencyFormatter = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 1,
 });
 
-const timeFormatter = new Intl.DateTimeFormat(undefined, {
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-});
-
 function App() {
   const [snapshot, setSnapshot] = useState<Snapshot>({
     status: {
@@ -253,76 +247,55 @@ function App() {
                 const signal = market.latestSignal;
                 return (
                   <article className="signal-card" key={market.marketSlug}>
-                  <div className="signal-media">
-                    {normalizeSecureUrl(market.marketImage) ? (
-                      <img src={normalizeSecureUrl(market.marketImage)!} alt={market.marketQuestion} />
-                    ) : (
-                      <div className="image-fallback">{signal.outcome[0]}</div>
-                    )}
-                    <div className={`pill pill-${signal.labelTone}`}>{signal.label}</div>
-                  </div>
-
-                  <div className="signal-body">
-                    <div className="signal-topline">
-                      <span>{timeFormatter.format(market.latestTimestamp)}</span>
-                      <span>{market.participantCount} traders</span>
+                    <div className="signal-media">
+                      {normalizeSecureUrl(market.marketImage) ? (
+                        <img src={normalizeSecureUrl(market.marketImage)!} alt={market.marketQuestion} />
+                      ) : (
+                        <div className="image-fallback">{signal.outcome[0]}</div>
+                      )}
+                      <div className={`pill pill-${signal.labelTone}`}>{signal.label}</div>
                     </div>
 
-                    <h3>{market.marketQuestion}</h3>
-                    <p className="signal-thesis">
-                      <strong>{signal.displayName}</strong> last {signal.side.toLowerCase()}{" "}
-                      <span className="outcome-chip">{signal.outcome}</span>
-                    </p>
+                    <div className="signal-body">
+                      <div className="signal-topline">
+                        <span>{formatRelativeTime(market.latestTimestamp)}</span>
+                        <span>{market.participantCount} traders</span>
+                      </div>
 
-                    <div className="metric-row">
-                      <Metric label="Market flow" value={currencyFormatter.format(market.totalUsd)} />
-                      <Metric label="Signal count" value={market.totalFillCount.toString()} />
-                      <Metric label="Last price" value={signal.averagePrice.toFixed(3)} />
-                    </div>
+                      <h3>{market.marketQuestion}</h3>
+                      <p className="signal-thesis">
+                        <strong>{signal.displayName}</strong> last {signal.side.toLowerCase()}{" "}
+                        <span className="outcome-chip">{signal.outcome}</span>
+                      </p>
 
-                    <div className="metric-row">
-                      <Metric label="Whales" value={market.whales.toString()} />
-                      <Metric label="Sharks" value={market.sharks.toString()} />
-                      <Metric label="Pros" value={market.pros.toString()} />
-                    </div>
+                      <div className="metric-row">
+                        <Metric label="Market flow" value={currencyFormatter.format(market.totalUsd)} />
+                        <Metric label="Signals" value={market.totalFillCount.toString()} />
+                        <Metric label="Last price" value={signal.averagePrice.toFixed(3)} />
+                      </div>
 
-                    <div className="metric-row">
-                      <Metric label="Weighted score" value={market.weightedScore.toString()} />
-                      <Metric
-                        label="Last trader"
-                        value={signal.displayName}
-                      />
-                      <Metric
-                        label="Last tier"
-                        value={`${signal.trader.tier.toUpperCase()} x${signal.trader.weight}`}
-                      />
-                    </div>
+                      <div className="metric-row">
+                        <Metric label="Whales" value={market.whales.toString()} />
+                        <Metric label="Sharks" value={market.sharks.toString()} />
+                        <Metric label="Pros" value={market.pros.toString()} />
+                      </div>
 
-                    <div className="metric-row market-stat-row">
-                      <Metric
-                        label="Last trader PnL"
-                        value={compactCurrencyFormatter.format(signal.trader.totalPnl)}
-                      />
-                      <Metric
-                        label="Last trades"
-                        value={signal.trader.tradeCount.toLocaleString()}
-                      />
-                      <Metric
-                        label="Last portfolio"
-                        value={compactCurrencyFormatter.format(signal.trader.totalValue)}
-                      />
-                    </div>
+                      <div className="metric-row">
+                        <Metric label="Weighted" value={market.weightedScore.toString()} />
+                        <Metric label="Last trader" value={signal.displayName} />
+                        <Metric label="Last tier" value={`${signal.trader.tier.toUpperCase()} x${signal.trader.weight}`} />
+                      </div>
 
-                    <div className="signal-actions">
-                      <a href={normalizeSecureUrl(market.marketUrl) ?? market.marketUrl} target="_blank" rel="noreferrer">
-                        Open market
-                      </a>
-                      <a href={normalizeSecureUrl(signal.profileUrl) ?? signal.profileUrl} target="_blank" rel="noreferrer">
-                        Open whale profile
-                      </a>
+                      <div className="signal-actions">
+                        <a href={normalizeSecureUrl(market.marketUrl) ?? market.marketUrl} target="_blank" rel="noreferrer">
+                          Open market
+                        </a>
+                        <a href={normalizeSecureUrl(signal.profileUrl) ?? signal.profileUrl} target="_blank" rel="noreferrer">
+                          Open whale profile
+                        </a>
+                      </div>
                     </div>
-                  </div>
-                </article>
+                  </article>
                 );
               })}
             </div>
@@ -391,6 +364,21 @@ function formatTimestamp(value: number | null) {
     minute: "2-digit",
     second: "2-digit",
   }).format(value);
+}
+
+function formatRelativeTime(timestamp: number) {
+  const diffMs = Date.now() - timestamp;
+  const diffMinutes = Math.floor(diffMs / 60_000);
+
+  if (diffMinutes < 1) {
+    return "now";
+  }
+
+  if (diffMinutes < 60) {
+    return `${diffMinutes}m ago`;
+  }
+
+  return `${Math.floor(diffMinutes / 60)}h ago`;
 }
 
 function upsertSignal(signals: WhaleSignal[], nextSignal: WhaleSignal) {
