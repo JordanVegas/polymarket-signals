@@ -179,33 +179,34 @@ a {
 .summary-strip {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 20px;
-  margin: 22px 0 32px;
+  gap: 14px;
+  margin: 18px 0 24px;
 }
 
 .summary-card {
-  padding: 24px;
+  padding: 18px;
 }
 
 .summary-card h3 {
-  margin: 12px 0 10px;
-  font-size: 1.35rem;
+  margin: 8px 0 8px;
+  font-size: 1.05rem;
   line-height: 1.15;
   overflow-wrap: anywhere;
 }
 
 .summary-card span {
   color: #cfe0eb;
-  line-height: 1.5;
+  line-height: 1.4;
+  font-size: 0.9rem;
 }
 
 .summary-card-featured {
-  padding: 20px;
+  padding: 18px;
 }
 
 .summary-card-featured h3 {
-  font-size: 1.05rem;
-  line-height: 1.25;
+  font-size: 0.92rem;
+  line-height: 1.2;
 }
 
 .feed-header {

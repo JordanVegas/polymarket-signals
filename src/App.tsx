@@ -237,11 +237,6 @@ function App() {
               Live active-market monitoring, trade clustering by wallet, and fast whale labeling
               powered by Polymarket websockets plus the public HTTP APIs.
             </p>
-            <div className="hero-links">
-              <a className="hero-link hero-link-primary" href="https://tuf.to" target="_blank" rel="noreferrer">
-                Open TUF homepage
-              </a>
-            </div>
           </div>
 
           <div className="hero-panel">
