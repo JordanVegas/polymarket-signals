@@ -177,7 +177,7 @@ const copy = {
   },
   he: {
     profile: "פרופיל",
-    frontendStream: "חיבור דפדפן",
+    frontendStream: "חיבור לשרת",
     connected: "מחובר",
     reconnecting: "מתחבר מחדש",
     polymarketSocket: "סוקט פולימרקט",
@@ -215,10 +215,10 @@ const copy = {
     emptyState:
       "ברגע שארנק עובר את סף הסיגנל, הוא יופיע כאן עם השוק, הצד שנבחר ותווית הרווחיות של הטריידר.",
     traders: "טריידרים",
-    edge: "יתרון",
-    marketFlow: "זרימת שוק",
+    edge: "סיגנל",
+    marketFlow: "נפח שוק",
     lastPrice: "מחיר אחרון",
-    weighted: "משוקלל",
+    weighted: "משקל",
     outcome1: "תוצאה 1",
     outcome2: "תוצאה 2",
     avgEntry: "ממוצע כניסה",
