@@ -94,10 +94,15 @@ a {
 .summary-card p,
 .metric span,
 .status-row span:first-child,
-.signal-topline,
 .feed-meta {
   color: var(--text-dim);
   text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.75rem;
+}
+
+.signal-topline {
+  color: var(--text-dim);
   letter-spacing: 0.08em;
   font-size: 0.75rem;
 }
