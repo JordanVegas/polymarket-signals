@@ -84,6 +84,8 @@ type UserProfileResponse = {
   webhookUrl: string;
 };
 
+type Language = "en" | "he";
+
 const positiveOutcomeKeywords = ["yes", "up", "above", "over", "higher", "more", "long"];
 const negativeOutcomeKeywords = ["no", "down", "below", "under", "lower", "less", "short"];
 const outcomeOpposites: Record<string, string> = {
@@ -111,8 +113,137 @@ const currencyFormatter = new Intl.NumberFormat("en-US", {
 
 const MARKET_PAGE_SIZE = 24;
 
+const copy = {
+  en: {
+    profile: "Profile",
+    frontendStream: "Frontend stream",
+    connected: "Connected",
+    reconnecting: "Reconnecting",
+    polymarketSocket: "Polymarket socket",
+    syncing: "Syncing",
+    shards: "shards",
+    activeAssets: "Active assets",
+    signalsSurfaced: "Signals surfaced",
+    wsCoverage: "WS coverage",
+    active: "active",
+    lastMarketSync: "Last market sync",
+    lastTradeSeen: "Last trade seen",
+    pending: "Pending",
+    settings: "Settings",
+    backToMonitor: "Back to monitor",
+    discordAlerts: "Discord alerts",
+    profileTitle: "Profile",
+    profileSuffix: "'s profile",
+    profileBody:
+      "Save your Discord webhook here once, then use Get sell alerts on any market card you want to track for exit signals.",
+    discordWebhookUrl: "Discord webhook URL",
+    saveWebhook: "Save webhook",
+    saving: "Saving...",
+    discordWebhookSaved: "Discord webhook saved",
+    signalFeed: "Signal feed",
+    vegasMonitor: "Vegas Monitor",
+    search: "Search",
+    searchPlaceholder: "Markets, outcomes, traders",
+    sort: "Sort",
+    sortRecent: "Most recent",
+    sortWeighted: "Highest weight",
+    sortBuyWeight: "Top outcome weight",
+    sortFlow: "Largest flow",
+    sortParticipants: "Most traders",
+    watchingTape: "Watching the tape",
+    emptyState:
+      "Once a wallet crosses the whale threshold, it will appear here with the market, chosen side, and trader profitability label.",
+    traders: "traders",
+    edge: "edge",
+    marketFlow: "Market flow",
+    lastPrice: "Last price",
+    weighted: "Weighted",
+    outcome1: "Outcome 1",
+    outcome2: "Outcome 2",
+    avgEntry: "Avg entry",
+    openMarket: "Open market",
+    openWhaleProfile: "Open whale profile",
+    sellAlertsOn: "Sell alerts on",
+    getSellAlerts: "Get sell alerts",
+    loadingMarkets: "Loading markets...",
+    scrollForMore: "Scroll for more",
+    now: "now",
+    minutesAgo: "m ago",
+    hoursAgo: "h ago",
+    even: "Even",
+    unableToLoadProfile: "Unable to load profile",
+    unableToSaveProfile: "Unable to save profile",
+    unableToUpdateSellAlerts: "Unable to update sell alerts",
+  },
+  he: {
+    profile: "פרופיל",
+    frontendStream: "חיבור דפדפן",
+    connected: "מחובר",
+    reconnecting: "מתחבר מחדש",
+    polymarketSocket: "סוקט פולימרקט",
+    syncing: "מסנכרן",
+    shards: "שארדים",
+    activeAssets: "נכסים פעילים",
+    signalsSurfaced: "סיגנלים מוצגים",
+    wsCoverage: "כיסוי WS",
+    active: "פעילים",
+    lastMarketSync: "סנכרון שווקים אחרון",
+    lastTradeSeen: "טרייד אחרון",
+    pending: "ממתין",
+    settings: "הגדרות",
+    backToMonitor: "חזרה למוניטור",
+    discordAlerts: "התראות דיסקורד",
+    profileTitle: "פרופיל",
+    profileSuffix: " של",
+    profileBody:
+      "שמור כאן פעם אחת את כתובת הוובהוק של דיסקורד, ואז השתמש ב-Get sell alerts על כל כרטיס שוק שתרצה לעקוב אחריו ליציאה.",
+    discordWebhookUrl: "כתובת וובהוק של דיסקורד",
+    saveWebhook: "שמור וובהוק",
+    saving: "שומר...",
+    discordWebhookSaved: "וובהוק דיסקורד נשמר",
+    signalFeed: "פיד סיגנלים",
+    vegasMonitor: "Vegas Monitor",
+    search: "חיפוש",
+    searchPlaceholder: "שווקים, תוצאות, טריידרים",
+    sort: "מיון",
+    sortRecent: "הכי חדש",
+    sortWeighted: "משקל גבוה",
+    sortBuyWeight: "משקל צד מוביל",
+    sortFlow: "זרימה גבוהה",
+    sortParticipants: "הכי הרבה טריידרים",
+    watchingTape: "עוקבים אחרי הזרם",
+    emptyState:
+      "ברגע שארנק עובר את סף הסיגנל, הוא יופיע כאן עם השוק, הצד שנבחר ותווית הרווחיות של הטריידר.",
+    traders: "טריידרים",
+    edge: "יתרון",
+    marketFlow: "זרימת שוק",
+    lastPrice: "מחיר אחרון",
+    weighted: "משוקלל",
+    outcome1: "תוצאה 1",
+    outcome2: "תוצאה 2",
+    avgEntry: "ממוצע כניסה",
+    openMarket: "פתח שוק",
+    openWhaleProfile: "פתח פרופיל",
+    sellAlertsOn: "התראות מכירה פועלות",
+    getSellAlerts: "קבל התראות מכירה",
+    loadingMarkets: "טוען שווקים...",
+    scrollForMore: "גלול לעוד",
+    now: "עכשיו",
+    minutesAgo: " דק׳",
+    hoursAgo: " ש׳",
+    even: "שוויון",
+    unableToLoadProfile: "לא ניתן לטעון את הפרופיל",
+    unableToSaveProfile: "לא ניתן לשמור את הפרופיל",
+    unableToUpdateSellAlerts: "לא ניתן לעדכן התראות מכירה",
+  },
+} as const;
+
 function App() {
   const [currentPath, setCurrentPath] = useState(() => window.location.pathname);
+  const [language, setLanguage] = useState<Language>(() => {
+    const saved = window.localStorage.getItem("language");
+    return saved === "he" ? "he" : "en";
+  });
   const [snapshot, setSnapshot] = useState<Snapshot>({
     status: {
       marketCount: 0,
@@ -149,6 +280,13 @@ function App() {
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const deferredSearchQuery = useDeferredValue(debouncedSearchQuery);
   const deferredRefreshVersion = useDeferredValue(refreshVersion);
+  const t = copy[language];
+
+  useEffect(() => {
+    document.documentElement.lang = language;
+    document.documentElement.dir = language === "he" ? "rtl" : "ltr";
+    window.localStorage.setItem("language", language);
+  }, [language]);
 
   useEffect(() => {
     const handlePopState = () => {
@@ -322,7 +460,7 @@ function App() {
       const response = await fetch("/api/profile");
       const payload = (await response.json()) as UserProfileResponse & { error?: string };
       if (!response.ok) {
-        throw new Error(payload.error || "Unable to load profile");
+        throw new Error(payload.error || t.unableToLoadProfile);
       }
 
       if (!cancelled) {
@@ -333,14 +471,14 @@ function App() {
 
     void loadProfile().catch((error) => {
       if (!cancelled) {
-        setProfileMessage(error instanceof Error ? error.message : "Unable to load profile");
+        setProfileMessage(error instanceof Error ? error.message : t.unableToLoadProfile);
       }
     });
 
     return () => {
       cancelled = true;
     };
-  }, [currentPath]);
+  }, [currentPath, t.unableToLoadProfile]);
 
   useEffect(() => {
     const sentinel = loadMoreRef.current;
@@ -391,7 +529,7 @@ function App() {
         });
         const payload = (await response.json()) as { error?: string };
         if (!response.ok) {
-          throw new Error(payload.error || "Unable to disable sell alerts");
+          throw new Error(payload.error || t.unableToUpdateSellAlerts);
         }
       } else {
         const response = await fetch("/api/market-alerts/watch", {
@@ -406,13 +544,13 @@ function App() {
         });
         const payload = (await response.json()) as { error?: string };
         if (!response.ok) {
-          throw new Error(payload.error || "Unable to enable sell alerts");
+          throw new Error(payload.error || t.unableToUpdateSellAlerts);
         }
       }
 
       setRefreshVersion((current) => current + 1);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unable to update sell alerts";
+      const message = error instanceof Error ? error.message : t.unableToUpdateSellAlerts;
       if (message.includes("Discord webhook URL")) {
         setProfileMessage(message);
         navigateTo("/profile");
@@ -440,72 +578,83 @@ function App() {
       });
       const payload = (await response.json()) as UserProfileResponse & { error?: string };
       if (!response.ok) {
-        throw new Error(payload.error || "Unable to save profile");
+        throw new Error(payload.error || t.unableToSaveProfile);
       }
 
       setProfile(payload);
       setProfileFormWebhookUrl(payload.webhookUrl);
-      setProfileMessage("Discord webhook saved");
+      setProfileMessage(t.discordWebhookSaved);
     } catch (error) {
-      setProfileMessage(error instanceof Error ? error.message : "Unable to save profile");
+      setProfileMessage(error instanceof Error ? error.message : t.unableToSaveProfile);
     } finally {
       setIsSavingProfile(false);
     }
   };
 
-  const profileTitle = profile?.username ? `${profile.username}'s profile` : "Profile";
+  const profileTitle = profile?.username
+    ? language === "he"
+      ? `${t.profileTitle} ${profile.username}`
+      : `${profile.username}${t.profileSuffix}`
+    : t.profileTitle;
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell app-shell-${language}`}>
       <div className="ambient ambient-left" />
       <div className="ambient ambient-right" />
 
       <main className="page">
         <div className="page-topbar">
+          <button
+            type="button"
+            className="nav-button"
+            onClick={() => setLanguage((current) => (current === "en" ? "he" : "en"))}
+          >
+            {language === "en" ? "עברית" : "English"}
+          </button>
           <button type="button" className="nav-button" onClick={() => navigateTo("/profile")}>
-            Profile
+            {t.profile}
           </button>
         </div>
 
         <section className="hero">
           <div className="hero-panel">
             <StatusRow
-              label="Frontend stream"
-              value={feedConnected ? "Connected" : "Reconnecting"}
+              label={t.frontendStream}
+              value={feedConnected ? t.connected : t.reconnecting}
               tone={feedConnected ? "green" : "blue"}
             />
             <StatusRow
-              label="Polymarket socket"
+              label={t.polymarketSocket}
               value={
                 snapshot.status.websocketConnected
-                  ? `${snapshot.status.websocketConnectedShardCount}/${snapshot.status.websocketShardCount} shards`
-                  : "Syncing"
+                  ? `${snapshot.status.websocketConnectedShardCount}/${snapshot.status.websocketShardCount} ${t.shards}`
+                  : t.syncing
               }
               tone={snapshot.status.websocketConnected ? "green" : "blue"}
             />
             <StatusRow
-              label="Active assets"
+              label={t.activeAssets}
               value={snapshot.status.marketCount.toLocaleString()}
               tone="neutral"
             />
             <StatusRow
-              label="Signals surfaced"
+              label={t.signalsSurfaced}
               value={marketPage.total.toString()}
               tone="neutral"
             />
             <StatusRow
-              label="WS coverage"
-              value={`${snapshot.status.websocketAssetsSeenRecentlyCount}/${snapshot.status.websocketSubscribedAssetCount} active`}
+              label={t.wsCoverage}
+              value={`${snapshot.status.websocketAssetsSeenRecentlyCount}/${snapshot.status.websocketSubscribedAssetCount} ${t.active}`}
               tone="neutral"
             />
             <StatusRow
-              label="Last market sync"
-              value={formatTimestamp(snapshot.status.lastMarketSyncAt)}
+              label={t.lastMarketSync}
+              value={formatTimestamp(snapshot.status.lastMarketSyncAt, t.pending)}
               tone="neutral"
             />
             <StatusRow
-              label="Last trade seen"
-              value={formatTimestamp(snapshot.status.lastTradeAt)}
+              label={t.lastTradeSeen}
+              value={formatTimestamp(snapshot.status.lastTradeAt, t.pending)}
               tone="neutral"
             />
           </div>
@@ -515,28 +664,25 @@ function App() {
           <section className="profile-section">
             <div className="feed-header">
               <div>
-                <p className="section-kicker">Settings</p>
-                <h2>Profile</h2>
+                <p className="section-kicker">{t.settings}</p>
+                <h2>{t.profile}</h2>
               </div>
               <div className="feed-controls">
                 <button type="button" className="nav-button" onClick={() => navigateTo("/")}>
-                  Back to monitor
+                  {t.backToMonitor}
                 </button>
               </div>
             </div>
 
             <div className="profile-panel">
               <div className="profile-copy">
-                <p className="section-kicker">Discord alerts</p>
+                <p className="section-kicker">{t.discordAlerts}</p>
                 <h3>{profileTitle}</h3>
-                <p>
-                  Save your Discord webhook here once, then use <strong>Get sell alerts</strong> on any market card
-                  you want to track for exit signals.
-                </p>
+                <p>{t.profileBody}</p>
               </div>
 
               <label className="profile-field">
-                <span>Discord webhook URL</span>
+                <span>{t.discordWebhookUrl}</span>
                 <input
                   type="url"
                   value={profileFormWebhookUrl}
@@ -548,148 +694,150 @@ function App() {
               {profileMessage ? <p className="profile-message">{profileMessage}</p> : null}
 
               <div className="profile-actions">
-                <button type="button" className="watch-button watch-button-active" onClick={() => void saveProfile()} disabled={isSavingProfile}>
-                  {isSavingProfile ? "Saving..." : "Save webhook"}
+                <button
+                  type="button"
+                  className="watch-button watch-button-active"
+                  onClick={() => void saveProfile()}
+                  disabled={isSavingProfile}
+                >
+                  {isSavingProfile ? t.saving : t.saveWebhook}
                 </button>
               </div>
             </div>
           </section>
         ) : (
-        <section className="feed-section">
-          <div className="feed-header">
-            <div>
-              <p className="section-kicker">Signal feed</p>
-              <h2>Vegas Monitor</h2>
-            </div>
-            <label className="search-control">
-              <span>Search</span>
-              <input
-                type="search"
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Markets, outcomes, traders"
-              />
-            </label>
-            <div className="feed-controls">
-              <label className="sort-control">
-                <span>Sort</span>
-                <select value={marketSort} onChange={(event) => setMarketSort(event.target.value as MarketSortOption)}>
-                  <option value="recent">Most recent</option>
-                  <option value="weighted">Highest weight</option>
-                  <option value="buyWeight">Top outcome weight</option>
-                  <option value="flow">Largest flow</option>
-                  <option value="participants">Most traders</option>
-                </select>
-              </label>
-            </div>
-          </div>
-
-          {visibleMarkets.length === 0 && !isLoadingMarkets ? (
-            <div className="empty-state">
-              <div className="empty-pulse" />
-              <h3>Watching the tape</h3>
-              <p>
-                Once a wallet crosses the whale threshold, it will appear here with the market,
-                chosen side, and trader profitability label.
-              </p>
-            </div>
-          ) : (
-            <>
-              <div className="signal-grid">
-                {visibleMarkets.map((market) => {
-                  const signal = market.latestSignal;
-                  const primaryOutcome = market.outcomeWeights[0];
-                  const secondaryOutcome =
-                    market.outcomeWeights[1] ??
-                    inferMissingOutcome(primaryOutcome?.outcome, market.outcomeWeights);
-                  const visibleOutcomeWeights = [primaryOutcome, secondaryOutcome].filter(Boolean) as Array<{
-                    outcome: string;
-                    weight: number;
-                  }>;
-                  const edgeLabel = formatOutcomeEdge(visibleOutcomeWeights);
-
-                  return (
-                    <article className="signal-card" key={market.marketSlug}>
-                      <div className="signal-media">
-                        {normalizeSecureUrl(market.marketImage) ? (
-                          <img src={normalizeSecureUrl(market.marketImage)!} alt={market.marketQuestion} />
-                        ) : (
-                          <div className="image-fallback">{signal.outcome[0]}</div>
-                        )}
-                        <div className={`pill pill-${signal.labelTone}`}>{signal.label}</div>
-                      </div>
-
-                      <div className="signal-body">
-                        <div className="signal-topline">
-                          <span>{formatRelativeTime(market.latestTimestamp)}</span>
-                          <span>{market.participantCount} traders</span>
-                        </div>
-
-                        <h3>{market.marketQuestion}</h3>
-                        <p className="signal-thesis">
-                          <strong>{signal.displayName}</strong>
-                          <span className="signal-thesis-trade">
-                            <span>edge</span>
-                            <span className={`outcome-chip outcome-chip-${getOutcomeTone(edgeLabel)}`}>
-                              {edgeLabel}
-                            </span>
-                          </span>
-                        </p>
-
-                        <div className="metric-row">
-                          <Metric label="Market flow" value={currencyFormatter.format(market.totalUsd)} />
-                          <Metric label="Last price" value={signal.averagePrice.toFixed(3)} />
-                          <Metric label="Weighted" value={market.weightedScore.toString()} />
-                        </div>
-
-                        <div className="metric-row">
-                          <Metric
-                            label={primaryOutcome?.outcome ?? "Outcome 1"}
-                            value={(primaryOutcome?.weight ?? 0).toString()}
-                          />
-                          <Metric
-                            label={secondaryOutcome?.outcome ?? "Outcome 2"}
-                            value={(secondaryOutcome?.weight ?? 0).toString()}
-                          />
-                          <Metric
-                            label="Avg entry"
-                            value={market.observedAvgEntry !== null ? market.observedAvgEntry.toFixed(3) : "—"}
-                          />
-                        </div>
-
-                        <div className="signal-actions">
-                          <a href={normalizeSecureUrl(market.marketUrl) ?? market.marketUrl} target="_blank" rel="noreferrer">
-                            Open market
-                          </a>
-                          <a href={normalizeSecureUrl(signal.profileUrl) ?? signal.profileUrl} target="_blank" rel="noreferrer">
-                            Open whale profile
-                          </a>
-                          <button
-                            type="button"
-                            className={`watch-button ${market.isWatched ? "watch-button-active" : ""}`}
-                            onClick={() => void toggleSellAlerts(market)}
-                            disabled={alertActionMarketSlug === market.marketSlug}
-                          >
-                            {alertActionMarketSlug === market.marketSlug
-                              ? "Saving..."
-                              : market.isWatched
-                                ? "Sell alerts on"
-                                : "Get sell alerts"}
-                          </button>
-                        </div>
-                      </div>
-                    </article>
-                  );
-                })}
+          <section className="feed-section">
+            <div className="feed-header">
+              <div>
+                <p className="section-kicker">{t.signalFeed}</p>
+                <h2>{t.vegasMonitor}</h2>
               </div>
-              {marketPage.hasMore || isLoadingMarkets ? (
-                <div className="load-more-sentinel" ref={loadMoreRef}>
-                  {isLoadingMarkets ? "Loading markets..." : "Scroll for more"}
+              <label className="search-control">
+                <span>{t.search}</span>
+                <input
+                  type="search"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder={t.searchPlaceholder}
+                />
+              </label>
+              <div className="feed-controls">
+                <label className="sort-control">
+                  <span>{t.sort}</span>
+                  <select value={marketSort} onChange={(event) => setMarketSort(event.target.value as MarketSortOption)}>
+                    <option value="recent">{t.sortRecent}</option>
+                    <option value="weighted">{t.sortWeighted}</option>
+                    <option value="buyWeight">{t.sortBuyWeight}</option>
+                    <option value="flow">{t.sortFlow}</option>
+                    <option value="participants">{t.sortParticipants}</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+
+            {visibleMarkets.length === 0 && !isLoadingMarkets ? (
+              <div className="empty-state">
+                <div className="empty-pulse" />
+                <h3>{t.watchingTape}</h3>
+                <p>{t.emptyState}</p>
+              </div>
+            ) : (
+              <>
+                <div className="signal-grid">
+                  {visibleMarkets.map((market) => {
+                    const signal = market.latestSignal;
+                    const primaryOutcome = market.outcomeWeights[0];
+                    const secondaryOutcome =
+                      market.outcomeWeights[1] ??
+                      inferMissingOutcome(primaryOutcome?.outcome, market.outcomeWeights);
+                    const visibleOutcomeWeights = [primaryOutcome, secondaryOutcome].filter(Boolean) as Array<{
+                      outcome: string;
+                      weight: number;
+                    }>;
+                    const edgeLabel = formatOutcomeEdge(visibleOutcomeWeights, t.even);
+
+                    return (
+                      <article className="signal-card" key={market.marketSlug}>
+                        <div className="signal-media">
+                          {normalizeSecureUrl(market.marketImage) ? (
+                            <img src={normalizeSecureUrl(market.marketImage)!} alt={market.marketQuestion} />
+                          ) : (
+                            <div className="image-fallback">{signal.outcome[0]}</div>
+                          )}
+                          <div className={`pill pill-${signal.labelTone}`}>{signal.label}</div>
+                        </div>
+
+                        <div className="signal-body">
+                          <div className="signal-topline">
+                            <span>{formatRelativeTime(market.latestTimestamp, t)}</span>
+                            <span>{market.participantCount} {t.traders}</span>
+                          </div>
+
+                          <h3>{market.marketQuestion}</h3>
+                          <p className="signal-thesis">
+                            <strong>{signal.displayName}</strong>
+                            <span className="signal-thesis-trade">
+                              <span>{t.edge}</span>
+                              <span className={`outcome-chip outcome-chip-${getOutcomeTone(edgeLabel)}`}>
+                                {edgeLabel}
+                              </span>
+                            </span>
+                          </p>
+
+                          <div className="metric-row">
+                            <Metric label={t.marketFlow} value={currencyFormatter.format(market.totalUsd)} />
+                            <Metric label={t.lastPrice} value={signal.averagePrice.toFixed(3)} />
+                            <Metric label={t.weighted} value={market.weightedScore.toString()} />
+                          </div>
+
+                          <div className="metric-row">
+                            <Metric
+                              label={primaryOutcome?.outcome ?? t.outcome1}
+                              value={(primaryOutcome?.weight ?? 0).toString()}
+                            />
+                            <Metric
+                              label={secondaryOutcome?.outcome ?? t.outcome2}
+                              value={(secondaryOutcome?.weight ?? 0).toString()}
+                            />
+                            <Metric
+                              label={t.avgEntry}
+                              value={market.observedAvgEntry !== null ? market.observedAvgEntry.toFixed(3) : "—"}
+                            />
+                          </div>
+
+                          <div className="signal-actions">
+                            <a href={normalizeSecureUrl(market.marketUrl) ?? market.marketUrl} target="_blank" rel="noreferrer">
+                              {t.openMarket}
+                            </a>
+                            <a href={normalizeSecureUrl(signal.profileUrl) ?? signal.profileUrl} target="_blank" rel="noreferrer">
+                              {t.openWhaleProfile}
+                            </a>
+                            <button
+                              type="button"
+                              className={`watch-button ${market.isWatched ? "watch-button-active" : ""}`}
+                              onClick={() => void toggleSellAlerts(market)}
+                              disabled={alertActionMarketSlug === market.marketSlug}
+                            >
+                              {alertActionMarketSlug === market.marketSlug
+                                ? t.saving
+                                : market.isWatched
+                                  ? t.sellAlertsOn
+                                  : t.getSellAlerts}
+                            </button>
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
                 </div>
-              ) : null}
-            </>
-          )}
-        </section>
+                {marketPage.hasMore || isLoadingMarkets ? (
+                  <div className="load-more-sentinel" ref={loadMoreRef}>
+                    {isLoadingMarkets ? t.loadingMarkets : t.scrollForMore}
+                  </div>
+                ) : null}
+              </>
+            )}
+          </section>
         )}
       </main>
     </div>
@@ -722,9 +870,9 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
-function formatTimestamp(value: number | null) {
+function formatTimestamp(value: number | null, pendingLabel: string) {
   if (!value) {
-    return "Pending";
+    return pendingLabel;
   }
 
   return new Intl.DateTimeFormat(undefined, {
@@ -736,27 +884,27 @@ function formatTimestamp(value: number | null) {
   }).format(value);
 }
 
-function formatRelativeTime(timestamp: number) {
+function formatRelativeTime(timestamp: number, t: (typeof copy)["en"]) {
   const diffMs = Date.now() - timestamp;
   const diffMinutes = Math.floor(diffMs / 60_000);
 
   if (diffMinutes < 1) {
-    return "now";
+    return t.now;
   }
 
   if (diffMinutes < 60) {
-    return `${diffMinutes}m ago`;
+    return `${diffMinutes}${t.minutesAgo}`;
   }
 
-  return `${Math.floor(diffMinutes / 60)}h ago`;
+  return `${Math.floor(diffMinutes / 60)}${t.hoursAgo}`;
 }
 
-function formatOutcomeEdge(outcomeWeights: Array<{ outcome: string; weight: number }>) {
+function formatOutcomeEdge(outcomeWeights: Array<{ outcome: string; weight: number }>, evenLabel: string) {
   const first = outcomeWeights[0];
   const second = outcomeWeights[1];
 
   if (!first) {
-    return "Even";
+    return evenLabel;
   }
 
   if (!second) {
@@ -764,7 +912,7 @@ function formatOutcomeEdge(outcomeWeights: Array<{ outcome: string; weight: numb
   }
 
   if (first.weight === second.weight) {
-    return "Even";
+    return evenLabel;
   }
 
   return `${first.outcome} +${first.weight - second.weight}`;

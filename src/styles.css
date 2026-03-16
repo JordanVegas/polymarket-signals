@@ -71,7 +71,12 @@ a {
 .page-topbar {
   display: flex;
   justify-content: flex-end;
+  gap: 10px;
   margin-bottom: 14px;
+}
+
+.app-shell-he .page-topbar {
+  justify-content: flex-start;
 }
 
 .hero {
@@ -420,6 +425,24 @@ a {
   flex: 0 0 auto;
   text-align: right;
   white-space: nowrap;
+}
+
+.app-shell-he .feed-header,
+.app-shell-he .feed-controls,
+.app-shell-he .signal-topline,
+.app-shell-he .signal-actions {
+  direction: rtl;
+}
+
+.app-shell-he .signal-thesis,
+.app-shell-he .signal-thesis-trade,
+.app-shell-he .status-row,
+.app-shell-he .metric,
+.app-shell-he .profile-field,
+.app-shell-he .profile-copy,
+.app-shell-he .empty-state,
+.app-shell-he .signal-body {
+  text-align: right;
 }
 
 .edge-return {
