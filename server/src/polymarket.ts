@@ -478,10 +478,6 @@ export class PolymarketSignalService {
     this.lastTradeAt = Date.now();
     this.lastWebsocketMessageAt = seenAt;
     this.websocketAssetSeenAt.set(message.asset_id, seenAt);
-    const timestampSec = Math.floor(Number(message.timestamp) / 1000);
-    if (Number.isFinite(timestampSec)) {
-      this.lastTradeTimestampSec = Math.max(this.lastTradeTimestampSec, timestampSec - 1);
-    }
   }
 
   private startTradePolling(): void {
