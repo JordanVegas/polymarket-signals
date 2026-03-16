@@ -218,7 +218,7 @@ function App() {
               <p className="section-kicker">Signal feed</p>
               <h2>Whale alerts</h2>
             </div>
-            <p className="feed-meta">Threshold: $200,000 per wallet-side cluster</p>
+            <p className="feed-meta">Triggered by whale, shark, and pro profile tiers</p>
           </div>
 
           {snapshot.signals.length === 0 ? (

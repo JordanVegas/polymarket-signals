@@ -527,12 +527,11 @@ export class PolymarketSignalService {
   }
 
   private async tryEmitSignal(accumulator: SignalAccumulator): Promise<boolean> {
-    if (!accumulator.emitted && accumulator.totalUsd < config.whaleThresholdUsd) {
-      return false;
-    }
-
     const wasAlreadyEmitted = accumulator.emitted;
     const trader = await this.getTraderSummary(accumulator.wallet, accumulator.displayName, accumulator.profileImage);
+    if (trader.tier === "none") {
+      return false;
+    }
     const signalId = accumulator.signalId ?? `${accumulator.wallet}:${accumulator.assetId}:${accumulator.startedAt}`;
     const signalLabel = buildSignalLabel(trader.tier, accumulator.side);
     const signal: WhaleSignal = {
