@@ -343,6 +343,10 @@ function App() {
                 const secondaryOutcome =
                   market.outcomeWeights[1] ??
                   inferMissingOutcome(primaryOutcome?.outcome, market.outcomeWeights);
+                const visibleOutcomeWeights = [primaryOutcome, secondaryOutcome].filter(Boolean) as Array<{
+                  outcome: string;
+                  weight: number;
+                }>;
                 return (
                   <article className="signal-card" key={market.marketSlug}>
                     <div className="signal-media">
@@ -392,7 +396,7 @@ function App() {
                           label={secondaryOutcome?.outcome ?? "Outcome 2"}
                           value={(secondaryOutcome?.weight ?? 0).toString()}
                         />
-                        <Metric label="Edge" value={formatOutcomeEdge(market.outcomeWeights)} />
+                        <Metric label="Edge" value={formatOutcomeEdge(visibleOutcomeWeights)} />
                       </div>
 
                       <div className="signal-actions">
@@ -498,7 +502,11 @@ function formatOutcomeEdge(outcomeWeights: Array<{ outcome: string; weight: numb
     return "Even";
   }
 
-  if (!second || first.weight === second.weight) {
+  if (!second) {
+    return `${first.outcome} +${first.weight}`;
+  }
+
+  if (first.weight === second.weight) {
     return "Even";
   }
 
