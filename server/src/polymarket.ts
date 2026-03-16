@@ -144,6 +144,11 @@ const buildSignalLabel = (
   return { label: `Large ${action}`, labelTone: "neutral" };
 };
 
+const applySignalLabelStyle = (signal: WhaleSignal): WhaleSignal => ({
+  ...signal,
+  ...buildSignalLabel(signal.trader.tier, signal.side),
+});
+
 const logFetchFailure = (context: string, error: unknown) => {
   console.error(`[polysignals] ${context}`, error);
 };
@@ -226,7 +231,7 @@ export class PolymarketSignalService {
     const activeMarketSlugs = new Set(
       Array.from(this.marketsByAssetId.values(), (market) => market.slug),
     );
-    const recentSignals = await this.storage.loadRecentSignals(config.maxSignals);
+    const recentSignals = (await this.storage.loadRecentSignals(config.maxSignals)).map(applySignalLabelStyle);
 
     return {
       status: {
@@ -810,11 +815,12 @@ export class PolymarketSignalService {
       profileImage: trader.profileImage ?? accumulator.profileImage,
       trader,
     };
+    const styledSignal = applySignalLabelStyle(signal);
 
     accumulator.emitted = true;
     accumulator.signalId = signalId;
     await this.storage.saveCluster(this.toPersistedCluster(accumulator));
-    await this.storage.saveSignal(signal);
+    await this.storage.saveSignal(styledSignal);
 
     if (this.initialActiveConditionIds.has(accumulator.market.conditionId)) {
       this.runBackgroundTask(
@@ -828,7 +834,7 @@ export class PolymarketSignalService {
     }
 
     for (const listener of this.listeners) {
-      listener(signal);
+      listener(styledSignal);
     }
 
     return !wasAlreadyEmitted;
