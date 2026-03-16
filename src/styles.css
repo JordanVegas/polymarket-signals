@@ -386,6 +386,9 @@ a {
   margin-top: 4px;
   font-family: "IBM Plex Mono", monospace;
   font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .signal-actions {
@@ -516,7 +519,9 @@ a {
   }
 
   .metric strong {
-    overflow-wrap: anywhere;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .signal-actions a {
