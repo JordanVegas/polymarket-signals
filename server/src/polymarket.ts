@@ -184,7 +184,7 @@ const logFetchFailure = (context: string, error: unknown) => {
 const positiveOutcomeKeywords = ["yes", "up", "above", "over", "higher", "more", "long"];
 const negativeOutcomeKeywords = ["no", "down", "below", "under", "lower", "less", "short"];
 const TRADER_MEMORY_CACHE_TTL_MS = 5 * 60_000;
-const TRADER_DB_CACHE_TTL_MS = 15 * 60_000;
+const TRADER_DB_CACHE_TTL_MS = 7 * 24 * 60 * 60_000;
 
 type IngestResult = "ingested" | "queued";
 
