@@ -81,6 +81,16 @@ type SignalAccumulator = {
   signalId?: string;
 };
 
+type MarketSocketShard = {
+  id: number;
+  assetIds: string[];
+  ws: WebSocket | null;
+  heartbeatTimer: NodeJS.Timeout | null;
+  reconnectTimer: NodeJS.Timeout | null;
+  connected: boolean;
+  lastMessageAt: number | null;
+};
+
 const chunk = <T,>(items: T[], size: number): T[][] => {
   const chunks: T[][] = [];
   for (let index = 0; index < items.length; index += size) {
@@ -162,10 +172,9 @@ export class PolymarketSignalService {
   private readonly traderCache = new Map<string, { summary: TraderSummary; fetchedAt: number }>();
   private readonly storage = new SignalStorage();
   private readonly pendingUnknownAssetTrades = new Map<string, TradeRecord[]>();
-  private ws: WebSocket | null = null;
+  private readonly marketSocketShards = new Map<number, MarketSocketShard>();
   private marketSyncTimer: NodeJS.Timeout | null = null;
   private tradePollTimer: NodeJS.Timeout | null = null;
-  private heartbeatTimer: NodeJS.Timeout | null = null;
   private lastTradeTimestampSec = 0;
   private websocketConnected = false;
   private lastMarketSyncAt: number | null = null;
@@ -173,6 +182,7 @@ export class PolymarketSignalService {
   private lastWebsocketMessageAt: number | null = null;
   private lastForcedMarketSyncAt = 0;
   private forcingMarketSync: Promise<void> | null = null;
+  private nextShardId = 1;
   private listeners = new Set<(payload: WhaleSignal) => void>();
 
   async start(): Promise<void> {
@@ -181,7 +191,6 @@ export class PolymarketSignalService {
     await this.syncMarkets();
     this.captureInitialActiveMarkets();
     await this.backfillHistoricalSignals();
-    this.connectMarketSocket();
     this.startTradePolling();
     this.marketSyncTimer = setInterval(() => {
       this.runBackgroundTask("scheduled market sync", this.syncMarkets());
@@ -205,10 +214,7 @@ export class PolymarketSignalService {
     if (this.tradePollTimer) {
       clearInterval(this.tradePollTimer);
     }
-    if (this.heartbeatTimer) {
-      clearInterval(this.heartbeatTimer);
-    }
-    this.ws?.close();
+    this.teardownAllMarketSockets();
   }
 
   onSignal(listener: (payload: WhaleSignal) => void): () => void {
@@ -221,10 +227,17 @@ export class PolymarketSignalService {
   async getSnapshot() {
     const recentCutoff = Date.now() - 15 * 60_000;
     let websocketAssetsSeenRecentlyCount = 0;
+    let websocketConnectedShardCount = 0;
 
     for (const seenAt of this.websocketAssetSeenAt.values()) {
       if (seenAt >= recentCutoff) {
         websocketAssetsSeenRecentlyCount += 1;
+      }
+    }
+
+    for (const shard of this.marketSocketShards.values()) {
+      if (shard.connected) {
+        websocketConnectedShardCount += 1;
       }
     }
 
@@ -237,6 +250,8 @@ export class PolymarketSignalService {
       status: {
         marketCount: this.activeAssetIds.size,
         websocketConnected: this.websocketConnected,
+        websocketShardCount: this.marketSocketShards.size,
+        websocketConnectedShardCount,
         lastMarketSyncAt: this.lastMarketSyncAt,
         lastTradeAt: this.lastTradeAt,
         websocketSubscribedAssetCount: this.activeAssetIds.size,
@@ -314,7 +329,7 @@ export class PolymarketSignalService {
     }
 
     this.lastMarketSyncAt = Date.now();
-    this.resubscribeToActiveAssets();
+    this.rebuildMarketSockets();
   }
 
   private captureInitialActiveMarkets(): void {
@@ -339,56 +354,99 @@ export class PolymarketSignalService {
     }
   }
 
-  private connectMarketSocket(): void {
-    this.ws?.close();
-    this.ws = new WebSocket(CLOB_WS_URL);
+  private rebuildMarketSockets(): void {
+    this.teardownAllMarketSockets();
 
-    this.ws.addEventListener("open", () => {
-      this.websocketConnected = true;
-      const initialAssets = Array.from(this.activeAssetIds).slice(0, 800);
-      this.ws?.send(
-        JSON.stringify({
-          type: "market",
-          assets_ids: initialAssets,
-        }),
-      );
-      this.heartbeatTimer = setInterval(() => {
-        this.ws?.send("{}");
-      }, 10_000);
-    });
+    const assetChunks = chunk(Array.from(this.activeAssetIds), 800);
+    for (const assetIds of assetChunks) {
+      const shard: MarketSocketShard = {
+        id: this.nextShardId++,
+        assetIds,
+        ws: null,
+        heartbeatTimer: null,
+        reconnectTimer: null,
+        connected: false,
+        lastMessageAt: null,
+      };
+      this.marketSocketShards.set(shard.id, shard);
+      this.connectMarketSocketShard(shard);
+    }
 
-    this.ws.addEventListener("message", (event) => {
-      this.handleSocketMessage(String(event.data));
-    });
-
-    this.ws.addEventListener("close", () => {
-      this.websocketConnected = false;
-      if (this.heartbeatTimer) {
-        clearInterval(this.heartbeatTimer);
-      }
-      this.heartbeatTimer = null;
-      setTimeout(() => this.connectMarketSocket(), 3_000);
-    });
-
-    this.ws.addEventListener("error", () => {
-      this.websocketConnected = false;
-    });
+    this.updateWebsocketConnected();
   }
 
-  private resubscribeToActiveAssets(): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+  private connectMarketSocketShard(shard: MarketSocketShard): void {
+    if (shard.assetIds.length === 0) {
       return;
     }
 
-    const assets = Array.from(this.activeAssetIds);
-    const batches = chunk(assets, 800);
-    batches.forEach((batch, index) => {
-      const payload =
-        index === 0
-          ? { type: "market", assets_ids: batch }
-          : { operation: "subscribe", assets_ids: batch };
-      this.ws?.send(JSON.stringify(payload));
+    shard.ws?.close();
+    shard.ws = new WebSocket(CLOB_WS_URL);
+
+    shard.ws.addEventListener("open", () => {
+      shard.connected = true;
+      this.updateWebsocketConnected();
+      shard.ws?.send(
+        JSON.stringify({
+          type: "market",
+          assets_ids: shard.assetIds,
+        }),
+      );
+      shard.heartbeatTimer = setInterval(() => {
+        shard.ws?.send("{}");
+      }, 10_000);
     });
+
+    shard.ws.addEventListener("message", (event) => {
+      shard.lastMessageAt = Date.now();
+      this.handleSocketMessage(String(event.data));
+    });
+
+    shard.ws.addEventListener("close", () => {
+      shard.connected = false;
+      this.updateWebsocketConnected();
+      if (shard.heartbeatTimer) {
+        clearInterval(shard.heartbeatTimer);
+      }
+      shard.heartbeatTimer = null;
+      if (!this.marketSocketShards.has(shard.id) || shard.reconnectTimer) {
+        return;
+      }
+      shard.reconnectTimer = setTimeout(() => {
+        shard.reconnectTimer = null;
+        if (this.marketSocketShards.has(shard.id)) {
+          this.connectMarketSocketShard(shard);
+        }
+      }, 3_000);
+    });
+
+    shard.ws.addEventListener("error", () => {
+      shard.connected = false;
+      this.updateWebsocketConnected();
+    });
+  }
+
+  private teardownAllMarketSockets(): void {
+    for (const shard of this.marketSocketShards.values()) {
+      if (shard.heartbeatTimer) {
+        clearInterval(shard.heartbeatTimer);
+      }
+      if (shard.reconnectTimer) {
+        clearTimeout(shard.reconnectTimer);
+      }
+      shard.heartbeatTimer = null;
+      shard.reconnectTimer = null;
+      shard.connected = false;
+      shard.ws?.close();
+      shard.ws = null;
+    }
+
+    this.marketSocketShards.clear();
+    this.updateWebsocketConnected();
+  }
+
+  private updateWebsocketConnected(): void {
+    this.websocketConnected = Array.from(this.marketSocketShards.values()).some((shard) => shard.connected);
   }
 
   private handleSocketMessage(rawMessage: string): void {

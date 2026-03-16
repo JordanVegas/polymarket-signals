@@ -39,6 +39,8 @@ type Snapshot = {
   status: {
     marketCount: number;
     websocketConnected: boolean;
+    websocketShardCount: number;
+    websocketConnectedShardCount: number;
     lastMarketSyncAt: number | null;
     lastTradeAt: number | null;
     websocketSubscribedAssetCount: number;
@@ -87,6 +89,8 @@ function App() {
     status: {
       marketCount: 0,
       websocketConnected: false,
+      websocketShardCount: 0,
+      websocketConnectedShardCount: 0,
       lastMarketSyncAt: null,
       lastTradeAt: null,
       websocketSubscribedAssetCount: 0,
@@ -230,7 +234,11 @@ function App() {
             />
             <StatusRow
               label="Polymarket socket"
-              value={snapshot.status.websocketConnected ? "Connected" : "Syncing"}
+              value={
+                snapshot.status.websocketConnected
+                  ? `${snapshot.status.websocketConnectedShardCount}/${snapshot.status.websocketShardCount} shards`
+                  : "Syncing"
+              }
               tone={snapshot.status.websocketConnected ? "green" : "blue"}
             />
             <StatusRow

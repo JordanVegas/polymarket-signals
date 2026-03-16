@@ -66,6 +66,8 @@ export type AppSnapshot = {
   status: {
     marketCount: number;
     websocketConnected: boolean;
+    websocketShardCount: number;
+    websocketConnectedShardCount: number;
     lastMarketSyncAt: number | null;
     lastTradeAt: number | null;
     websocketSubscribedAssetCount: number;
