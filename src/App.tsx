@@ -45,6 +45,22 @@ type Snapshot = {
   signals: WhaleSignal[];
 };
 
+type MarketAggregate = {
+  marketSlug: string;
+  marketQuestion: string;
+  marketUrl: string;
+  marketImage: string;
+  latestTimestamp: number;
+  totalUsd: number;
+  totalFillCount: number;
+  whales: number;
+  sharks: number;
+  pros: number;
+  weightedScore: number;
+  participantCount: number;
+  latestSignal: WhaleSignal;
+};
+
 const currencyFormatter = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
@@ -134,6 +150,7 @@ function App() {
   }, []);
 
   const headerSignal = snapshot.signals[0];
+  const marketAggregates = useMemo(() => aggregateMarkets(snapshot.signals), [snapshot.signals]);
   const profitableCount = useMemo(
     () => snapshot.signals.filter((signal) => signal.trader.tier === "whale").length,
     [snapshot.signals],
@@ -178,7 +195,7 @@ function App() {
             />
             <StatusRow
               label="Signals surfaced"
-              value={snapshot.signals.length.toString()}
+              value={marketAggregates.length.toString()}
               tone="neutral"
             />
             <StatusRow
@@ -221,7 +238,7 @@ function App() {
             <p className="feed-meta">Triggered by whale, shark, and pro tiers with a $1,000 minimum cluster</p>
           </div>
 
-          {snapshot.signals.length === 0 ? (
+          {marketAggregates.length === 0 ? (
             <div className="empty-state">
               <div className="empty-pulse" />
               <h3>Watching the tape</h3>
@@ -232,14 +249,13 @@ function App() {
             </div>
           ) : (
             <div className="signal-grid">
-              {snapshot.signals.map((signal) => {
-                const marketStats = getMarketStats(snapshot.signals, signal.marketSlug);
-
+              {marketAggregates.map((market) => {
+                const signal = market.latestSignal;
                 return (
-                  <article className="signal-card" key={signal.id}>
+                  <article className="signal-card" key={market.marketSlug}>
                   <div className="signal-media">
-                    {normalizeSecureUrl(signal.marketImage) ? (
-                      <img src={normalizeSecureUrl(signal.marketImage)!} alt={signal.marketQuestion} />
+                    {normalizeSecureUrl(market.marketImage) ? (
+                      <img src={normalizeSecureUrl(market.marketImage)!} alt={market.marketQuestion} />
                     ) : (
                       <div className="image-fallback">{signal.outcome[0]}</div>
                     )}
@@ -248,57 +264,57 @@ function App() {
 
                   <div className="signal-body">
                     <div className="signal-topline">
-                      <span>{timeFormatter.format(signal.timestamp)}</span>
-                      <span>{signal.fillCount} fills</span>
+                      <span>{timeFormatter.format(market.latestTimestamp)}</span>
+                      <span>{market.participantCount} traders</span>
                     </div>
 
-                    <h3>{signal.marketQuestion}</h3>
+                    <h3>{market.marketQuestion}</h3>
                     <p className="signal-thesis">
-                      <strong>{signal.displayName}</strong> {signal.side.toLowerCase()}{" "}
+                      <strong>{signal.displayName}</strong> last {signal.side.toLowerCase()}{" "}
                       <span className="outcome-chip">{signal.outcome}</span>
                     </p>
 
                     <div className="metric-row">
-                      <Metric label="Cluster size" value={currencyFormatter.format(signal.totalUsd)} />
-                      <Metric label="Average price" value={signal.averagePrice.toFixed(3)} />
-                      <Metric label="Shares" value={signal.totalShares.toLocaleString()} />
+                      <Metric label="Market flow" value={currencyFormatter.format(market.totalUsd)} />
+                      <Metric label="Signal count" value={market.totalFillCount.toString()} />
+                      <Metric label="Last price" value={signal.averagePrice.toFixed(3)} />
                     </div>
 
                     <div className="metric-row">
+                      <Metric label="Whales" value={market.whales.toString()} />
+                      <Metric label="Sharks" value={market.sharks.toString()} />
+                      <Metric label="Pros" value={market.pros.toString()} />
+                    </div>
+
+                    <div className="metric-row">
+                      <Metric label="Weighted score" value={market.weightedScore.toString()} />
                       <Metric
-                        label="Trader PnL"
-                        value={compactCurrencyFormatter.format(signal.trader.totalPnl)}
+                        label="Last trader"
+                        value={signal.displayName}
                       />
                       <Metric
-                        label="Trades"
-                        value={signal.trader.tradeCount.toLocaleString()}
-                      />
-                      <Metric
-                        label="Tier"
+                        label="Last tier"
                         value={`${signal.trader.tier.toUpperCase()} x${signal.trader.weight}`}
                       />
                     </div>
 
                     <div className="metric-row market-stat-row">
-                      <Metric label="Whales" value={marketStats.whales.toString()} />
-                      <Metric label="Sharks" value={marketStats.sharks.toString()} />
-                      <Metric label="Pros" value={marketStats.pros.toString()} />
-                    </div>
-
-                    <div className="metric-row market-stat-row">
-                      <Metric label="Weighted score" value={marketStats.weightedScore.toString()} />
                       <Metric
-                        label="Portfolio value"
-                        value={compactCurrencyFormatter.format(signal.trader.totalValue)}
+                        label="Last trader PnL"
+                        value={compactCurrencyFormatter.format(signal.trader.totalPnl)}
                       />
                       <Metric
-                        label="Wallet"
-                        value={`${signal.wallet.slice(0, 6)}...${signal.wallet.slice(-4)}`}
+                        label="Last trades"
+                        value={signal.trader.tradeCount.toLocaleString()}
+                      />
+                      <Metric
+                        label="Last portfolio"
+                        value={compactCurrencyFormatter.format(signal.trader.totalValue)}
                       />
                     </div>
 
                     <div className="signal-actions">
-                      <a href={normalizeSecureUrl(signal.marketUrl) ?? signal.marketUrl} target="_blank" rel="noreferrer">
+                      <a href={normalizeSecureUrl(market.marketUrl) ?? market.marketUrl} target="_blank" rel="noreferrer">
                         Open market
                       </a>
                       <a href={normalizeSecureUrl(signal.profileUrl) ?? signal.profileUrl} target="_blank" rel="noreferrer">
@@ -382,38 +398,87 @@ function upsertSignal(signals: WhaleSignal[], nextSignal: WhaleSignal) {
   return [nextSignal, ...remaining];
 }
 
-function getMarketStats(signals: WhaleSignal[], marketSlug: string) {
-  const uniqueWallets = new Map<string, TraderSummary>();
+function aggregateMarkets(signals: WhaleSignal[]): MarketAggregate[] {
+  const markets = new Map<string, MarketAggregate>();
+  const traderSpendByMarket = new Map<string, Map<string, { totalUsd: number; trader: TraderSummary }>>();
 
   for (const signal of signals) {
-    if (signal.marketSlug !== marketSlug) {
+    const existing = markets.get(signal.marketSlug);
+    if (!existing) {
+      markets.set(signal.marketSlug, {
+        marketSlug: signal.marketSlug,
+        marketQuestion: signal.marketQuestion,
+        marketUrl: signal.marketUrl,
+        marketImage: signal.marketImage,
+        latestTimestamp: signal.timestamp,
+        totalUsd: signal.totalUsd,
+        totalFillCount: signal.fillCount,
+        whales: 0,
+        sharks: 0,
+        pros: 0,
+        weightedScore: 0,
+        participantCount: 0,
+        latestSignal: signal,
+      });
+    } else {
+      existing.totalUsd += signal.totalUsd;
+      existing.totalFillCount += signal.fillCount;
+      if (signal.timestamp > existing.latestTimestamp) {
+        existing.latestTimestamp = signal.timestamp;
+        existing.latestSignal = signal;
+      }
+    }
+
+    const marketTraders =
+      traderSpendByMarket.get(signal.marketSlug) ?? new Map<string, { totalUsd: number; trader: TraderSummary }>();
+    const traderEntry = marketTraders.get(signal.wallet);
+    if (traderEntry) {
+      traderEntry.totalUsd += signal.totalUsd;
+      if (signal.trader.weight > traderEntry.trader.weight) {
+        traderEntry.trader = signal.trader;
+      }
+    } else {
+      marketTraders.set(signal.wallet, { totalUsd: signal.totalUsd, trader: signal.trader });
+    }
+    traderSpendByMarket.set(signal.marketSlug, marketTraders);
+  }
+
+  for (const [marketSlug, aggregate] of markets) {
+    const traders = traderSpendByMarket.get(marketSlug);
+    if (!traders) {
       continue;
     }
 
-    const existing = uniqueWallets.get(signal.wallet);
-    if (!existing || signal.trader.weight > existing.weight) {
-      uniqueWallets.set(signal.wallet, signal.trader);
+    let whales = 0;
+    let sharks = 0;
+    let pros = 0;
+    let weightedScore = 0;
+    let participantCount = 0;
+
+    for (const { totalUsd, trader } of traders.values()) {
+      if (totalUsd < 1_000 || trader.tier === "none") {
+        continue;
+      }
+
+      participantCount += 1;
+      weightedScore += trader.weight;
+      if (trader.tier === "whale") {
+        whales += 1;
+      } else if (trader.tier === "shark") {
+        sharks += 1;
+      } else if (trader.tier === "pro") {
+        pros += 1;
+      }
     }
+
+    aggregate.whales = whales;
+    aggregate.sharks = sharks;
+    aggregate.pros = pros;
+    aggregate.weightedScore = weightedScore;
+    aggregate.participantCount = participantCount;
   }
 
-  let whales = 0;
-  let sharks = 0;
-  let pros = 0;
-  let weightedScore = 0;
-
-  for (const trader of uniqueWallets.values()) {
-    if (trader.tier === "whale") {
-      whales += 1;
-    } else if (trader.tier === "shark") {
-      sharks += 1;
-    } else if (trader.tier === "pro") {
-      pros += 1;
-    }
-
-    weightedScore += trader.weight;
-  }
-
-  return { whales, sharks, pros, weightedScore };
+  return Array.from(markets.values()).sort((left, right) => right.latestTimestamp - left.latestTimestamp);
 }
 
 function normalizeSecureUrl(value?: string) {
