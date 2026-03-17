@@ -211,12 +211,13 @@ export class PolymarketSignalService {
   private readonly marketTradeFetchInFlight = new Map<string, Promise<void>>();
   private readonly queuedMarketTradeFetches = new Map<string, PendingMarketTradeFetch>();
   private readonly lastMarketTradeFetchAt = new Map<string, number>();
+  private readonly trackedTraderPollInFlight = new Set<string>();
   private marketTradeFetchDrainTimer: NodeJS.Timeout | null = null;
+  private trackedTraderPollDrainTimer: NodeJS.Timeout | null = null;
   private activeMarketTradeFetchCount = 0;
   private marketSyncTimer: NodeJS.Timeout | null = null;
   private tradePollTimer: NodeJS.Timeout | null = null;
   private portfolioSyncTimer: NodeJS.Timeout | null = null;
-  private trackedTraderPollTimer: NodeJS.Timeout | null = null;
   private lastTradeTimestampSec = 0;
   private websocketConnected = false;
   private lastMarketSyncAt: number | null = null;
@@ -244,10 +245,7 @@ export class PolymarketSignalService {
       this.runBackgroundTask("portfolio watch sync", this.syncTrackedWalletWatches());
     }, 3 * 60_000);
     this.runBackgroundTask("initial portfolio watch sync", this.syncTrackedWalletWatches());
-    this.trackedTraderPollTimer = setInterval(() => {
-      this.runBackgroundTask("tracked trader poll", this.pollTrackedTraders());
-    }, config.trackedTraderPollMs);
-    this.runBackgroundTask("initial tracked trader poll", this.pollTrackedTraders());
+    this.drainTrackedTraderPollQueue();
   }
 
   private async restoreActiveClusters(): Promise<void> {
@@ -270,11 +268,11 @@ export class PolymarketSignalService {
     if (this.portfolioSyncTimer) {
       clearInterval(this.portfolioSyncTimer);
     }
-    if (this.trackedTraderPollTimer) {
-      clearInterval(this.trackedTraderPollTimer);
-    }
     if (this.marketTradeFetchDrainTimer) {
       clearTimeout(this.marketTradeFetchDrainTimer);
+    }
+    if (this.trackedTraderPollDrainTimer) {
+      clearTimeout(this.trackedTraderPollDrainTimer);
     }
     this.teardownAllMarketSockets();
   }
@@ -1429,13 +1427,6 @@ export class PolymarketSignalService {
     return summary;
   }
 
-  private async pollTrackedTraders(): Promise<void> {
-    const trackedTraders = await this.storage.loadTrackedTraders(100);
-    for (const trader of trackedTraders) {
-      await this.pollTrackedTrader(trader);
-    }
-  }
-
   private async pollTrackedTrader(trader: PersistedTrackedTrader): Promise<void> {
     let latestSeenTimestamp = trader.lastSeenActivityTimestamp ?? 0;
     const batchSize = 50;
@@ -1484,6 +1475,55 @@ export class PolymarketSignalService {
     }
 
     await this.storage.updateTrackedTraderPollState(trader.wallet, latestSeenTimestamp);
+  }
+
+  private async drainTrackedTraderPollQueue(): Promise<void> {
+    if (this.trackedTraderPollInFlight.size >= config.trackedTraderPollConcurrency) {
+      return;
+    }
+
+    const trackedTraders = await this.storage.loadTrackedTraders(
+      config.trackedTraderPollConcurrency * 4,
+    );
+
+    let started = 0;
+    for (const trader of trackedTraders) {
+      if (this.trackedTraderPollInFlight.size >= config.trackedTraderPollConcurrency) {
+        break;
+      }
+
+      if (this.trackedTraderPollInFlight.has(trader.wallet)) {
+        continue;
+      }
+
+      started += 1;
+      this.trackedTraderPollInFlight.add(trader.wallet);
+      this.runBackgroundTask(`tracked trader ${trader.wallet}`, this.runTrackedTraderPoll(trader));
+    }
+
+    if (started === 0 && this.trackedTraderPollInFlight.size === 0) {
+      this.scheduleTrackedTraderPollDrain(5_000);
+    }
+  }
+
+  private async runTrackedTraderPoll(trader: PersistedTrackedTrader): Promise<void> {
+    try {
+      await this.pollTrackedTrader(trader);
+    } finally {
+      this.trackedTraderPollInFlight.delete(trader.wallet);
+      this.scheduleTrackedTraderPollDrain(0);
+    }
+  }
+
+  private scheduleTrackedTraderPollDrain(delayMs: number): void {
+    if (this.trackedTraderPollDrainTimer) {
+      clearTimeout(this.trackedTraderPollDrainTimer);
+    }
+
+    this.trackedTraderPollDrainTimer = setTimeout(() => {
+      this.trackedTraderPollDrainTimer = null;
+      this.runBackgroundTask("tracked trader drain", this.drainTrackedTraderPollQueue());
+    }, delayMs);
   }
 
   private async getTradeCount(wallet: string): Promise<number> {
