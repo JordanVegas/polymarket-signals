@@ -102,6 +102,13 @@ export type MarketAggregate = {
   pros: number;
   weightedScore: number;
   outcomeWeights: Array<{ outcome: string; weight: number }>;
+  outcomeParticipants?: Array<{
+    wallet: string;
+    outcome: string;
+    weight: number;
+    tier: TraderSummary["tier"];
+    totalUsd: number;
+  }>;
   observedAvgEntry: number | null;
   participantCount: number;
   isWatched: boolean;
@@ -133,5 +140,31 @@ export type UserProfileResponse = {
     marketQuestion: string;
     marketUrl: string;
     source: "manual" | "portfolio_sync";
+  }>;
+};
+
+export type StrategyPosition = {
+  id: string;
+  marketSlug: string;
+  marketQuestion: string;
+  marketUrl: string;
+  marketImage: string;
+  outcome: string;
+  status: "open" | "closed";
+  openedAt: number;
+  updatedAt: number;
+  entryPrice: number;
+  lastPrice: number;
+  originalSmartMoneyWeight: number;
+  remainingSmartMoneyWeight: number;
+  soldPercent: number;
+  trim90Hit: boolean;
+  trim93Hit: boolean;
+  setupQuality: number;
+  exitReason?: string;
+  originalParticipants: Array<{
+    wallet: string;
+    weight: number;
+    tier: TraderSummary["tier"];
   }>;
 };

@@ -1,6 +1,6 @@
 import { MongoClient } from "mongodb";
 import { config } from "./config.js";
-import type { MarketAggregate, TradeRecord, TraderSummary, WhaleSignal } from "./types.js";
+import type { MarketAggregate, StrategyPosition, TradeRecord, TraderSummary, WhaleSignal } from "./types.js";
 
 type PersistedSignal = WhaleSignal & {
   updatedAt: Date;
@@ -102,6 +102,10 @@ export type PersistedAlertDelivery = {
   sentAt: Date;
 };
 
+export type PersistedStrategyPosition = StrategyPosition & {
+  updatedAtDate: Date;
+};
+
 export class SignalStorage {
   private client: MongoClient | null = null;
 
@@ -119,6 +123,9 @@ export class SignalStorage {
     await this.marketAggregateCollection().createIndex({ latestTimestamp: -1 });
     await this.marketAggregateCollection().createIndex({ weightedScore: -1, latestTimestamp: -1 });
     await this.marketAggregateCollection().createIndex({ participantCount: -1, latestTimestamp: -1 });
+    await this.strategyPositionCollection().createIndex({ id: 1 }, { unique: true });
+    await this.strategyPositionCollection().createIndex({ status: 1, updatedAt: -1 });
+    await this.strategyPositionCollection().createIndex({ marketSlug: 1, outcome: 1, status: 1 });
     await this.tradeCollection().createIndex({ tradeId: 1 }, { unique: true });
     await this.tradeCollection().createIndex({ timestamp: -1 });
     await this.observedTradeCollection().createIndex({ tradeId: 1 }, { unique: true });
@@ -208,6 +215,42 @@ export class SignalStorage {
 
   async deleteMarketAggregate(marketSlug: string): Promise<void> {
     await this.marketAggregateCollection().deleteOne({ marketSlug });
+  }
+
+  async loadStrategyPositions(limit = 100): Promise<StrategyPosition[]> {
+    const rows = await this.strategyPositionCollection()
+      .find({}, { sort: { updatedAt: -1 }, limit })
+      .toArray();
+
+    return rows.map(({ _id: _ignored, updatedAtDate: _updatedAtDate, ...position }) => position);
+  }
+
+  async loadOpenStrategyPosition(marketSlug: string, outcome: string): Promise<StrategyPosition | null> {
+    const row = await this.strategyPositionCollection().findOne({
+      marketSlug,
+      outcome,
+      status: "open",
+    });
+
+    if (!row) {
+      return null;
+    }
+
+    const { _id: _ignored, updatedAtDate: _updatedAtDate, ...position } = row;
+    return position;
+  }
+
+  async saveStrategyPosition(position: StrategyPosition): Promise<void> {
+    const payload: PersistedStrategyPosition = {
+      ...position,
+      updatedAtDate: new Date(),
+    };
+
+    await this.strategyPositionCollection().updateOne(
+      { id: position.id },
+      { $set: payload },
+      { upsert: true },
+    );
   }
 
   async markTradeProcessed(trade: PersistedTrade): Promise<boolean> {
@@ -605,6 +648,16 @@ export class SignalStorage {
     return this.client
       .db(config.mongoDbName)
       .collection<PersistedTrade>("processed_trades");
+  }
+
+  private strategyPositionCollection() {
+    if (!this.client) {
+      throw new Error("Mongo client not connected");
+    }
+
+    return this.client
+      .db(config.mongoDbName)
+      .collection<PersistedStrategyPosition>("strategy_positions");
   }
 
   private marketAggregateCollection() {

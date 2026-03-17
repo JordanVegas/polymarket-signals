@@ -108,6 +108,15 @@ app.get("/api/markets", async (request, response) => {
   response.json(await service.getMarketPage(sort, search, view, page, pageSize, request.sessionUser?.username));
 });
 
+app.get("/api/strategy-positions", async (request, response) => {
+  if (!request.sessionUser?.username) {
+    response.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  response.json(await service.getStrategyPositions());
+});
+
 app.post("/api/market-alerts/watch", async (request, response) => {
   try {
     const marketSlug = String(request.body.marketSlug ?? "").trim();

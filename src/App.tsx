@@ -92,8 +92,34 @@ type UserProfileResponse = {
   }>;
 };
 
+type StrategyPosition = {
+  id: string;
+  marketSlug: string;
+  marketQuestion: string;
+  marketUrl: string;
+  marketImage: string;
+  outcome: string;
+  status: "open" | "closed";
+  openedAt: number;
+  updatedAt: number;
+  entryPrice: number;
+  lastPrice: number;
+  originalSmartMoneyWeight: number;
+  remainingSmartMoneyWeight: number;
+  soldPercent: number;
+  trim90Hit: boolean;
+  trim93Hit: boolean;
+  setupQuality: number;
+  exitReason?: string;
+  originalParticipants: Array<{
+    wallet: string;
+    weight: number;
+    tier: TraderSummary["tier"];
+  }>;
+};
+
 type Language = "en" | "he";
-type PageRoute = "/" | "/best-trades" | "/profile";
+type PageRoute = "/" | "/best-trades" | "/auto-trade" | "/profile";
 
 const positiveOutcomeKeywords = ["yes", "up", "above", "over", "higher", "more", "long"];
 const negativeOutcomeKeywords = ["no", "down", "below", "under", "lower", "less", "short"];
@@ -123,7 +149,7 @@ const currencyFormatter = new Intl.NumberFormat("en-US", {
 const MARKET_PAGE_SIZE = 24;
 
 function getPageRoute(pathname: string): PageRoute {
-  if (pathname === "/profile" || pathname === "/best-trades") {
+  if (pathname === "/profile" || pathname === "/best-trades" || pathname === "/auto-trade") {
     return pathname;
   }
 
@@ -135,6 +161,7 @@ const copy = {
     profile: "Profile",
     monitor: "Monitor",
     bestTrades: "Best trades",
+    autoTrade: "Auto trade",
     menu: "Menu",
     closeMenu: "Close menu",
     frontendStream: "Frontend stream",
@@ -174,6 +201,16 @@ const copy = {
     vegasMonitor: "Vegas Monitor",
     bestTradesTitle: "Best trades",
     bestTradesSubtitle: "Highest-conviction markets surfaced by tracked smart money.",
+    autoTradeTitle: "Auto trade",
+    autoTradeSubtitle: "Paper positions based on the best-trade entry and thesis-break exit logic.",
+    noStrategyPositions: "No strategy positions yet.",
+    statusOpen: "Open",
+    statusClosed: "Closed",
+    soldPercent: "Sold",
+    remainingWeight: "Remaining weight",
+    originalWeight: "Original weight",
+    exitReason: "Exit reason",
+    openedAt: "Opened",
     search: "Search",
     searchPlaceholder: "Markets, outcomes, traders",
     sort: "Sort",
@@ -224,6 +261,7 @@ const copy = {
     profile: "פרופיל",
     monitor: "מוניטור",
     bestTrades: "העסקאות הטובות ביותר",
+    autoTrade: "מסחר אוטומטי",
     menu: "תפריט",
     closeMenu: "סגור תפריט",
     frontendStream: "חיבור לשרת",
@@ -263,6 +301,16 @@ const copy = {
     vegasMonitor: "Vegas Monitor",
     bestTradesTitle: "העסקאות הטובות ביותר",
     bestTradesSubtitle: "השווקים עם הכי הרבה שכנוע מצד כסף חכם במעקב.",
+    autoTradeTitle: "מסחר אוטומטי",
+    autoTradeSubtitle: "פוזיציות נייר שמבוססות על כניסת Best trade ויציאה לפי שבירת התזה.",
+    noStrategyPositions: "עדיין אין פוזיציות אסטרטגיה.",
+    statusOpen: "פתוח",
+    statusClosed: "סגור",
+    soldPercent: "נמכר",
+    remainingWeight: "משקל נותר",
+    originalWeight: "משקל מקורי",
+    exitReason: "סיבת יציאה",
+    openedAt: "נפתח",
     search: "חיפוש",
     searchPlaceholder: "שווקים, תוצאות, טריידרים",
     sort: "מיון",
@@ -352,6 +400,8 @@ function App() {
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [removingWatchKey, setRemovingWatchKey] = useState<string | null>(null);
   const [profileMessage, setProfileMessage] = useState<string | null>(null);
+  const [strategyPositions, setStrategyPositions] = useState<StrategyPosition[]>([]);
+  const [isLoadingStrategyPositions, setIsLoadingStrategyPositions] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const deferredSearchQuery = useDeferredValue(debouncedSearchQuery);
@@ -526,6 +576,39 @@ function App() {
       cancelled = true;
     };
   }, [currentPath, marketSort, deferredSearchQuery, pageCount, deferredRefreshVersion]);
+
+  useEffect(() => {
+    if (currentPath !== "/auto-trade") {
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadStrategyPositions = async () => {
+      setIsLoadingStrategyPositions(true);
+      try {
+        const response = await fetch("/api/strategy-positions");
+        const payload = (await response.json()) as StrategyPosition[] | { error?: string };
+        if (!response.ok) {
+          throw new Error((payload as { error?: string }).error || "Unable to load strategy positions");
+        }
+
+        if (!cancelled) {
+          setStrategyPositions(payload as StrategyPosition[]);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingStrategyPositions(false);
+        }
+      }
+    };
+
+    void loadStrategyPositions();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentPath, deferredRefreshVersion]);
 
   useEffect(() => {
     if (currentPath !== "/profile") {
@@ -784,6 +867,13 @@ function App() {
             </button>
             <button
               type="button"
+              className={`side-menu-link ${currentPath === "/auto-trade" ? "side-menu-link-active" : ""}`}
+              onClick={() => navigateTo("/auto-trade")}
+            >
+              {t.autoTrade}
+            </button>
+            <button
+              type="button"
               className={`side-menu-link ${currentPath === "/profile" ? "side-menu-link-active" : ""}`}
               onClick={() => navigateTo("/profile")}
             >
@@ -927,6 +1017,82 @@ function App() {
                 )}
               </div>
             </div>
+          </section>
+        ) : currentPath === "/auto-trade" ? (
+          <section className="feed-section">
+            <div className="feed-header">
+              <div>
+                <p className="section-kicker">{t.autoTrade}</p>
+                <h2>{t.autoTradeTitle}</h2>
+                <p className="feed-subtitle">{t.autoTradeSubtitle}</p>
+              </div>
+            </div>
+
+            {strategyPositions.length === 0 && !isLoadingStrategyPositions ? (
+              <div className="empty-state">
+                <div className="empty-pulse" />
+                <h3>{t.autoTradeTitle}</h3>
+                <p>{t.noStrategyPositions}</p>
+              </div>
+            ) : (
+              <div className="signal-grid">
+                {strategyPositions.map((position) => (
+                  <article className="signal-card" key={position.id}>
+                    <div className="signal-media">
+                      {normalizeSecureUrl(position.marketImage) ? (
+                        <img src={normalizeSecureUrl(position.marketImage)!} alt={position.marketQuestion} />
+                      ) : (
+                        <div className="image-fallback">{position.outcome[0]}</div>
+                      )}
+                      <div className={`pill ${position.status === "open" ? "pill-cyan" : "pill-neutral"}`}>
+                        {position.status === "open" ? t.statusOpen : t.statusClosed}
+                      </div>
+                    </div>
+
+                    <div className="signal-body">
+                      <div className="signal-topline">
+                        <span>{formatRelativeTime(position.updatedAt, t)}</span>
+                        <span>{t.openedAt}: {formatTimestamp(position.openedAt, t.pending)}</span>
+                      </div>
+
+                      <h3>{position.marketQuestion}</h3>
+                      <p className="signal-thesis">
+                        <strong>{position.outcome}</strong>
+                        <span className="signal-thesis-trade">
+                          <span>{t.confidence}</span>
+                          <span className="outcome-chip outcome-chip-positive">{position.setupQuality}/100</span>
+                        </span>
+                      </p>
+
+                      <div className="metric-row">
+                        <Metric label={t.avgEntry} value={position.entryPrice.toFixed(3)} />
+                        <Metric label={t.lastPrice} value={position.lastPrice.toFixed(3)} />
+                        <Metric label={t.soldPercent} value={`${position.soldPercent}%`} />
+                      </div>
+
+                      <div className="metric-row">
+                        <Metric label={t.originalWeight} value={position.originalSmartMoneyWeight.toString()} />
+                        <Metric label={t.remainingWeight} value={position.remainingSmartMoneyWeight.toString()} />
+                        <Metric label={t.traders} value={position.originalParticipants.length.toString()} />
+                      </div>
+
+                      {position.exitReason ? (
+                        <p className="signal-rationale">
+                          <span>{t.exitReason}</span>
+                          <strong>{position.exitReason}</strong>
+                        </p>
+                      ) : null}
+
+                      <div className="signal-actions">
+                        <a href={normalizeSecureUrl(position.marketUrl) ?? position.marketUrl} target="_blank" rel="noreferrer">
+                          {t.openMarket}
+                        </a>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
           </section>
         ) : (
           <section className="feed-section">

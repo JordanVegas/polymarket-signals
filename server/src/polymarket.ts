@@ -8,6 +8,7 @@ import type {
   MarketPageResponse,
   MarketRecord,
   MarketSortOption,
+  StrategyPosition,
   TradeRecord,
   TraderSummary,
   UserProfileResponse,
@@ -243,6 +244,7 @@ export class PolymarketSignalService {
     await this.syncMarkets();
     this.captureInitialActiveMarkets();
     this.runBackgroundTask("market aggregate refresh", this.refreshMarketAggregates());
+    this.runBackgroundTask("strategy position refresh", this.reconcileAllStrategyPositions());
     this.startTradePolling();
     this.runBackgroundTask("recent catch-up", this.catchUpRecentTrades());
     if (config.historicalFetchEnabled && config.startupHistoricalBackfillEnabled) {
@@ -432,6 +434,10 @@ export class PolymarketSignalService {
         };
       }),
     };
+  }
+
+  async getStrategyPositions(): Promise<StrategyPosition[]> {
+    return this.storage.loadStrategyPositions(200);
   }
 
   async updateUserProfile(
@@ -1289,6 +1295,7 @@ export class PolymarketSignalService {
     await this.storage.saveCluster(this.toPersistedCluster(accumulator));
     await this.storage.saveSignal(styledSignal);
     await this.refreshMarketAggregate(accumulator.market.slug);
+    await this.reconcileStrategyPosition(accumulator.market.slug);
 
     if (config.marketHistoryCatchupEnabled && this.initialActiveConditionIds.has(accumulator.market.conditionId)) {
       this.runBackgroundTask(
@@ -1522,6 +1529,128 @@ export class PolymarketSignalService {
     }
 
     await this.storage.deleteMarketAggregate(marketSlug);
+  }
+
+  private async reconcileAllStrategyPositions(): Promise<void> {
+    const activeMarketSlugs = Array.from(
+      new Set(Array.from(this.marketsByAssetId.values(), (market) => market.slug)),
+    );
+
+    for (const marketSlug of activeMarketSlugs) {
+      await this.reconcileStrategyPosition(marketSlug);
+    }
+  }
+
+  private async reconcileStrategyPosition(marketSlug: string): Promise<void> {
+    const aggregate = (await this.storage.loadMarketAggregates([marketSlug]))[0];
+    if (!aggregate) {
+      return;
+    }
+
+    const edgeOutcome = aggregate.outcomeWeights[0]?.outcome ?? aggregate.latestSignal.outcome;
+    const setupQuality = getSetupQualityScore(aggregate);
+    const currentPrice = aggregate.latestSignal.averagePrice;
+    const currentParticipants =
+      aggregate.outcomeParticipants?.filter((participant) => participant.outcome === edgeOutcome) ?? [];
+    const currentWeightByWallet = new Map(
+      currentParticipants.map((participant) => [participant.wallet, participant.weight] as const),
+    );
+    const position = await this.storage.loadOpenStrategyPosition(marketSlug, edgeOutcome);
+
+    if (!position) {
+      if (!isBestTradeMarket(aggregate)) {
+        return;
+      }
+
+      const originalParticipants = currentParticipants.map((participant) => ({
+        wallet: participant.wallet,
+        weight: participant.weight,
+        tier: participant.tier,
+      }));
+      const originalSmartMoneyWeight = originalParticipants.reduce(
+        (sum, participant) => sum + participant.weight,
+        0,
+      );
+      if (originalSmartMoneyWeight <= 0) {
+        return;
+      }
+
+      const nextPosition: StrategyPosition = {
+        id: `${marketSlug}:${edgeOutcome}`,
+        marketSlug,
+        marketQuestion: aggregate.marketQuestion,
+        marketUrl: aggregate.marketUrl,
+        marketImage: aggregate.marketImage,
+        outcome: edgeOutcome,
+        status: "open",
+        openedAt: Date.now(),
+        updatedAt: Date.now(),
+        entryPrice: currentPrice,
+        lastPrice: currentPrice,
+        originalSmartMoneyWeight,
+        remainingSmartMoneyWeight: originalSmartMoneyWeight,
+        soldPercent: 0,
+        trim90Hit: false,
+        trim93Hit: false,
+        setupQuality,
+        originalParticipants,
+      };
+      await this.storage.saveStrategyPosition(nextPosition);
+      return;
+    }
+
+    const remainingSmartMoneyWeight = position.originalParticipants.reduce(
+      (sum, participant) => sum + (currentWeightByWallet.get(participant.wallet) ?? 0),
+      0,
+    );
+    const exitedWeight = Math.max(0, position.originalSmartMoneyWeight - remainingSmartMoneyWeight);
+    const exitedRatio =
+      position.originalSmartMoneyWeight > 0 ? exitedWeight / position.originalSmartMoneyWeight : 0;
+    const qualifiesIgnoringPriceCap = isBestTradeMarket(aggregate, { ignorePriceCap: true });
+
+    let nextPosition: StrategyPosition = {
+      ...position,
+      updatedAt: Date.now(),
+      lastPrice: currentPrice,
+      remainingSmartMoneyWeight,
+      setupQuality,
+    };
+
+    if (!nextPosition.trim90Hit && currentPrice >= 0.9) {
+      nextPosition = {
+        ...nextPosition,
+        soldPercent: Math.max(nextPosition.soldPercent, 25),
+        trim90Hit: true,
+      };
+    }
+
+    if (!nextPosition.trim93Hit && currentPrice >= 0.93) {
+      nextPosition = {
+        ...nextPosition,
+        soldPercent: Math.max(nextPosition.soldPercent, 50),
+        trim93Hit: true,
+      };
+    }
+
+    let exitReason: string | undefined;
+    if (!qualifiesIgnoringPriceCap) {
+      exitReason = "Thesis break";
+    } else if (currentPrice >= 0.995) {
+      exitReason = "Take profit 0.995";
+    } else if (exitedRatio >= 0.5) {
+      exitReason = "50% smart-money weight exited";
+    }
+
+    if (exitReason) {
+      nextPosition = {
+        ...nextPosition,
+        status: "closed",
+        soldPercent: 100,
+        exitReason,
+      };
+    }
+
+    await this.storage.saveStrategyPosition(nextPosition);
   }
 
   private async drainTrackedTraderPollQueue(): Promise<void> {
@@ -1985,6 +2114,25 @@ const aggregateMarkets = (signals: WhaleSignal[]): MarketAggregate[] => {
     aggregate.outcomeWeights = Array.from(outcomeWeights.entries())
       .map(([outcome, weight]) => ({ outcome, weight }))
       .sort((left, right) => right.weight - left.weight);
+    aggregate.outcomeParticipants = Array.from(outcomeTraders?.entries() ?? [])
+      .flatMap(([wallet, traderOutcomes]) =>
+        Array.from(traderOutcomes.entries()).flatMap(([outcome, { totalUsd, trader }]) => {
+          if (totalUsd < 1_000 || trader.tier === "none") {
+            return [];
+          }
+
+          return [
+            {
+              wallet,
+              outcome,
+              weight: trader.weight,
+              tier: trader.tier,
+              totalUsd,
+            },
+          ];
+        }),
+      )
+      .sort((left, right) => right.weight - left.weight || right.totalUsd - left.totalUsd);
     const leadingOutcome = aggregate.outcomeWeights[0]?.outcome;
     const leadingOutcomeTotals = leadingOutcome ? outcomeTotals?.get(leadingOutcome) : undefined;
     aggregate.observedAvgEntry =
@@ -2108,10 +2256,13 @@ const applyViewFilter = (
     return markets;
   }
 
-  return markets.filter(isBestTradeMarket);
+  return markets.filter((market) => isBestTradeMarket(market));
 };
 
-const isBestTradeMarket = (market: MarketAggregate): boolean => {
+const isBestTradeMarket = (
+  market: MarketAggregate,
+  options?: { ignorePriceCap?: boolean },
+): boolean => {
   const leadingOutcomeWeight = market.outcomeWeights[0]?.weight ?? 0;
   if (market.weightedScore < 70) {
     return false;
@@ -2134,12 +2285,47 @@ const isBestTradeMarket = (market: MarketAggregate): boolean => {
   }
 
   const currentDisplayedPrice = market.latestSignal.averagePrice;
-  if (currentDisplayedPrice >= 0.9) {
+  if (!options?.ignorePriceCap && currentDisplayedPrice >= 0.9) {
     return false;
   }
 
   const priceDeviation = Math.abs(currentDisplayedPrice - market.observedAvgEntry) / market.observedAvgEntry;
   return priceDeviation <= 0.05;
+};
+
+const getSetupQualityScore = (market: MarketAggregate): number => {
+  const totalWeight = Math.max(0, market.weightedScore);
+  const leadingWeight = Math.max(0, market.outcomeWeights[0]?.weight ?? 0);
+  const dominanceRatio = totalWeight > 0 ? leadingWeight / totalWeight : 0;
+  const participantCount = Math.max(0, market.participantCount);
+  const lastPrice = market.latestSignal.averagePrice;
+  const avgEntry = market.observedAvgEntry;
+  const ageMinutes = Math.max(0, (Date.now() - market.latestTimestamp) / 60_000);
+
+  const weightScore = Math.min(100, (totalWeight / 120) * 100);
+  const dominanceScore = Math.max(0, Math.min(100, ((dominanceRatio - 0.5) / 0.5) * 100));
+  const participantScore = Math.min(100, (participantCount / 10) * 100);
+  const proximityScore =
+    avgEntry && avgEntry > 0
+      ? Math.max(0, 100 - (Math.abs(lastPrice - avgEntry) / avgEntry) * 2000)
+      : 0;
+  const freshnessScore = Math.max(0, 100 - ageMinutes / 14.4);
+  const priceScore = lastPrice < 0.9 ? Math.max(0, Math.min(100, ((0.9 - lastPrice) / 0.9) * 100)) : 0;
+
+  return Math.max(
+    1,
+    Math.min(
+      99,
+      Math.round(
+        weightScore * 0.3 +
+          dominanceScore * 0.25 +
+          participantScore * 0.15 +
+          proximityScore * 0.15 +
+          freshnessScore * 0.1 +
+          priceScore * 0.05,
+      ),
+    ),
+  );
 };
 
 const getMarketWatchOutcome = (market: MarketAggregate): string =>
