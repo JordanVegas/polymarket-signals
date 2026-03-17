@@ -450,6 +450,7 @@ export class PolymarketSignalService {
   }
 
   async getStrategyPositions(username: string): Promise<StrategyPosition[]> {
+    await this.reconcileStrategyPositionsForUser(username);
     return this.storage.loadStrategyPositions(username, 200);
   }
 
@@ -545,6 +546,7 @@ export class PolymarketSignalService {
       clearTradingCredentials: updates.clearTradingCredentials,
     });
     await this.syncTrackedWalletWatchesForUser(normalizedUsername, normalizedMonitoredWallet);
+    await this.reconcileStrategyPositionsForUser(normalizedUsername);
     return this.getUserProfile(normalizedUsername);
   }
 
@@ -1621,6 +1623,20 @@ export class PolymarketSignalService {
       for (const user of autoTradeUsers) {
         await this.reconcileStrategyPosition(marketSlug, user);
       }
+    }
+  }
+
+  private async reconcileStrategyPositionsForUser(username: string): Promise<void> {
+    const activeMarketSlugs = Array.from(
+      new Set(Array.from(this.marketsByAssetId.values(), (market) => market.slug)),
+    );
+    const autoTradeUser = (await this.storage.loadAutoTradeUsers()).find((user) => user.username === username);
+    if (!autoTradeUser) {
+      return;
+    }
+
+    for (const marketSlug of activeMarketSlugs) {
+      await this.reconcileStrategyPosition(marketSlug, autoTradeUser);
     }
   }
 
