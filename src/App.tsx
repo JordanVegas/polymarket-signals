@@ -470,12 +470,6 @@ function App() {
   }, [marketSort, deferredSearchQuery]);
 
   useEffect(() => {
-    if (currentPath === "/best-trades" && marketSort === "recent") {
-      setMarketSort("weighted");
-    }
-  }, [currentPath, marketSort]);
-
-  useEffect(() => {
     if (currentPath === "/profile") {
       return;
     }
