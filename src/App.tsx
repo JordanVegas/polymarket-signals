@@ -190,7 +190,7 @@ const copy = {
     marketFlow: "Market flow",
     lastPrice: "Last price",
     weighted: "Weighted",
-    confidence: "Confidence",
+    confidence: "Setup quality",
     outcome1: "Outcome 1",
     outcome2: "Outcome 2",
     avgEntry: "Avg entry",
@@ -279,7 +279,7 @@ const copy = {
     marketFlow: "נפח שוק",
     lastPrice: "מחיר אחרון",
     weighted: "משקל",
-    confidence: "ביטחון",
+    confidence: "איכות הסטאפ",
     outcome1: "תוצאה 1",
     outcome2: "תוצאה 2",
     avgEntry: "ממוצע כניסה",
@@ -979,7 +979,7 @@ function App() {
                       weight: number;
                     }>;
                     const edgeLabel = formatOutcomeEdge(visibleOutcomeWeights, t.even);
-                    const confidenceScore = getSignalConfidence(signal);
+                    const confidenceScore = getSetupQuality(market);
                     const signalRationale = getSignalRationale(signal, t);
 
                     return (
@@ -1175,24 +1175,35 @@ function getOutcomeTone(outcome: string) {
   return "neutral";
 }
 
-function getSignalConfidence(signal: WhaleSignal) {
-  const tierBonus =
-    signal.trader.tier === "whale"
-      ? 28
-      : signal.trader.tier === "shark"
-        ? 18
-        : signal.trader.tier === "pro"
-          ? 10
-          : 0;
-  const pnlBonus = Math.min(18, Math.max(0, signal.trader.totalPnl / 10_000));
-  const tradeCountBonus = Math.min(14, signal.trader.tradeCount / 12);
-  const sizeBonus = Math.min(16, signal.totalUsd / 2_500);
-  const fillBonus = Math.min(6, signal.fillCount);
+function getSetupQuality(market: MarketAggregate) {
+  const totalWeight = Math.max(0, market.weightedScore);
+  const leadingWeight = Math.max(0, market.outcomeWeights[0]?.weight ?? 0);
+  const dominanceRatio = totalWeight > 0 ? leadingWeight / totalWeight : 0;
+  const participantCount = Math.max(0, market.participantCount);
+  const lastPrice = market.latestSignal.averagePrice;
+  const avgEntry = market.observedAvgEntry;
+  const ageMinutes = Math.max(0, (Date.now() - market.latestTimestamp) / 60_000);
 
-  return Math.max(
-    50,
-    Math.min(99, Math.round(30 + tierBonus + pnlBonus + tradeCountBonus + sizeBonus + fillBonus)),
-  );
+  const weightScore = Math.min(100, (totalWeight / 120) * 100);
+  const dominanceScore = Math.max(0, Math.min(100, ((dominanceRatio - 0.5) / 0.5) * 100));
+  const participantScore = Math.min(100, (participantCount / 10) * 100);
+  const proximityScore =
+    avgEntry && avgEntry > 0
+      ? Math.max(0, 100 - (Math.abs(lastPrice - avgEntry) / avgEntry) * 2000)
+      : 0;
+  const freshnessScore = Math.max(0, 100 - ageMinutes / 14.4);
+  const priceScore =
+    lastPrice < 0.9 ? Math.max(0, Math.min(100, ((0.9 - lastPrice) / 0.9) * 100)) : 0;
+
+  const weightedScore =
+    weightScore * 0.3 +
+    dominanceScore * 0.25 +
+    participantScore * 0.15 +
+    proximityScore * 0.15 +
+    freshnessScore * 0.1 +
+    priceScore * 0.05;
+
+  return Math.max(1, Math.min(99, Math.round(weightedScore)));
 }
 
 function getTierLabel(tier: TraderSummary["tier"], t: (typeof copy)["en"]) {
