@@ -2589,8 +2589,8 @@ const buildStrategyDashboard = (
     (sum, position) => sum + position.remainingShares * position.lastPrice,
     0,
   );
-  const realizedUsd = positions.reduce(
-    (sum, position) => sum + (position.realizedUsd - position.entryNotionalUsd * (position.soldPercent / 100)),
+  const unrealizedUsd = openPositions.reduce(
+    (sum, position) => sum + (position.remainingShares * position.lastPrice - position.remainingShares * position.entryPrice),
     0,
   );
   const trades = positions
@@ -2604,7 +2604,7 @@ const buildStrategyDashboard = (
       closedPositionCount: closedPositions.length,
       totalPositionCount: positions.length,
       openExposureUsd,
-      realizedUsd,
+      unrealizedUsd,
       totalEquityUsd: cashBalanceUsd + openExposureUsd,
     },
     positions,

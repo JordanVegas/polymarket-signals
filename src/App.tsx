@@ -150,7 +150,7 @@ type StrategyDashboardResponse = {
     closedPositionCount: number;
     totalPositionCount: number;
     openExposureUsd: number;
-    realizedUsd: number;
+    unrealizedUsd: number;
     totalEquityUsd: number;
   };
   positions: StrategyPosition[];
@@ -269,7 +269,7 @@ const copy = {
     cashBalance: "Cash balance",
     openExposure: "Open exposure",
     totalEquity: "Total equity",
-    realizedPnl: "Realized",
+    realizedPnl: "Unrealized",
     openPositions: "Open positions",
     closedPositions: "Closed positions",
     entrySize: "Entry size",
@@ -409,7 +409,7 @@ const copy = {
     cashBalance: "מזומן",
     openExposure: "חשיפה פתוחה",
     totalEquity: "שווי כולל",
-    realizedPnl: "מומש",
+    realizedPnl: "לא ממומש",
     openPositions: "פוזיציות פתוחות",
     closedPositions: "פוזיציות סגורות",
     entrySize: "גודל כניסה",
@@ -537,7 +537,7 @@ function App() {
       closedPositionCount: 0,
       totalPositionCount: 0,
       openExposureUsd: 0,
-      realizedUsd: 0,
+      unrealizedUsd: 0,
       totalEquityUsd: 0,
     },
     positions: [],
@@ -1333,7 +1333,7 @@ function App() {
               <StatusRow label={t.cashBalance} value={currencyFormatter.format(strategyDashboard.summary.cashBalanceUsd)} tone="neutral" />
               <StatusRow label={t.openExposure} value={currencyFormatter.format(strategyDashboard.summary.openExposureUsd)} tone="neutral" />
               <StatusRow label={t.totalEquity} value={currencyFormatter.format(strategyDashboard.summary.totalEquityUsd)} tone="green" />
-              <StatusRow label={t.realizedPnl} value={currencyFormatter.format(strategyDashboard.summary.realizedUsd)} tone={strategyDashboard.summary.realizedUsd >= 0 ? "green" : "blue"} />
+              <StatusRow label={t.realizedPnl} value={currencyFormatter.format(strategyDashboard.summary.unrealizedUsd)} tone={strategyDashboard.summary.unrealizedUsd >= 0 ? "green" : "blue"} />
               <StatusRow label={t.openPositions} value={strategyDashboard.summary.openPositionCount.toString()} tone="neutral" />
               <StatusRow label={t.closedPositions} value={strategyDashboard.summary.closedPositionCount.toString()} tone="neutral" />
             </div>
