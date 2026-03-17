@@ -558,6 +558,16 @@ a {
   cursor: wait;
 }
 
+.auto-trade-stats {
+  margin-bottom: 14px;
+}
+
+.strategy-trade-amount {
+  color: #dffcff;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.78rem;
+}
+
 .profile-empty {
   margin: 0;
 }

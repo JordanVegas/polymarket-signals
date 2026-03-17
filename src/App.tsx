@@ -129,6 +129,34 @@ type StrategyPosition = {
   }>;
 };
 
+type StrategyTrade = {
+  id: string;
+  marketSlug: string;
+  marketQuestion: string;
+  marketUrl: string;
+  outcome: string;
+  side: "BUY" | "SELL";
+  reason: string;
+  timestamp: number;
+  price: number;
+  shares: number;
+  usd: number;
+};
+
+type StrategyDashboardResponse = {
+  summary: {
+    cashBalanceUsd: number;
+    openPositionCount: number;
+    closedPositionCount: number;
+    totalPositionCount: number;
+    openExposureUsd: number;
+    realizedUsd: number;
+    totalEquityUsd: number;
+  };
+  positions: StrategyPosition[];
+  trades: StrategyTrade[];
+};
+
 type Language = "en" | "he";
 type PageRoute = "/" | "/best-trades" | "/auto-trade" | "/profile";
 
@@ -238,6 +266,21 @@ const copy = {
     autoTradeTitle: "Auto trade",
     autoTradeSubtitle: "Paper positions based on the best-trade entry and thesis-break exit logic.",
     noStrategyPositions: "No strategy positions yet.",
+    cashBalance: "Cash balance",
+    openExposure: "Open exposure",
+    totalEquity: "Total equity",
+    realizedPnl: "Realized",
+    openPositions: "Open positions",
+    closedPositions: "Closed positions",
+    entrySize: "Entry size",
+    positionValue: "Position value",
+    remainingShares: "Remaining shares",
+    strategyTrades: "Strategy trades",
+    noStrategyTrades: "No strategy trades yet.",
+    entryTrade: "Entry",
+    trim90: "Trim 0.90",
+    trim93: "Trim 0.93",
+    finalExit: "Final exit",
     statusOpen: "Open",
     statusClosed: "Closed",
     soldPercent: "Sold",
@@ -361,6 +404,21 @@ const copy = {
     autoTradeTitle: "מסחר אוטומטי",
     autoTradeSubtitle: "פוזיציות נייר שמבוססות על כניסת Best trade ויציאה לפי שבירת התזה.",
     noStrategyPositions: "עדיין אין פוזיציות אסטרטגיה.",
+    cashBalance: "מזומן",
+    openExposure: "חשיפה פתוחה",
+    totalEquity: "שווי כולל",
+    realizedPnl: "מומש",
+    openPositions: "פוזיציות פתוחות",
+    closedPositions: "פוזיציות סגורות",
+    entrySize: "גודל כניסה",
+    positionValue: "שווי פוזיציה",
+    remainingShares: "שאר מניות",
+    strategyTrades: "עסקאות אסטרטגיה",
+    noStrategyTrades: "עדיין אין עסקאות אסטרטגיה.",
+    entryTrade: "כניסה",
+    trim90: "מימוש 0.90",
+    trim93: "מימוש 0.93",
+    finalExit: "יציאה סופית",
     statusOpen: "פתוח",
     statusClosed: "סגור",
     soldPercent: "נמכר",
@@ -468,7 +526,19 @@ function App() {
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [removingWatchKey, setRemovingWatchKey] = useState<string | null>(null);
   const [profileMessage, setProfileMessage] = useState<string | null>(null);
-  const [strategyPositions, setStrategyPositions] = useState<StrategyPosition[]>([]);
+  const [strategyDashboard, setStrategyDashboard] = useState<StrategyDashboardResponse>({
+    summary: {
+      cashBalanceUsd: 0,
+      openPositionCount: 0,
+      closedPositionCount: 0,
+      totalPositionCount: 0,
+      openExposureUsd: 0,
+      realizedUsd: 0,
+      totalEquityUsd: 0,
+    },
+    positions: [],
+    trades: [],
+  });
   const [isLoadingStrategyPositions, setIsLoadingStrategyPositions] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
@@ -656,13 +726,13 @@ function App() {
       setIsLoadingStrategyPositions(true);
       try {
         const response = await fetch("/api/strategy-positions");
-        const payload = (await response.json()) as StrategyPosition[] | { error?: string };
+        const payload = (await response.json()) as StrategyDashboardResponse | { error?: string };
         if (!response.ok) {
           throw new Error((payload as { error?: string }).error || "Unable to load strategy positions");
         }
 
         if (!cancelled) {
-          setStrategyPositions(payload as StrategyPosition[]);
+          setStrategyDashboard(payload as StrategyDashboardResponse);
         }
       } finally {
         if (!cancelled) {
@@ -1255,7 +1325,16 @@ function App() {
               </div>
             </div>
 
-            {strategyPositions.length === 0 && !isLoadingStrategyPositions ? (
+            <div className="hero-panel auto-trade-stats">
+              <StatusRow label={t.cashBalance} value={currencyFormatter.format(strategyDashboard.summary.cashBalanceUsd)} tone="neutral" />
+              <StatusRow label={t.openExposure} value={currencyFormatter.format(strategyDashboard.summary.openExposureUsd)} tone="neutral" />
+              <StatusRow label={t.totalEquity} value={currencyFormatter.format(strategyDashboard.summary.totalEquityUsd)} tone="green" />
+              <StatusRow label={t.realizedPnl} value={currencyFormatter.format(strategyDashboard.summary.realizedUsd)} tone={strategyDashboard.summary.realizedUsd >= 0 ? "green" : "blue"} />
+              <StatusRow label={t.openPositions} value={strategyDashboard.summary.openPositionCount.toString()} tone="neutral" />
+              <StatusRow label={t.closedPositions} value={strategyDashboard.summary.closedPositionCount.toString()} tone="neutral" />
+            </div>
+
+            {strategyDashboard.positions.length === 0 && !isLoadingStrategyPositions ? (
               <div className="empty-state">
                 <div className="empty-pulse" />
                 <h3>{t.autoTradeTitle}</h3>
@@ -1263,7 +1342,7 @@ function App() {
               </div>
             ) : (
               <div className="signal-grid">
-                {strategyPositions.map((position) => (
+                {strategyDashboard.positions.map((position) => (
                   <article className="signal-card" key={position.id}>
                     <div className="signal-media">
                       {normalizeSecureUrl(position.marketImage) ? (
@@ -1298,6 +1377,12 @@ function App() {
                       </div>
 
                       <div className="metric-row">
+                        <Metric label={t.entrySize} value={currencyFormatter.format(position.entryNotionalUsd)} />
+                        <Metric label={t.positionValue} value={currencyFormatter.format(position.remainingShares * position.lastPrice)} />
+                        <Metric label={t.remainingShares} value={position.remainingShares.toFixed(2)} />
+                      </div>
+
+                      <div className="metric-row">
                         <Metric label={t.originalWeight} value={position.originalSmartMoneyWeight.toString()} />
                         <Metric label={t.remainingWeight} value={position.remainingSmartMoneyWeight.toString()} />
                         <Metric label={t.traders} value={position.originalParticipants.length.toString()} />
@@ -1320,6 +1405,35 @@ function App() {
                 ))}
               </div>
             )}
+
+            <div className="profile-watches">
+              <div className="profile-watches-header">
+                <p className="section-kicker">{t.strategyTrades}</p>
+              </div>
+              {strategyDashboard.trades.length ? (
+                <div className="profile-watch-list">
+                  {strategyDashboard.trades.map((trade) => (
+                    <article className="profile-watch-item" key={trade.id}>
+                      <div className="profile-watch-copy">
+                        <strong>{trade.marketQuestion}</strong>
+                        <span>{`${trade.side} ${trade.outcome}`}</span>
+                        <span>{`${trade.reason} · ${formatRelativeTime(trade.timestamp, t)}`}</span>
+                      </div>
+                      <div className="profile-watch-actions">
+                        <span className="strategy-trade-amount">
+                          {currencyFormatter.format(trade.usd)} @ {trade.price.toFixed(3)}
+                        </span>
+                        <a href={normalizeSecureUrl(trade.marketUrl) ?? trade.marketUrl} target="_blank" rel="noreferrer">
+                          {t.openMarket}
+                        </a>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <p className="profile-empty">{t.noStrategyTrades}</p>
+              )}
+            </div>
           </section>
         ) : (
           <section className="feed-section">

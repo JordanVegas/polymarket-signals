@@ -179,3 +179,31 @@ export type StrategyPosition = {
     tier: TraderSummary["tier"];
   }>;
 };
+
+export type StrategyTrade = {
+  id: string;
+  marketSlug: string;
+  marketQuestion: string;
+  marketUrl: string;
+  outcome: string;
+  side: "BUY" | "SELL";
+  reason: string;
+  timestamp: number;
+  price: number;
+  shares: number;
+  usd: number;
+};
+
+export type StrategyDashboardResponse = {
+  summary: {
+    cashBalanceUsd: number;
+    openPositionCount: number;
+    closedPositionCount: number;
+    totalPositionCount: number;
+    openExposureUsd: number;
+    realizedUsd: number;
+    totalEquityUsd: number;
+  };
+  positions: StrategyPosition[];
+  trades: StrategyTrade[];
+};

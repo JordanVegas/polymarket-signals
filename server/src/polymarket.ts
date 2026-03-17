@@ -9,7 +9,9 @@ import type {
   MarketPageResponse,
   MarketRecord,
   MarketSortOption,
+  StrategyDashboardResponse,
   StrategyPosition,
+  StrategyTrade,
   TradeRecord,
   TraderSummary,
   UserProfileResponse,
@@ -448,8 +450,12 @@ export class PolymarketSignalService {
     };
   }
 
-  async getStrategyPositions(username: string): Promise<StrategyPosition[]> {
-    return this.storage.loadStrategyPositions(username, 200);
+  async getStrategyPositions(username: string): Promise<StrategyDashboardResponse> {
+    const [positions, settings] = await Promise.all([
+      this.storage.loadStrategyPositions(username, 200),
+      this.storage.getUserSettings(username),
+    ]);
+    return buildStrategyDashboard(positions, settings.currentBalanceUsd ?? settings.startingBalanceUsd ?? 0);
   }
 
   async updateUserProfile(
@@ -1704,7 +1710,7 @@ export class PolymarketSignalService {
     };
 
     if (!nextPosition.trim90Hit && currentPrice >= 0.9) {
-      const sharesToSell = position.remainingShares * 0.5;
+      const sharesToSell = Math.min(nextPosition.remainingShares, (position.entryNotionalUsd / position.entryPrice) * 0.25);
       const realizedUsd = sharesToSell * currentPrice;
       nextPosition = {
         ...nextPosition,
@@ -1720,7 +1726,7 @@ export class PolymarketSignalService {
     }
 
     if (!nextPosition.trim93Hit && currentPrice >= 0.93) {
-      const sharesToSell = nextPosition.remainingShares / 3;
+      const sharesToSell = Math.min(nextPosition.remainingShares, (position.entryNotionalUsd / position.entryPrice) * 0.25);
       const realizedUsd = sharesToSell * currentPrice;
       nextPosition = {
         ...nextPosition,
@@ -2464,3 +2470,106 @@ const formatUsd = (value: number): string =>
     currency: "USD",
     maximumFractionDigits: 0,
   }).format(value);
+
+const buildStrategyDashboard = (
+  positions: StrategyPosition[],
+  cashBalanceUsd: number,
+): StrategyDashboardResponse => {
+  const openPositions = positions.filter((position) => position.status === "open");
+  const closedPositions = positions.filter((position) => position.status === "closed");
+  const openExposureUsd = openPositions.reduce(
+    (sum, position) => sum + position.remainingShares * position.lastPrice,
+    0,
+  );
+  const realizedUsd = positions.reduce(
+    (sum, position) => sum + (position.realizedUsd - position.entryNotionalUsd * (position.soldPercent / 100)),
+    0,
+  );
+  const trades = positions
+    .flatMap((position) => buildStrategyTrades(position))
+    .sort((left, right) => right.timestamp - left.timestamp);
+
+  return {
+    summary: {
+      cashBalanceUsd,
+      openPositionCount: openPositions.length,
+      closedPositionCount: closedPositions.length,
+      totalPositionCount: positions.length,
+      openExposureUsd,
+      realizedUsd,
+      totalEquityUsd: cashBalanceUsd + openExposureUsd,
+    },
+    positions,
+    trades,
+  };
+};
+
+const buildStrategyTrades = (position: StrategyPosition): StrategyTrade[] => {
+  const trades: StrategyTrade[] = [];
+  const initialShares = position.entryPrice > 0 ? position.entryNotionalUsd / position.entryPrice : 0;
+  const quarterShares = initialShares * 0.25;
+
+  trades.push({
+    id: `${position.id}:entry`,
+    marketSlug: position.marketSlug,
+    marketQuestion: position.marketQuestion,
+    marketUrl: position.marketUrl,
+    outcome: position.outcome,
+    side: "BUY",
+    reason: "Entry",
+    timestamp: position.openedAt,
+    price: position.entryPrice,
+    shares: initialShares,
+    usd: position.entryNotionalUsd,
+  });
+
+  if (position.trim90Hit) {
+    trades.push({
+      id: `${position.id}:trim90`,
+      marketSlug: position.marketSlug,
+      marketQuestion: position.marketQuestion,
+      marketUrl: position.marketUrl,
+      outcome: position.outcome,
+      side: "SELL",
+      reason: "Trim 0.90",
+      timestamp: position.updatedAt,
+      price: 0.9,
+      shares: quarterShares,
+      usd: quarterShares * 0.9,
+    });
+  }
+
+  if (position.trim93Hit) {
+    trades.push({
+      id: `${position.id}:trim93`,
+      marketSlug: position.marketSlug,
+      marketQuestion: position.marketQuestion,
+      marketUrl: position.marketUrl,
+      outcome: position.outcome,
+      side: "SELL",
+      reason: "Trim 0.93",
+      timestamp: position.updatedAt,
+      price: 0.93,
+      shares: quarterShares,
+      usd: quarterShares * 0.93,
+    });
+  }
+
+  if (position.status === "closed") {
+    trades.push({
+      id: `${position.id}:final`,
+      marketSlug: position.marketSlug,
+      marketQuestion: position.marketQuestion,
+      marketUrl: position.marketUrl,
+      outcome: position.outcome,
+      side: "SELL",
+      reason: position.exitReason || "Final exit",
+      timestamp: position.updatedAt,
+      price: position.lastPrice,
+      shares: initialShares * 0.5,
+      usd: initialShares * 0.5 * position.lastPrice,
+    });
+  }
+
+  return trades;
+};
