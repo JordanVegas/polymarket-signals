@@ -1818,6 +1818,8 @@ export class PolymarketSignalService {
 
   private async refreshGapCandidates(): Promise<void> {
     const nextCandidates = this.buildGapCandidates();
+    const nextCandidateIds = nextCandidates.map((candidate) => candidate.id);
+    await this.storage.pruneGapOpportunities(nextCandidateIds);
     const previousIds = new Set(this.gapCandidatesById.keys());
     this.gapCandidatesById.clear();
     this.gapCandidateIdsByAssetId.clear();

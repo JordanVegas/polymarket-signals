@@ -299,6 +299,17 @@ export class SignalStorage {
     await this.gapOpportunityCollection().deleteOne({ id });
   }
 
+  async pruneGapOpportunities(validIds: string[]): Promise<void> {
+    if (validIds.length === 0) {
+      await this.gapOpportunityCollection().deleteMany({});
+      return;
+    }
+
+    await this.gapOpportunityCollection().deleteMany({
+      id: { $nin: validIds },
+    });
+  }
+
   async loadGapOpportunities(page: number, pageSize: number): Promise<{
     items: GapOpportunity[];
     total: number;
