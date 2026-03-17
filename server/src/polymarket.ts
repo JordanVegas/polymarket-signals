@@ -1726,7 +1726,10 @@ export class PolymarketSignalService {
     const exitedWeight = Math.max(0, position.originalSmartMoneyWeight - remainingSmartMoneyWeight);
     const exitedRatio =
       position.originalSmartMoneyWeight > 0 ? exitedWeight / position.originalSmartMoneyWeight : 0;
-    const qualifiesIgnoringPriceCap = isBestTradeMarket(aggregate, { ignorePriceCap: true });
+    const qualifiesIgnoringPriceCap = isBestTradeMarket(aggregate, {
+      ignorePriceCap: true,
+      ignorePriceDeviation: true,
+    });
 
     let nextPosition: StrategyPosition = {
       ...position,
@@ -1762,7 +1765,10 @@ export class PolymarketSignalService {
 
     let exitReason: string | undefined;
     if (!qualifiesIgnoringPriceCap) {
-      const thesisBreakReasons = getBestTradeFailureReasons(aggregate, { ignorePriceCap: true });
+      const thesisBreakReasons = getBestTradeFailureReasons(aggregate, {
+        ignorePriceCap: true,
+        ignorePriceDeviation: true,
+      });
       exitReason = `Thesis break: ${thesisBreakReasons.join(", ")}`;
     } else if (currentPrice >= 0.995) {
       exitReason = "Take profit 0.995";
@@ -2401,14 +2407,14 @@ const applyViewFilter = (
 
 const isBestTradeMarket = (
   market: MarketAggregate,
-  options?: { ignorePriceCap?: boolean },
+  options?: { ignorePriceCap?: boolean; ignorePriceDeviation?: boolean },
 ): boolean => {
   return getBestTradeFailureReasons(market, options).length === 0;
 };
 
 const getBestTradeFailureReasons = (
   market: MarketAggregate,
-  options?: { ignorePriceCap?: boolean },
+  options?: { ignorePriceCap?: boolean; ignorePriceDeviation?: boolean },
 ): string[] => {
   const reasons: string[] = [];
   const leadingOutcomeWeight = market.outcomeWeights[0]?.weight ?? 0;
@@ -2439,7 +2445,7 @@ const getBestTradeFailureReasons = (
   }
 
   const priceDeviation = Math.abs(currentDisplayedPrice - market.observedAvgEntry) / market.observedAvgEntry;
-  if (priceDeviation > 0.05) {
+  if (!options?.ignorePriceDeviation && priceDeviation > 0.05) {
     reasons.push(`price deviation ${(priceDeviation * 100).toFixed(1)}% > 5%`);
   }
 
