@@ -1,7 +1,7 @@
 import { config } from "./config.js";
 import WebSocket from "ws";
 import { Agent } from "undici";
-import { SignalStorage, type PersistedCluster } from "./storage.js";
+import { SignalStorage, type PersistedCluster, type PersistedTrackedTrader } from "./storage.js";
 import type {
   AppSnapshot,
   MarketAggregate,
@@ -216,6 +216,7 @@ export class PolymarketSignalService {
   private marketSyncTimer: NodeJS.Timeout | null = null;
   private tradePollTimer: NodeJS.Timeout | null = null;
   private portfolioSyncTimer: NodeJS.Timeout | null = null;
+  private trackedTraderPollTimer: NodeJS.Timeout | null = null;
   private lastTradeTimestampSec = 0;
   private websocketConnected = false;
   private lastMarketSyncAt: number | null = null;
@@ -243,6 +244,10 @@ export class PolymarketSignalService {
       this.runBackgroundTask("portfolio watch sync", this.syncTrackedWalletWatches());
     }, 3 * 60_000);
     this.runBackgroundTask("initial portfolio watch sync", this.syncTrackedWalletWatches());
+    this.trackedTraderPollTimer = setInterval(() => {
+      this.runBackgroundTask("tracked trader poll", this.pollTrackedTraders());
+    }, config.trackedTraderPollMs);
+    this.runBackgroundTask("initial tracked trader poll", this.pollTrackedTraders());
   }
 
   private async restoreActiveClusters(): Promise<void> {
@@ -264,6 +269,9 @@ export class PolymarketSignalService {
     }
     if (this.portfolioSyncTimer) {
       clearInterval(this.portfolioSyncTimer);
+    }
+    if (this.trackedTraderPollTimer) {
+      clearInterval(this.trackedTraderPollTimer);
     }
     if (this.marketTradeFetchDrainTimer) {
       clearTimeout(this.marketTradeFetchDrainTimer);
@@ -1415,7 +1423,67 @@ export class PolymarketSignalService {
 
     this.traderCache.set(wallet, { summary, fetchedAt: Date.now() });
     await this.storage.saveTraderSummary(summary);
+    if (summary.tier !== "none") {
+      await this.storage.upsertTrackedTrader(summary);
+    }
     return summary;
+  }
+
+  private async pollTrackedTraders(): Promise<void> {
+    const trackedTraders = await this.storage.loadTrackedTraders(100);
+    for (const trader of trackedTraders) {
+      await this.pollTrackedTrader(trader);
+    }
+  }
+
+  private async pollTrackedTrader(trader: PersistedTrackedTrader): Promise<void> {
+    let latestSeenTimestamp = trader.lastSeenActivityTimestamp ?? 0;
+    const batchSize = 50;
+
+    for (let offset = 0; offset <= 200; offset += batchSize) {
+      const response = await this.safeFetch(
+        `${DATA_API_URL}/activity?user=${trader.wallet}&limit=${batchSize}&offset=${offset}`,
+        `tracked trader ${trader.wallet}`,
+      );
+      if (!response || !response.ok) {
+        break;
+      }
+
+      const rows = (await response.json()) as RawActivity[] | { error?: string };
+      if (!Array.isArray(rows) || rows.length === 0) {
+        break;
+      }
+
+      let reachedKnownActivity = false;
+      for (const row of rows) {
+        const timestamp = Number(row.timestamp ?? 0);
+        if (Number.isFinite(timestamp) && timestamp > latestSeenTimestamp) {
+          latestSeenTimestamp = timestamp;
+        }
+
+        if (!Number.isFinite(timestamp) || timestamp <= (trader.lastSeenActivityTimestamp ?? 0)) {
+          reachedKnownActivity = true;
+          continue;
+        }
+
+        if (row.type !== "TRADE") {
+          continue;
+        }
+
+        const trade = this.toTradeRecord(row);
+        if (!trade || !this.activeAssetIds.has(trade.asset)) {
+          continue;
+        }
+
+        await this.persistAndIngestTrade(trade);
+      }
+
+      if (rows.length < batchSize || reachedKnownActivity) {
+        break;
+      }
+    }
+
+    await this.storage.updateTrackedTraderPollState(trader.wallet, latestSeenTimestamp);
   }
 
   private async getTradeCount(wallet: string): Promise<number> {

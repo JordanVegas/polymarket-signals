@@ -75,6 +75,12 @@ export type PersistedTraderSummary = TraderSummary & {
   updatedAt: Date;
 };
 
+export type PersistedTrackedTrader = TraderSummary & {
+  lastSeenActivityTimestamp: number;
+  lastPolledAt?: Date;
+  updatedAt: Date;
+};
+
 export type PersistedMarketAlertWatch = {
   username: string;
   marketSlug: string;
@@ -118,6 +124,9 @@ export class SignalStorage {
     await this.userWebhookCollection().createIndex({ monitoredWallet: 1 });
     await this.traderSummaryCollection().createIndex({ wallet: 1 }, { unique: true });
     await this.traderSummaryCollection().createIndex({ updatedAt: -1 });
+    await this.trackedTraderCollection().createIndex({ wallet: 1 }, { unique: true });
+    await this.trackedTraderCollection().createIndex({ tier: 1, updatedAt: -1 });
+    await this.trackedTraderCollection().createIndex({ lastPolledAt: 1, updatedAt: -1 });
     await this.marketAlertWatchCollection().createIndex(
       { username: 1, marketSlug: 1, outcome: 1, source: 1 },
       { unique: true },
@@ -317,6 +326,43 @@ export class SignalStorage {
       { wallet: summary.wallet },
       { $set: payload },
       { upsert: true },
+    );
+  }
+
+  async upsertTrackedTrader(summary: TraderSummary): Promise<void> {
+    await this.trackedTraderCollection().updateOne(
+      { wallet: summary.wallet },
+      {
+        $set: {
+          ...summary,
+          updatedAt: new Date(),
+        },
+        $setOnInsert: {
+          lastSeenActivityTimestamp: 0,
+        },
+      },
+      { upsert: true },
+    );
+  }
+
+  async loadTrackedTraders(limit: number): Promise<PersistedTrackedTrader[]> {
+    return this.trackedTraderCollection()
+      .find(
+        { tier: { $in: ["whale", "shark", "pro"] } },
+        { sort: { lastPolledAt: 1, updatedAt: -1 }, limit },
+      )
+      .toArray();
+  }
+
+  async updateTrackedTraderPollState(wallet: string, lastSeenActivityTimestamp: number): Promise<void> {
+    await this.trackedTraderCollection().updateOne(
+      { wallet },
+      {
+        $set: {
+          lastSeenActivityTimestamp,
+          lastPolledAt: new Date(),
+        },
+      },
     );
   }
 
@@ -585,6 +631,16 @@ export class SignalStorage {
     return this.client
       .db(config.mongoDbName)
       .collection<PersistedTraderSummary>("trader_summaries");
+  }
+
+  private trackedTraderCollection() {
+    if (!this.client) {
+      throw new Error("Mongo client not connected");
+    }
+
+    return this.client
+      .db(config.mongoDbName)
+      .collection<PersistedTrackedTrader>("tracked_traders");
   }
 
   private alertDeliveryCollection() {
