@@ -1691,6 +1691,7 @@ export class PolymarketSignalService {
         return;
       }
 
+      const entryPrice = getSimulatedMarketEntryPrice(currentPrice);
       const nextPosition: StrategyPosition = {
         id: `${username}:${marketSlug}:${edgeOutcome}`,
         username,
@@ -1702,10 +1703,10 @@ export class PolymarketSignalService {
         status: "open",
         openedAt: Date.now(),
         updatedAt: Date.now(),
-        entryPrice: currentPrice,
+        entryPrice,
         lastPrice: currentPrice,
         entryNotionalUsd,
-        remainingShares: entryNotionalUsd / currentPrice,
+        remainingShares: entryNotionalUsd / entryPrice,
         realizedUsd: 0,
         originalSmartMoneyWeight,
         remainingSmartMoneyWeight: originalSmartMoneyWeight,
@@ -2563,6 +2564,11 @@ const calculatePaperCashBalanceFromPositions = (
       positions.reduce((sum, position) => sum + position.entryNotionalUsd, 0) +
       positions.reduce((sum, position) => sum + position.realizedUsd, 0),
   );
+
+const getSimulatedMarketEntryPrice = (displayedPrice: number): number => {
+  const premium = Math.max(0.005, displayedPrice * 0.01);
+  return Math.min(0.995, displayedPrice + premium);
+};
 
 const buildStrategyTrades = (position: StrategyPosition): StrategyTrade[] => {
   const trades: StrategyTrade[] = [];
