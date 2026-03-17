@@ -1871,12 +1871,12 @@ export class PolymarketSignalService {
 
     const candidates: GapCandidate[] = [];
     for (const [eventSlug, markets] of eventGroups) {
-      const matchup = buildHeadToHeadGapCandidate(eventSlug, markets);
-      if (!matchup) {
+      const matchups = buildHeadToHeadGapCandidates(eventSlug, markets);
+      if (matchups.length === 0) {
         continue;
       }
 
-      candidates.push(matchup);
+      candidates.push(...matchups);
     }
 
     return candidates;
@@ -3553,54 +3553,82 @@ const findAssetIdForOutcome = (market: MarketRecord, outcome: string): string | 
   return null;
 };
 
-const buildHeadToHeadGapCandidate = (
+const buildHeadToHeadGapCandidates = (
   eventSlug: string,
   markets: MarketRecord[],
-): GapCandidate | null => {
-  if (markets.length !== 2) {
-    return null;
+) : GapCandidate[] => {
+  if (markets.length < 2) {
+    return [];
   }
 
-  const [first, second] = [...markets].sort((left, right) => left.slug.localeCompare(right.slug));
-  const eventTitle = first.eventTitle ?? second.eventTitle ?? first.question;
+  const eventTitle = markets[0]?.eventTitle ?? markets[0]?.question ?? eventSlug;
   const teams = parseMatchupTeams(eventTitle);
   if (!teams) {
-    return null;
+    return [];
   }
 
-  const firstMention = identifyMentionedTeam(first.question, teams);
-  const secondMention = identifyMentionedTeam(second.question, teams);
-  if (!firstMention || !secondMention || firstMention === secondMention) {
-    return null;
+  const enrichedMarkets = markets
+    .map((market) => {
+      const teamIndex = identifyMentionedTeam(market.question, teams);
+      const objective = deriveGapObjective(market.question, teams);
+      const noAssetId = findAssetIdForOutcome(market, "No");
+      if (teamIndex === null || !objective || !noAssetId) {
+        return null;
+      }
+
+      return {
+        market,
+        teamIndex,
+        objective,
+        noAssetId,
+      };
+    })
+    .filter((entry): entry is { market: MarketRecord; teamIndex: 0 | 1; objective: string; noAssetId: string } => Boolean(entry));
+
+  const byObjective = new Map<string, { first?: typeof enrichedMarkets[number]; second?: typeof enrichedMarkets[number] }>();
+  for (const entry of enrichedMarkets) {
+    const objectiveGroup = byObjective.get(entry.objective) ?? {};
+    if (entry.teamIndex === 0 && !objectiveGroup.first) {
+      objectiveGroup.first = entry;
+    } else if (entry.teamIndex === 1 && !objectiveGroup.second) {
+      objectiveGroup.second = entry;
+    }
+    byObjective.set(entry.objective, objectiveGroup);
   }
 
-  const firstNoAssetId = findAssetIdForOutcome(first, "No");
-  const secondNoAssetId = findAssetIdForOutcome(second, "No");
-  if (!firstNoAssetId || !secondNoAssetId) {
-    return null;
+  const candidates: GapCandidate[] = [];
+  for (const [objective, pair] of byObjective.entries()) {
+    if (!pair.first || !pair.second) {
+      continue;
+    }
+
+    const [first, second] = [pair.first, pair.second].sort((left, right) =>
+      left.market.slug.localeCompare(right.market.slug),
+    );
+    candidates.push({
+      id: `${eventSlug}:${objective}:${first.market.slug}:${second.market.slug}`,
+      eventSlug,
+      eventTitle,
+      pairType: "head_to_head_no_no",
+      pairLabel: `Head-to-head no/no · ${formatGapObjectiveLabel(objective)}`,
+      legs: [
+        {
+          marketSlug: first.market.slug,
+          marketQuestion: first.market.question,
+          marketUrl: `https://polymarket.com/event/${first.market.slug}`,
+          noAssetId: first.noAssetId,
+        },
+        {
+          marketSlug: second.market.slug,
+          marketQuestion: second.market.question,
+          marketUrl: `https://polymarket.com/event/${second.market.slug}`,
+          noAssetId: second.noAssetId,
+        },
+      ],
+    });
   }
 
-  return {
-    id: `${eventSlug}:${first.slug}:${second.slug}`,
-    eventSlug,
-    eventTitle,
-    pairType: "head_to_head_no_no",
-    pairLabel: "Head-to-head no/no",
-    legs: [
-      {
-        marketSlug: first.slug,
-        marketQuestion: first.question,
-        marketUrl: `https://polymarket.com/event/${first.slug}`,
-        noAssetId: firstNoAssetId,
-      },
-      {
-        marketSlug: second.slug,
-        marketQuestion: second.question,
-        marketUrl: `https://polymarket.com/event/${second.slug}`,
-        noAssetId: secondNoAssetId,
-      },
-    ],
-  };
+  return candidates;
 };
 
 const parseMatchupTeams = (eventTitle: string): [string, string] | null => {
@@ -3655,6 +3683,39 @@ const identifyMentionedTeam = (
   }
 
   return matches[0].index;
+};
+
+const deriveGapObjective = (
+  question: string,
+  teams: [string, string],
+): string | null => {
+  const normalizedQuestion = normalizeTeamName(question);
+  const strippedQuestion = teams.reduce(
+    (current, team) => current.replaceAll(normalizeTeamName(team), " "),
+    normalizedQuestion,
+  );
+
+  if (/\bwin\b|\bbeat\b/.test(strippedQuestion)) {
+    return "win";
+  }
+
+  if (/\badvance\b|\bqualify\b|\breach\b/.test(strippedQuestion)) {
+    return "advance";
+  }
+
+  return null;
+};
+
+const formatGapObjectiveLabel = (objective: string): string => {
+  if (objective === "win") {
+    return "Win";
+  }
+
+  if (objective === "advance") {
+    return "Advance";
+  }
+
+  return objective;
 };
 
 const buildStrategyTrades = (position: StrategyPosition): StrategyTrade[] => {
