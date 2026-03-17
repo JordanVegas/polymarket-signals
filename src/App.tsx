@@ -93,6 +93,7 @@ type UserProfileResponse = {
 };
 
 type Language = "en" | "he";
+type PageRoute = "/" | "/best-trades" | "/profile";
 
 const positiveOutcomeKeywords = ["yes", "up", "above", "over", "higher", "more", "long"];
 const negativeOutcomeKeywords = ["no", "down", "below", "under", "lower", "less", "short"];
@@ -121,9 +122,21 @@ const currencyFormatter = new Intl.NumberFormat("en-US", {
 
 const MARKET_PAGE_SIZE = 24;
 
+function getPageRoute(pathname: string): PageRoute {
+  if (pathname === "/profile" || pathname === "/best-trades") {
+    return pathname;
+  }
+
+  return "/";
+}
+
 const copy = {
   en: {
     profile: "Profile",
+    monitor: "Monitor",
+    bestTrades: "Best trades",
+    menu: "Menu",
+    closeMenu: "Close menu",
     frontendStream: "Frontend stream",
     connected: "Connected",
     reconnecting: "Reconnecting",
@@ -159,6 +172,8 @@ const copy = {
     removeWatch: "Remove watch",
     signalFeed: "Signal feed",
     vegasMonitor: "Vegas Monitor",
+    bestTradesTitle: "Best trades",
+    bestTradesSubtitle: "Highest-conviction markets surfaced by tracked smart money.",
     search: "Search",
     searchPlaceholder: "Markets, outcomes, traders",
     sort: "Sort",
@@ -207,6 +222,10 @@ const copy = {
   },
   he: {
     profile: "פרופיל",
+    monitor: "מוניטור",
+    bestTrades: "העסקאות הטובות ביותר",
+    menu: "תפריט",
+    closeMenu: "סגור תפריט",
     frontendStream: "חיבור לשרת",
     connected: "מחובר",
     reconnecting: "מתחבר מחדש",
@@ -242,6 +261,8 @@ const copy = {
     removeWatch: "הסר מעקב",
     signalFeed: "פיד סיגנלים",
     vegasMonitor: "Vegas Monitor",
+    bestTradesTitle: "העסקאות הטובות ביותר",
+    bestTradesSubtitle: "השווקים עם הכי הרבה שכנוע מצד כסף חכם במעקב.",
     search: "חיפוש",
     searchPlaceholder: "שווקים, תוצאות, טריידרים",
     sort: "מיון",
@@ -291,7 +312,7 @@ const copy = {
 } as const;
 
 function App() {
-  const [currentPath, setCurrentPath] = useState(() => window.location.pathname);
+  const [currentPath, setCurrentPath] = useState<PageRoute>(() => getPageRoute(window.location.pathname));
   const [language, setLanguage] = useState<Language>(() => {
     const saved = window.localStorage.getItem("language");
     return saved === "he" ? "he" : "en";
@@ -331,6 +352,7 @@ function App() {
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [removingWatchKey, setRemovingWatchKey] = useState<string | null>(null);
   const [profileMessage, setProfileMessage] = useState<string | null>(null);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const deferredSearchQuery = useDeferredValue(debouncedSearchQuery);
   const deferredRefreshVersion = useDeferredValue(refreshVersion);
@@ -344,7 +366,8 @@ function App() {
 
   useEffect(() => {
     const handlePopState = () => {
-      setCurrentPath(window.location.pathname);
+      setCurrentPath(getPageRoute(window.location.pathname));
+      setIsMenuOpen(false);
     };
 
     window.addEventListener("popstate", handlePopState);
@@ -445,6 +468,12 @@ function App() {
   useEffect(() => {
     setPageCount(1);
   }, [marketSort, deferredSearchQuery]);
+
+  useEffect(() => {
+    if (currentPath === "/best-trades" && marketSort === "recent") {
+      setMarketSort("weighted");
+    }
+  }, [currentPath, marketSort]);
 
   useEffect(() => {
     if (currentPath === "/profile") {
@@ -563,11 +592,12 @@ function App() {
 
   const visibleMarkets = useMemo(() => marketPage.items, [marketPage.items]);
 
-  const navigateTo = (path: "/" | "/profile") => {
+  const navigateTo = (path: PageRoute) => {
     if (window.location.pathname !== path) {
       window.history.pushState({}, "", path);
     }
     setCurrentPath(path);
+    setIsMenuOpen(false);
     setProfileMessage(null);
   };
 
@@ -687,6 +717,10 @@ function App() {
       ? `${t.profileTitle} ${profile.username}`
       : `${profile.username}${t.profileSuffix}`
     : t.profileTitle;
+  const isBestTradesPage = currentPath === "/best-trades";
+  const feedTitle = isBestTradesPage ? t.bestTradesTitle : t.vegasMonitor;
+  const feedKicker = isBestTradesPage ? t.bestTrades : t.signalFeed;
+  const feedSubtitle = isBestTradesPage ? t.bestTradesSubtitle : null;
 
   return (
     <div className={`app-shell app-shell-${language}`}>
@@ -695,8 +729,21 @@ function App() {
 
       <main className="page">
         <div className="page-topbar">
-          <div className="page-brand" aria-label="Whale shark pro">
+          <div className="page-topbar-left">
+            <button
+              type="button"
+              className="menu-button"
+              aria-label={t.menu}
+              aria-expanded={isMenuOpen}
+              onClick={() => setIsMenuOpen((current) => !current)}
+            >
+              <span />
+              <span />
+              <span />
+            </button>
+            <div className="page-brand" aria-label="Whale shark pro">
             🐋 &gt; 🦈 &gt; 😎
+            </div>
           </div>
           <div className="page-topbar-actions">
             <button
@@ -711,6 +758,44 @@ function App() {
             </button>
           </div>
         </div>
+
+        <div
+          className={`menu-backdrop ${isMenuOpen ? "menu-backdrop-open" : ""}`}
+          onClick={() => setIsMenuOpen(false)}
+        />
+        <aside className={`side-menu ${isMenuOpen ? "side-menu-open" : ""}`} aria-hidden={!isMenuOpen}>
+          <div className="side-menu-header">
+            <div className="page-brand" aria-label="Whale shark pro">
+              ðŸ‹ &gt; ðŸ¦ˆ &gt; ðŸ˜Ž
+            </div>
+            <button type="button" className="nav-button" onClick={() => setIsMenuOpen(false)}>
+              {t.closeMenu}
+            </button>
+          </div>
+          <nav className="side-menu-nav">
+            <button
+              type="button"
+              className={`side-menu-link ${currentPath === "/" ? "side-menu-link-active" : ""}`}
+              onClick={() => navigateTo("/")}
+            >
+              {t.monitor}
+            </button>
+            <button
+              type="button"
+              className={`side-menu-link ${currentPath === "/best-trades" ? "side-menu-link-active" : ""}`}
+              onClick={() => navigateTo("/best-trades")}
+            >
+              {t.bestTrades}
+            </button>
+            <button
+              type="button"
+              className={`side-menu-link ${currentPath === "/profile" ? "side-menu-link-active" : ""}`}
+              onClick={() => navigateTo("/profile")}
+            >
+              {t.profile}
+            </button>
+          </nav>
+        </aside>
 
         <section className="hero">
           <div className="hero-panel">
@@ -852,8 +937,9 @@ function App() {
           <section className="feed-section">
             <div className="feed-header">
               <div>
-                <p className="section-kicker">{t.signalFeed}</p>
-                <h2>{t.vegasMonitor}</h2>
+                <p className="section-kicker">{feedKicker}</p>
+                <h2>{feedTitle}</h2>
+                {feedSubtitle ? <p className="feed-subtitle">{feedSubtitle}</p> : null}
               </div>
               <label className="search-control">
                 <span>{t.search}</span>
