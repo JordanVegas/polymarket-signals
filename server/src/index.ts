@@ -82,6 +82,7 @@ app.put("/api/profile", async (request, response) => {
     const webhookUrl = String(request.body.webhookUrl ?? "");
     const monitoredWallet = String(request.body.monitoredWallet ?? "");
     const paperTradingEnabled = Boolean(request.body.paperTradingEnabled);
+    const liveTradingEnabled = Boolean(request.body.liveTradingEnabled);
     const startingBalanceUsd = Number(request.body.startingBalanceUsd ?? 1000);
     const riskPercent = Number(request.body.riskPercent ?? 5);
     const tradingWalletAddress = String(request.body.tradingWalletAddress ?? "");
@@ -97,6 +98,7 @@ app.put("/api/profile", async (request, response) => {
         webhookUrl,
         monitoredWallet,
         paperTradingEnabled,
+        liveTradingEnabled,
         startingBalanceUsd,
         riskPercent,
         tradingWalletAddress,
@@ -136,6 +138,15 @@ app.get("/api/strategy-positions", async (request, response) => {
   }
 
   response.json(await service.getStrategyPositions(request.sessionUser.username));
+});
+
+app.get("/api/live-strategy-positions", async (request, response) => {
+  if (!request.sessionUser?.username) {
+    response.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  response.json(await service.getLiveStrategyPositions(request.sessionUser.username));
 });
 
 app.post("/api/market-alerts/watch", async (request, response) => {

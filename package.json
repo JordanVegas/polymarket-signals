@@ -14,6 +14,8 @@
     "start": "node dist/server/index.js"
   },
   "dependencies": {
+    "@ethersproject/wallet": "^5.8.0",
+    "@polymarket/clob-client": "^5.8.0",
     "cors": "^2.8.5",
     "express": "^4.21.2",
     "mongodb": "^6.16.0",

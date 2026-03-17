@@ -91,12 +91,14 @@ type UserProfileResponse = {
   webhookUrl: string;
   monitoredWallet: string;
   paperTradingEnabled: boolean;
+  liveTradingEnabled: boolean;
   startingBalanceUsd: number;
   currentBalanceUsd: number;
   riskPercent: number;
   tradingWalletAddress: string;
   tradingSignatureType: "EOA" | "POLY_PROXY";
   hasTradingCredentials: boolean;
+  liveTradingReady: boolean;
   watches: Array<{
     marketSlug: string;
     outcome: string;
@@ -164,6 +166,11 @@ type StrategyDashboardResponse = {
   trades: StrategyTrade[];
 };
 
+type LiveStrategyDashboardResponse = StrategyDashboardResponse & {
+  enabled: boolean;
+  ready: boolean;
+};
+
 type Language = "en" | "he";
 type PageRoute = "/" | "/best-trades" | "/auto-trade" | "/profile";
 
@@ -228,6 +235,12 @@ const copy = {
     discordAlerts: "Discord alerts",
     paperTrading: "Paper trading",
     liveTrading: "Live trading",
+    liveTradingEnabled: "Live trading armed",
+    liveTradingReady: "Live trading ready",
+    liveTradingNotReady: "Missing wallet or credentials",
+    liveActivity: "Live activity",
+    noLiveStrategyPositions: "No live positions yet.",
+    noLiveStrategyTrades: "No live activity yet.",
     profileTitle: "Profile",
     profileSuffix: "'s profile",
     profileBody:
@@ -237,7 +250,7 @@ const copy = {
     paperTradingBody:
       "These settings only control the simulated strategy account. They do not place real orders.",
     liveTradingBody:
-      "These encrypted credentials are kept separate for future real execution. Saving them does not arm live trading yet.",
+      "These encrypted credentials power real Polymarket orders. Live trading only runs when armed.",
     discordWebhookUrl: "Discord webhook URL",
     monitoredWallet: "Tracked Polymarket wallet",
     paperTradingEnabled: "Paper trading armed",
@@ -374,6 +387,12 @@ const copy = {
     discordAlerts: "התראות דיסקורד",
     paperTrading: "מסחר דמו",
     liveTrading: "מסחר אמיתי",
+    liveTradingEnabled: "מסחר אמיתי פעיל",
+    liveTradingReady: "מסחר אמיתי מוכן",
+    liveTradingNotReady: "חסרים ארנק או פרטי גישה",
+    liveActivity: "פעילות אמיתית",
+    noLiveStrategyPositions: "עדיין אין פוזיציות אמיתיות.",
+    noLiveStrategyTrades: "עדיין אין פעילות אמיתית.",
     profileTitle: "פרופיל",
     profileSuffix: " של",
     profileBody:
@@ -383,7 +402,7 @@ const copy = {
     paperTradingBody:
       "ההגדרות האלה שולטות רק בחשבון הדמו של האסטרטגיה. הן לא מבצעות פקודות אמיתיות.",
     liveTradingBody:
-      "פרטי המסחר המוצפנים נשמרים בנפרד עבור ביצוע אמיתי בעתיד. שמירה שלהם עדיין לא מפעילה מסחר אמיתי.",
+      "פרטי המסחר המוצפנים האלה מפעילים פקודות אמיתיות בפולימרקט. מסחר אמיתי רץ רק כשהוא מופעל.",
     discordWebhookUrl: "כתובת וובהוק של דיסקורד",
     monitoredWallet: "ארנק פולימרקט למעקב",
     paperTradingEnabled: "מסחר דמו פעיל",
@@ -536,6 +555,7 @@ function App() {
   const [profileFormWebhookUrl, setProfileFormWebhookUrl] = useState("");
   const [profileFormMonitoredWallet, setProfileFormMonitoredWallet] = useState("");
   const [profileFormPaperTradingEnabled, setProfileFormPaperTradingEnabled] = useState(false);
+  const [profileFormLiveTradingEnabled, setProfileFormLiveTradingEnabled] = useState(false);
   const [profileFormStartingBalanceUsd, setProfileFormStartingBalanceUsd] = useState("1000");
   const [profileFormRiskPercent, setProfileFormRiskPercent] = useState("5");
   const [profileFormTradingWalletAddress, setProfileFormTradingWalletAddress] = useState("");
@@ -550,6 +570,21 @@ function App() {
   const [removingWatchKey, setRemovingWatchKey] = useState<string | null>(null);
   const [profileMessage, setProfileMessage] = useState<string | null>(null);
   const [strategyDashboard, setStrategyDashboard] = useState<StrategyDashboardResponse>({
+    summary: {
+      cashBalanceUsd: 0,
+      openPositionCount: 0,
+      closedPositionCount: 0,
+      totalPositionCount: 0,
+      openExposureUsd: 0,
+      unrealizedUsd: 0,
+      totalEquityUsd: 0,
+    },
+    positions: [],
+    trades: [],
+  });
+  const [liveStrategyDashboard, setLiveStrategyDashboard] = useState<LiveStrategyDashboardResponse>({
+    enabled: false,
+    ready: false,
     summary: {
       cashBalanceUsd: 0,
       openPositionCount: 0,
@@ -750,14 +785,24 @@ function App() {
     const loadStrategyPositions = async () => {
       setIsLoadingStrategyPositions(true);
       try {
-        const response = await fetch("/api/strategy-positions");
-        const payload = (await response.json()) as StrategyDashboardResponse | { error?: string };
-        if (!response.ok) {
-          throw new Error((payload as { error?: string }).error || "Unable to load strategy positions");
+        const [paperResponse, liveResponse] = await Promise.all([
+          fetch("/api/strategy-positions"),
+          fetch("/api/live-strategy-positions"),
+        ]);
+        const [paperPayload, livePayload] = (await Promise.all([
+          paperResponse.json(),
+          liveResponse.json(),
+        ])) as [StrategyDashboardResponse | { error?: string }, LiveStrategyDashboardResponse | { error?: string }];
+        if (!paperResponse.ok) {
+          throw new Error((paperPayload as { error?: string }).error || "Unable to load strategy positions");
+        }
+        if (!liveResponse.ok) {
+          throw new Error((livePayload as { error?: string }).error || "Unable to load live strategy positions");
         }
 
         if (!cancelled) {
-          setStrategyDashboard(payload as StrategyDashboardResponse);
+          setStrategyDashboard(paperPayload as StrategyDashboardResponse);
+          setLiveStrategyDashboard(livePayload as LiveStrategyDashboardResponse);
         }
       } finally {
         if (!cancelled) {
@@ -792,6 +837,7 @@ function App() {
         setProfileFormWebhookUrl(payload.webhookUrl);
         setProfileFormMonitoredWallet(payload.monitoredWallet);
         setProfileFormPaperTradingEnabled(payload.paperTradingEnabled);
+        setProfileFormLiveTradingEnabled(payload.liveTradingEnabled);
         setProfileFormStartingBalanceUsd(String(payload.startingBalanceUsd));
         setProfileFormRiskPercent(String(payload.riskPercent));
         setProfileFormTradingWalletAddress(payload.tradingWalletAddress);
@@ -912,6 +958,7 @@ function App() {
           webhookUrl: profileFormWebhookUrl,
           monitoredWallet: profileFormMonitoredWallet,
           paperTradingEnabled: profileFormPaperTradingEnabled,
+          liveTradingEnabled: profileFormLiveTradingEnabled,
           startingBalanceUsd: Number(profileFormStartingBalanceUsd || 0),
           riskPercent: Number(profileFormRiskPercent || 0),
           tradingWalletAddress: profileFormTradingWalletAddress,
@@ -932,6 +979,7 @@ function App() {
       setProfileFormWebhookUrl(payload.webhookUrl);
       setProfileFormMonitoredWallet(payload.monitoredWallet);
       setProfileFormPaperTradingEnabled(payload.paperTradingEnabled);
+      setProfileFormLiveTradingEnabled(payload.liveTradingEnabled);
       setProfileFormStartingBalanceUsd(String(payload.startingBalanceUsd));
       setProfileFormRiskPercent(String(payload.riskPercent));
       setProfileFormTradingWalletAddress(payload.tradingWalletAddress);
@@ -1206,6 +1254,19 @@ function App() {
                 <p>{t.liveTradingBody}</p>
               </div>
 
+              <label className="profile-toggle">
+                <input
+                  type="checkbox"
+                  checked={profileFormLiveTradingEnabled}
+                  onChange={(event) => setProfileFormLiveTradingEnabled(event.target.checked)}
+                />
+                <span>{t.liveTradingEnabled}</span>
+              </label>
+
+              <p className="profile-helper">
+                {profile?.liveTradingReady ? t.liveTradingReady : t.liveTradingNotReady}
+              </p>
+
               <label className="profile-field">
                 <span>{t.tradingWalletAddress}</span>
                 <input
@@ -1442,9 +1503,9 @@ function App() {
                       <div className="profile-watch-copy">
                         <strong>{trade.marketQuestion}</strong>
                         <span>{`${trade.side} ${trade.outcome}`}</span>
-                        <span>{`${t.activityTime}: ${formatRelativeTime(trade.timestamp, t)} · ${formatTimestamp(trade.timestamp, t.pending)}`}</span>
+                        <span>{`${t.activityTime}: ${formatRelativeTime(trade.timestamp, t)} - ${formatTimestamp(trade.timestamp, t.pending)}`}</span>
                         <span>{`${trade.reason} - ${formatRelativeTime(trade.timestamp, t)}`}</span>
-                        <span>{`${t.activityDetails}: ${trade.shares.toFixed(2)} shares ? ${currencyFormatter.format(trade.usd)} @ ${trade.price.toFixed(3)}`}</span>
+                        <span>{`${t.activityDetails}: ${trade.shares.toFixed(2)} shares - ${currencyFormatter.format(trade.usd)} @ ${trade.price.toFixed(3)}`}</span>
                       </div>
                       <div className="profile-watch-actions">
                         <span className="strategy-trade-amount">
@@ -1459,6 +1520,107 @@ function App() {
                 </div>
               ) : (
                 <p className="profile-empty">{t.noStrategyTrades}</p>
+              )}
+            </div>
+
+            <div className="profile-watches">
+              <div className="profile-watches-header">
+                <p className="section-kicker">{t.liveActivity}</p>
+              </div>
+              <div className="hero-panel auto-trade-stats">
+                <StatusRow label={t.cashBalance} value={currencyFormatter.format(liveStrategyDashboard.summary.cashBalanceUsd)} tone="neutral" />
+                <StatusRow label={t.openExposure} value={currencyFormatter.format(liveStrategyDashboard.summary.openExposureUsd)} tone="neutral" />
+                <StatusRow label={t.totalEquity} value={currencyFormatter.format(liveStrategyDashboard.summary.totalEquityUsd)} tone="green" />
+                <StatusRow label={t.realizedPnl} value={currencyFormatter.format(liveStrategyDashboard.summary.unrealizedUsd)} tone={liveStrategyDashboard.summary.unrealizedUsd >= 0 ? "green" : "blue"} />
+                <StatusRow label={t.openPositions} value={liveStrategyDashboard.summary.openPositionCount.toString()} tone="neutral" />
+                <StatusRow label={t.closedPositions} value={liveStrategyDashboard.summary.closedPositionCount.toString()} tone="neutral" />
+              </div>
+              <p className="profile-helper">
+                {liveStrategyDashboard.enabled
+                  ? liveStrategyDashboard.ready
+                    ? t.liveTradingReady
+                    : t.liveTradingNotReady
+                  : t.liveTrading}
+              </p>
+              {liveStrategyDashboard.positions.length ? (
+                <div className="signal-grid">
+                  {liveStrategyDashboard.positions.map((position) => (
+                    <article className="signal-card" key={position.id}>
+                      <div className="signal-media">
+                        {normalizeSecureUrl(position.marketImage) ? (
+                          <img src={normalizeSecureUrl(position.marketImage)!} alt={position.marketQuestion} />
+                        ) : (
+                          <div className="image-fallback">{position.outcome[0]}</div>
+                        )}
+                        <div className={`pill ${position.status === "open" ? "pill-cyan" : "pill-neutral"}`}>
+                          {position.status === "open" ? t.statusOpen : t.statusClosed}
+                        </div>
+                      </div>
+
+                      <div className="signal-body">
+                        <div className="signal-topline">
+                          <span>{formatRelativeTime(position.updatedAt, t)}</span>
+                          <span>{t.openedAt}: {formatTimestamp(position.openedAt, t.pending)}</span>
+                        </div>
+
+                        <h3>{position.marketQuestion}</h3>
+                        <p className="signal-thesis">
+                          <strong>{position.outcome}</strong>
+                          <span className="signal-thesis-trade">
+                            <span>{t.confidence}</span>
+                            <span className="outcome-chip outcome-chip-positive">{position.setupQuality}/100</span>
+                          </span>
+                        </p>
+
+                        <div className="metric-row">
+                          <Metric label={t.avgEntry} value={position.entryPrice.toFixed(3)} />
+                          <Metric label={t.lastPrice} value={position.lastPrice.toFixed(3)} />
+                          <Metric label={t.soldPercent} value={`${position.soldPercent}%`} />
+                        </div>
+
+                        <div className="metric-row">
+                          <Metric label={t.entrySize} value={currencyFormatter.format(position.entryNotionalUsd)} />
+                          <Metric label={t.positionValue} value={currencyFormatter.format(position.remainingShares * position.lastPrice)} />
+                          <Metric label={t.remainingShares} value={position.remainingShares.toFixed(2)} />
+                        </div>
+
+                        {position.exitReason ? (
+                          <p className="signal-rationale">
+                            <span>{t.exitReason}</span>
+                            <strong>{position.exitReason}</strong>
+                          </p>
+                        ) : null}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <p className="profile-empty">{t.noLiveStrategyPositions}</p>
+              )}
+              {liveStrategyDashboard.trades.length ? (
+                <div className="profile-watch-list">
+                  {liveStrategyDashboard.trades.map((trade) => (
+                    <article className="profile-watch-item" key={trade.id}>
+                      <div className="profile-watch-copy">
+                        <strong>{trade.marketQuestion}</strong>
+                        <span>{`${trade.side} ${trade.outcome}`}</span>
+                        <span>{`${t.activityTime}: ${formatRelativeTime(trade.timestamp, t)} - ${formatTimestamp(trade.timestamp, t.pending)}`}</span>
+                        <span>{`${trade.reason}${trade.orderId ? ` - ${trade.orderId}` : ""}`}</span>
+                        <span>{`${t.activityDetails}: ${trade.shares.toFixed(2)} shares - ${currencyFormatter.format(trade.usd)} @ ${trade.price.toFixed(3)}`}</span>
+                      </div>
+                      <div className="profile-watch-actions">
+                        <span className="strategy-trade-amount">
+                          {currencyFormatter.format(trade.usd)} @ {trade.price.toFixed(3)}
+                        </span>
+                        <a href={normalizeSecureUrl(trade.marketUrl) ?? trade.marketUrl} target="_blank" rel="noreferrer">
+                          {t.openMarket}
+                        </a>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <p className="profile-empty">{t.noLiveStrategyTrades}</p>
               )}
             </div>
           </section>

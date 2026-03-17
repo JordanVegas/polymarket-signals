@@ -1,10 +1,21 @@
 import { config } from "./config.js";
-import { encryptSecret } from "./secrets.js";
+import { decryptSecret, encryptSecret } from "./secrets.js";
+import { Wallet } from "@ethersproject/wallet";
+import {
+  AssetType,
+  ClobClient,
+  OrderType,
+  Side as ClobSide,
+  SignatureType,
+  type ApiKeyCreds,
+  type OrderBookSummary,
+} from "@polymarket/clob-client";
 import WebSocket from "ws";
 import { Agent } from "undici";
 import { SignalStorage, type PersistedCluster, type PersistedTrackedTrader } from "./storage.js";
 import type {
   AppSnapshot,
+  LiveStrategyDashboardResponse,
   MarketAggregate,
   MarketPageResponse,
   MarketRecord,
@@ -238,6 +249,7 @@ export class PolymarketSignalService {
   private readonly lastMarketTradeFetchAt = new Map<string, number>();
   private readonly trackedTraderPollInFlight = new Set<string>();
   private readonly strategyUserQueues = new Map<string, Promise<void>>();
+  private readonly liveStrategyUserQueues = new Map<string, Promise<void>>();
   private readonly requestMetrics = new Map<string, RequestMetric>();
   private marketTradeFetchDrainTimer: NodeJS.Timeout | null = null;
   private trackedTraderPollDrainTimer: NodeJS.Timeout | null = null;
@@ -458,6 +470,7 @@ export class PolymarketSignalService {
       webhookUrl: settings.webhookUrl ?? "",
       monitoredWallet: settings.monitoredWallet ?? "",
       paperTradingEnabled: settings.autoTradeEnabled ?? false,
+      liveTradingEnabled: settings.liveTradeEnabled ?? false,
       startingBalanceUsd: settings.startingBalanceUsd ?? 1_000,
       currentBalanceUsd: await this.calculatePaperCashBalance(normalizedUsername, settings.startingBalanceUsd ?? 1_000),
       riskPercent: settings.riskPercent ?? 5,
@@ -465,6 +478,14 @@ export class PolymarketSignalService {
       tradingSignatureType: settings.tradingSignatureType ?? "EOA",
       hasTradingCredentials: Boolean(
         settings.encryptedPrivateKey &&
+          settings.encryptedApiKey &&
+          settings.encryptedApiSecret &&
+          settings.encryptedApiPassphrase,
+      ),
+      liveTradingReady: Boolean(
+        settings.liveTradeEnabled &&
+          settings.tradingWalletAddress &&
+          settings.encryptedPrivateKey &&
           settings.encryptedApiKey &&
           settings.encryptedApiSecret &&
           settings.encryptedApiPassphrase,
@@ -493,12 +514,44 @@ export class PolymarketSignalService {
     );
   }
 
+  async getLiveStrategyPositions(username: string): Promise<LiveStrategyDashboardResponse> {
+    const [positions, trades, settings] = await Promise.all([
+      this.storage.loadLiveStrategyPositions(username, 200),
+      this.storage.loadLiveStrategyTrades(username, 300),
+      this.storage.getUserSettings(username),
+    ]);
+
+    const ready = Boolean(
+      settings.liveTradeEnabled &&
+        settings.tradingWalletAddress &&
+        settings.encryptedPrivateKey &&
+        settings.encryptedApiKey &&
+        settings.encryptedApiSecret &&
+        settings.encryptedApiPassphrase,
+    );
+    let cashBalanceUsd = 0;
+    if (ready) {
+      try {
+        cashBalanceUsd = await this.getLiveCollateralBalance(this.createLiveTradingClient(settings));
+      } catch {
+        cashBalanceUsd = 0;
+      }
+    }
+
+    return {
+      enabled: settings.liveTradeEnabled ?? false,
+      ready,
+      ...buildStoredStrategyDashboard(positions, trades, cashBalanceUsd),
+    };
+  }
+
   async updateUserProfile(
     username: string,
     updates: {
       webhookUrl: string;
       monitoredWallet: string;
       paperTradingEnabled: boolean;
+      liveTradingEnabled: boolean;
       startingBalanceUsd: number;
       riskPercent: number;
       tradingWalletAddress: string;
@@ -559,10 +612,25 @@ export class PolymarketSignalService {
     }
 
     const existingSettings = await this.storage.getUserSettings(normalizedUsername);
+
+    if (
+      updates.liveTradingEnabled &&
+      !(
+        normalizedTradingWalletAddress &&
+        (hasNewTradingSecrets ||
+          (existingSettings.encryptedPrivateKey &&
+            existingSettings.encryptedApiKey &&
+            existingSettings.encryptedApiSecret &&
+            existingSettings.encryptedApiPassphrase))
+      )
+    ) {
+      throw new Error("Live trading requires a trading wallet and saved trading credentials");
+    }
     await this.storage.updateUserSettings(normalizedUsername, {
       webhookUrl: normalizedWebhookUrl,
       monitoredWallet: normalizedMonitoredWallet,
       autoTradeEnabled: updates.paperTradingEnabled,
+      liveTradeEnabled: updates.liveTradingEnabled,
       startingBalanceUsd: updates.startingBalanceUsd,
       currentBalanceUsd:
         existingSettings.currentBalanceUsd == null
@@ -1412,10 +1480,14 @@ export class PolymarketSignalService {
     await this.storage.saveCluster(this.toPersistedCluster(accumulator));
     await this.storage.saveSignal(styledSignal);
     await this.refreshMarketAggregate(accumulator.market.slug);
-      const autoTradeUsers = await this.storage.loadAutoTradeUsers();
-      for (const user of autoTradeUsers) {
-        await this.queueStrategyReconcile(accumulator.market.slug, user.username);
-      }
+    const autoTradeUsers = await this.storage.loadAutoTradeUsers();
+    for (const user of autoTradeUsers) {
+      await this.queueStrategyReconcile(accumulator.market.slug, user.username);
+    }
+    const liveTradeUsers = await this.storage.loadLiveTradeUsers();
+    for (const user of liveTradeUsers) {
+      await this.queueLiveStrategyReconcile(accumulator.market.slug, user.username);
+    }
 
     if (config.marketHistoryCatchupEnabled && this.initialActiveConditionIds.has(accumulator.market.conditionId)) {
       this.runBackgroundTask(
@@ -1794,14 +1866,16 @@ export class PolymarketSignalService {
     const riskPercent = settings.riskPercent ?? 5;
 
     const edgeOutcome = aggregate.outcomeWeights[0]?.outcome ?? aggregate.latestSignal.outcome;
+    const existingMarketPosition = await this.storage.loadOpenStrategyPositionForMarket(username, marketSlug);
+    const trackedOutcome = existingMarketPosition?.outcome ?? edgeOutcome;
     const setupQuality = getSetupQualityScore(aggregate);
     const currentPrice = aggregate.latestSignal.averagePrice;
     const currentParticipants =
-      aggregate.outcomeParticipants?.filter((participant) => participant.outcome === edgeOutcome) ?? [];
+      aggregate.outcomeParticipants?.filter((participant) => participant.outcome === trackedOutcome) ?? [];
     const currentWeightByWallet = new Map(
       currentParticipants.map((participant) => [participant.wallet, participant.weight] as const),
     );
-    const position = await this.storage.loadOpenStrategyPosition(username, marketSlug, edgeOutcome);
+    const position = existingMarketPosition;
 
     if (!position) {
       if (!isBestTradeMarket(aggregate)) {
@@ -1868,7 +1942,8 @@ export class PolymarketSignalService {
     const exitedWeight = Math.max(0, position.originalSmartMoneyWeight - remainingSmartMoneyWeight);
     const exitedRatio =
       position.originalSmartMoneyWeight > 0 ? exitedWeight / position.originalSmartMoneyWeight : 0;
-    const qualifiesIgnoringPriceCap = isBestTradeMarket(aggregate, {
+    const edgeFlipped = position.outcome !== edgeOutcome;
+    const qualifiesIgnoringPriceCap = !edgeFlipped && isBestTradeMarket(aggregate, {
       ignorePriceCap: true,
       ignorePriceDeviation: true,
       minOutcomeShare: 0.55,
@@ -1908,7 +1983,9 @@ export class PolymarketSignalService {
 
     let exitReason: string | undefined;
     if (!qualifiesIgnoringPriceCap) {
-      const thesisBreakReasons = getBestTradeFailureReasons(aggregate, {
+      const thesisBreakReasons = edgeFlipped
+        ? [`leading outcome switched to ${edgeOutcome}`]
+        : getBestTradeFailureReasons(aggregate, {
         ignorePriceCap: true,
         ignorePriceDeviation: true,
         minOutcomeShare: 0.55,
@@ -1933,6 +2010,204 @@ export class PolymarketSignalService {
     }
 
     await this.storage.saveStrategyPosition(nextPosition);
+  }
+
+  private queueLiveStrategyReconcile(marketSlug: string, username: string): Promise<void> {
+    const normalizedUsername = username.trim();
+    if (!normalizedUsername) {
+      return Promise.resolve();
+    }
+
+    const previous = this.liveStrategyUserQueues.get(normalizedUsername) ?? Promise.resolve();
+    const next = previous
+      .catch(() => undefined)
+      .then(() => this.reconcileLiveStrategyPosition(marketSlug, normalizedUsername));
+    this.liveStrategyUserQueues.set(normalizedUsername, next.finally(() => {
+      if (this.liveStrategyUserQueues.get(normalizedUsername) === next) {
+        this.liveStrategyUserQueues.delete(normalizedUsername);
+      }
+    }));
+    return next;
+  }
+
+  private async reconcileLiveStrategyPosition(marketSlug: string, username: string): Promise<void> {
+    const aggregate = (await this.storage.loadMarketAggregates([marketSlug]))[0];
+    if (!aggregate) {
+      return;
+    }
+
+    const settings = await this.storage.getUserSettings(username);
+    if (!settings.liveTradeEnabled) {
+      return;
+    }
+
+    const tradingWalletAddress = settings.tradingWalletAddress?.trim() ?? "";
+    if (
+      !tradingWalletAddress ||
+      !settings.encryptedPrivateKey ||
+      !settings.encryptedApiKey ||
+      !settings.encryptedApiSecret ||
+      !settings.encryptedApiPassphrase
+    ) {
+      return;
+    }
+
+    const edgeOutcome = aggregate.outcomeWeights[0]?.outcome ?? aggregate.latestSignal.outcome;
+    const existingMarketPosition = await this.storage.loadOpenLiveStrategyPositionForMarket(username, marketSlug);
+    const trackedOutcome = existingMarketPosition?.outcome ?? edgeOutcome;
+    const tokenID = this.findAssetIdForMarketOutcome(marketSlug, trackedOutcome);
+    if (!tokenID) {
+      return;
+    }
+
+    const setupQuality = getSetupQualityScore(aggregate);
+    const currentPrice = aggregate.latestSignal.averagePrice;
+    const currentParticipants =
+      aggregate.outcomeParticipants?.filter((participant) => participant.outcome === trackedOutcome) ?? [];
+    const currentWeightByWallet = new Map(
+      currentParticipants.map((participant) => [participant.wallet, participant.weight] as const),
+    );
+    const client = this.createLiveTradingClient(settings);
+    const position = existingMarketPosition;
+
+    if (!position) {
+      if (!isBestTradeMarket(aggregate)) {
+        return;
+      }
+
+      const originalParticipants = currentParticipants.map((participant) => ({
+        wallet: participant.wallet,
+        weight: participant.weight,
+        tier: participant.tier,
+      }));
+      const originalSmartMoneyWeight = originalParticipants.reduce(
+        (sum, participant) => sum + participant.weight,
+        0,
+      );
+      if (originalSmartMoneyWeight <= 0) {
+        return;
+      }
+
+      const collateral = await this.getLiveCollateralBalance(client);
+      const riskPercent = settings.riskPercent ?? 5;
+      const entryNotionalUsd = Math.max(0, Math.min(collateral, collateral * (Math.max(0, riskPercent) / 100)));
+      if (entryNotionalUsd <= 0) {
+        return;
+      }
+
+      const options = await this.getLiveOrderOptions(client, tokenID);
+      await this.ensureLiveAllowance(client, AssetType.COLLATERAL, entryNotionalUsd);
+      const entryPrice = await client.calculateMarketPrice(tokenID, ClobSide.BUY, entryNotionalUsd, OrderType.FOK);
+      if (!Number.isFinite(entryPrice) || entryPrice <= 0) {
+        return;
+      }
+
+      const response = await client.createAndPostMarketOrder(
+        {
+          tokenID,
+          amount: entryNotionalUsd,
+          side: ClobSide.BUY,
+        },
+        options,
+        OrderType.FOK,
+      );
+
+      const openedAt = Date.now();
+      const remainingShares = entryNotionalUsd / entryPrice;
+      const nextPosition: StrategyPosition = {
+        id: `${username}:${marketSlug}:${edgeOutcome}:live`,
+        username,
+        marketSlug,
+        marketQuestion: aggregate.marketQuestion,
+        marketUrl: aggregate.marketUrl,
+        marketImage: aggregate.marketImage,
+        outcome: edgeOutcome,
+        status: "open",
+        openedAt,
+        updatedAt: openedAt,
+        entryPrice,
+        lastPrice: currentPrice,
+        entryNotionalUsd,
+        remainingShares,
+        realizedUsd: 0,
+        originalSmartMoneyWeight,
+        remainingSmartMoneyWeight: originalSmartMoneyWeight,
+        soldPercent: 0,
+        trim90Hit: false,
+        trim93Hit: false,
+        setupQuality,
+        originalParticipants,
+      };
+      await this.storage.saveLiveStrategyPosition(nextPosition);
+      await this.storage.saveLiveStrategyTrade(
+        username,
+        this.buildLiveStrategyTrade(nextPosition, {
+          id: `${nextPosition.id}:entry:${openedAt}`,
+          side: "BUY",
+          reason: "Entry",
+          timestamp: openedAt,
+          price: entryPrice,
+          shares: remainingShares,
+          usd: entryNotionalUsd,
+          response,
+        }),
+      );
+      return;
+    }
+
+    const remainingSmartMoneyWeight = position.originalParticipants.reduce(
+      (sum, participant) => sum + (currentWeightByWallet.get(participant.wallet) ?? 0),
+      0,
+    );
+    const exitedWeight = Math.max(0, position.originalSmartMoneyWeight - remainingSmartMoneyWeight);
+    const exitedRatio =
+      position.originalSmartMoneyWeight > 0 ? exitedWeight / position.originalSmartMoneyWeight : 0;
+    const edgeFlipped = position.outcome !== edgeOutcome;
+    const qualifiesIgnoringPriceCap = !edgeFlipped && isBestTradeMarket(aggregate, {
+      ignorePriceCap: true,
+      ignorePriceDeviation: true,
+      minOutcomeShare: 0.55,
+    });
+
+    let nextPosition: StrategyPosition = {
+      ...position,
+      updatedAt: Date.now(),
+      lastPrice: currentPrice,
+      remainingSmartMoneyWeight,
+      setupQuality,
+    };
+
+    const options = await this.getLiveOrderOptions(client, tokenID);
+
+    if (!nextPosition.trim90Hit && currentPrice >= 0.9) {
+      nextPosition = await this.executeLiveTrim(username, nextPosition, tokenID, options, 0.25, 0.9, "Trim 0.90");
+    }
+
+    if (!nextPosition.trim93Hit && currentPrice >= 0.93) {
+      nextPosition = await this.executeLiveTrim(username, nextPosition, tokenID, options, 0.25, 0.93, "Trim 0.93");
+    }
+
+    let exitReason: string | undefined;
+    if (!qualifiesIgnoringPriceCap) {
+      const thesisBreakReasons = edgeFlipped
+        ? [`leading outcome switched to ${edgeOutcome}`]
+        : getBestTradeFailureReasons(aggregate, {
+        ignorePriceCap: true,
+        ignorePriceDeviation: true,
+        minOutcomeShare: 0.55,
+      });
+      exitReason = `Thesis break: ${thesisBreakReasons.join(", ")}`;
+    } else if (currentPrice >= 0.995) {
+      exitReason = "Take profit 0.995";
+    } else if (exitedRatio >= 0.5) {
+      exitReason = "50% smart-money weight exited";
+    }
+
+    if (exitReason && nextPosition.remainingShares > 0) {
+      nextPosition = await this.executeLiveClose(username, nextPosition, tokenID, options, exitReason);
+    }
+
+    await this.storage.saveLiveStrategyPosition(nextPosition);
   }
 
   private async drainTrackedTraderPollQueue(): Promise<void> {
@@ -2293,6 +2568,230 @@ export class PolymarketSignalService {
     }
 
     return null;
+  }
+
+  private createLiveTradingClient(
+    settings: Awaited<ReturnType<SignalStorage["getUserSettings"]>>,
+  ): ClobClient {
+    const privateKey = decryptSecret(settings.encryptedPrivateKey!, config.tradingEncryptionSecret);
+    const creds: ApiKeyCreds = {
+      key: decryptSecret(settings.encryptedApiKey!, config.tradingEncryptionSecret),
+      secret: decryptSecret(settings.encryptedApiSecret!, config.tradingEncryptionSecret),
+      passphrase: decryptSecret(settings.encryptedApiPassphrase!, config.tradingEncryptionSecret),
+    };
+    const signer = new Wallet(privateKey);
+    const signatureType =
+      settings.tradingSignatureType === "POLY_PROXY" ? SignatureType.POLY_PROXY : SignatureType.EOA;
+
+    return new ClobClient(
+      CLOB_API_URL,
+      137,
+      signer,
+      creds,
+      signatureType,
+      settings.tradingWalletAddress ?? undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+  }
+
+  private async getLiveCollateralBalance(client: ClobClient): Promise<number> {
+    const response = await client.getBalanceAllowance({ asset_type: AssetType.COLLATERAL });
+    return Number(response.balance ?? 0);
+  }
+
+  private async ensureLiveAllowance(
+    client: ClobClient,
+    assetType: AssetType,
+    minimumAmount: number,
+    tokenID?: string,
+  ): Promise<void> {
+    const response = await client.getBalanceAllowance(
+      assetType === AssetType.CONDITIONAL ? { asset_type: assetType, token_id: tokenID } : { asset_type: assetType },
+    );
+    const allowance = Number(response.allowance ?? 0);
+    if (allowance >= minimumAmount) {
+      return;
+    }
+
+    await client.updateBalanceAllowance(
+      assetType === AssetType.CONDITIONAL ? { asset_type: assetType, token_id: tokenID } : { asset_type: assetType },
+    );
+  }
+
+  private async getLiveOrderOptions(
+    client: ClobClient,
+    tokenID: string,
+  ): Promise<{ tickSize: "0.1" | "0.01" | "0.001" | "0.0001"; negRisk?: boolean }> {
+    const book = (await client.getOrderBook(tokenID)) as OrderBookSummary;
+    return {
+      tickSize: book.tick_size as "0.1" | "0.01" | "0.001" | "0.0001",
+      negRisk: book.neg_risk,
+    };
+  }
+
+  private async executeLiveTrim(
+    username: string,
+    position: StrategyPosition,
+    tokenID: string,
+    options: { tickSize: "0.1" | "0.01" | "0.001" | "0.0001"; negRisk?: boolean },
+    fractionOfInitialShares: number,
+    thresholdPrice: number,
+    reason: string,
+  ): Promise<StrategyPosition> {
+    const settings = await this.storage.getUserSettings(username);
+    const client = this.createLiveTradingClient(settings);
+    const initialShares = position.entryPrice > 0 ? position.entryNotionalUsd / position.entryPrice : 0;
+    const sharesToSell = Math.min(position.remainingShares, initialShares * fractionOfInitialShares);
+    if (sharesToSell <= 0) {
+      return position;
+    }
+
+    await this.ensureLiveAllowance(client, AssetType.CONDITIONAL, sharesToSell, tokenID);
+    const sellPrice = await client.calculateMarketPrice(tokenID, ClobSide.SELL, sharesToSell, OrderType.FOK);
+    if (!Number.isFinite(sellPrice) || sellPrice <= 0) {
+      return position;
+    }
+
+    const response = await client.createAndPostMarketOrder(
+      {
+        tokenID,
+        amount: sharesToSell,
+        side: ClobSide.SELL,
+      },
+      options,
+      OrderType.FOK,
+    );
+
+    const realizedUsd = sharesToSell * sellPrice;
+    const nextPosition: StrategyPosition = {
+      ...position,
+      updatedAt: Date.now(),
+      lastPrice: Math.max(position.lastPrice, thresholdPrice),
+      remainingShares: Math.max(0, position.remainingShares - sharesToSell),
+      realizedUsd: position.realizedUsd + realizedUsd,
+      soldPercent: Math.max(position.soldPercent, thresholdPrice >= 0.93 ? 50 : 25),
+      trim90Hit: position.trim90Hit || thresholdPrice >= 0.9,
+      trim93Hit: position.trim93Hit || thresholdPrice >= 0.93,
+    };
+    await this.storage.saveLiveStrategyTrade(
+      username,
+      this.buildLiveStrategyTrade(nextPosition, {
+        id: `${position.id}:${reason}:${Date.now()}`,
+        side: "SELL",
+        reason,
+        timestamp: Date.now(),
+        price: sellPrice,
+        shares: sharesToSell,
+        usd: realizedUsd,
+        response,
+      }),
+    );
+
+    return nextPosition;
+  }
+
+  private async executeLiveClose(
+    username: string,
+    position: StrategyPosition,
+    tokenID: string,
+    options: { tickSize: "0.1" | "0.01" | "0.001" | "0.0001"; negRisk?: boolean },
+    exitReason: string,
+  ): Promise<StrategyPosition> {
+    const settings = await this.storage.getUserSettings(username);
+    const client = this.createLiveTradingClient(settings);
+    if (position.remainingShares <= 0) {
+      return {
+        ...position,
+        status: "closed",
+        soldPercent: 100,
+        exitReason,
+      };
+    }
+
+    await this.ensureLiveAllowance(client, AssetType.CONDITIONAL, position.remainingShares, tokenID);
+    const sellPrice = await client.calculateMarketPrice(
+      tokenID,
+      ClobSide.SELL,
+      position.remainingShares,
+      OrderType.FOK,
+    );
+    if (!Number.isFinite(sellPrice) || sellPrice <= 0) {
+      return position;
+    }
+
+    const response = await client.createAndPostMarketOrder(
+      {
+        tokenID,
+        amount: position.remainingShares,
+        side: ClobSide.SELL,
+      },
+      options,
+      OrderType.FOK,
+    );
+
+    const realizedUsd = position.remainingShares * sellPrice;
+    const nextPosition: StrategyPosition = {
+      ...position,
+      updatedAt: Date.now(),
+      lastPrice: sellPrice,
+      remainingShares: 0,
+      realizedUsd: position.realizedUsd + realizedUsd,
+      soldPercent: 100,
+      status: "closed",
+      exitReason,
+    };
+    await this.storage.saveLiveStrategyTrade(
+      username,
+      this.buildLiveStrategyTrade(nextPosition, {
+        id: `${position.id}:close:${Date.now()}`,
+        side: "SELL",
+        reason: exitReason,
+        timestamp: Date.now(),
+        price: sellPrice,
+        shares: position.remainingShares,
+        usd: realizedUsd,
+        response,
+      }),
+    );
+
+    return nextPosition;
+  }
+
+  private buildLiveStrategyTrade(
+    position: StrategyPosition,
+    trade: {
+      id: string;
+      side: "BUY" | "SELL";
+      reason: string;
+      timestamp: number;
+      price: number;
+      shares: number;
+      usd: number;
+      response: unknown;
+    },
+  ): StrategyTrade {
+    return {
+      id: trade.id,
+      marketSlug: position.marketSlug,
+      marketQuestion: position.marketQuestion,
+      marketUrl: position.marketUrl,
+      outcome: position.outcome,
+      side: trade.side,
+      reason: trade.reason,
+      timestamp: trade.timestamp,
+      price: trade.price,
+      shares: trade.shares,
+      usd: trade.usd,
+      orderId: extractOrderId(trade.response),
+      status: extractOrderStatus(trade.response),
+      mode: "live",
+    };
   }
 
   private findAssetIdForMarketOutcome(marketSlug: string, outcome: string): string | null {
@@ -2742,6 +3241,37 @@ const buildStrategyDashboard = (
   };
 };
 
+const buildStoredStrategyDashboard = (
+  positions: StrategyPosition[],
+  trades: StrategyTrade[],
+  cashBalanceUsd: number,
+): StrategyDashboardResponse => {
+  const openPositions = positions.filter((position) => position.status === "open");
+  const closedPositions = positions.filter((position) => position.status === "closed");
+  const openExposureUsd = openPositions.reduce(
+    (sum, position) => sum + position.remainingShares * position.lastPrice,
+    0,
+  );
+  const unrealizedUsd = openPositions.reduce(
+    (sum, position) => sum + (position.remainingShares * position.lastPrice - position.remainingShares * position.entryPrice),
+    0,
+  );
+
+  return {
+    summary: {
+      cashBalanceUsd,
+      openPositionCount: openPositions.length,
+      closedPositionCount: closedPositions.length,
+      totalPositionCount: positions.length,
+      openExposureUsd,
+      unrealizedUsd,
+      totalEquityUsd: cashBalanceUsd + openExposureUsd,
+    },
+    positions,
+    trades: [...trades].sort((left, right) => right.timestamp - left.timestamp),
+  };
+};
+
 const calculatePaperCashBalanceFromPositions = (
   positions: StrategyPosition[],
   startingBalanceUsd: number,
@@ -2774,10 +3304,11 @@ const buildStrategyTrades = (position: StrategyPosition): StrategyTrade[] => {
     side: "BUY",
     reason: "Entry",
     timestamp: position.openedAt,
-    price: position.entryPrice,
-    shares: initialShares,
-    usd: position.entryNotionalUsd,
-  });
+      price: position.entryPrice,
+      shares: initialShares,
+      usd: position.entryNotionalUsd,
+      mode: "paper",
+    });
 
   if (position.trim90Hit) {
     trades.push({
@@ -2792,6 +3323,7 @@ const buildStrategyTrades = (position: StrategyPosition): StrategyTrade[] => {
       price: 0.9,
       shares: quarterShares,
       usd: quarterShares * 0.9,
+      mode: "paper",
     });
   }
 
@@ -2808,6 +3340,7 @@ const buildStrategyTrades = (position: StrategyPosition): StrategyTrade[] => {
       price: 0.93,
       shares: quarterShares,
       usd: quarterShares * 0.93,
+      mode: "paper",
     });
   }
 
@@ -2824,8 +3357,38 @@ const buildStrategyTrades = (position: StrategyPosition): StrategyTrade[] => {
       price: position.lastPrice,
       shares: initialShares * 0.5,
       usd: initialShares * 0.5 * position.lastPrice,
+      mode: "paper",
     });
   }
 
   return trades;
+};
+
+const extractOrderId = (response: unknown): string | undefined => {
+  if (!response || typeof response !== "object") {
+    return undefined;
+  }
+
+  const candidate = (response as Record<string, unknown>).orderID
+    ?? (response as Record<string, unknown>).orderId
+    ?? (response as Record<string, unknown>).id;
+  return typeof candidate === "string" && candidate.trim() ? candidate : undefined;
+};
+
+const extractOrderStatus = (response: unknown): string | undefined => {
+  if (!response || typeof response !== "object") {
+    return undefined;
+  }
+
+  const candidate = (response as Record<string, unknown>).status
+    ?? (response as Record<string, unknown>).success;
+  if (typeof candidate === "string" && candidate.trim()) {
+    return candidate;
+  }
+
+  if (typeof candidate === "boolean") {
+    return candidate ? "success" : "failed";
+  }
+
+  return undefined;
 };

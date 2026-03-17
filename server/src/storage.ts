@@ -1,6 +1,6 @@
 import { MongoClient } from "mongodb";
 import { config } from "./config.js";
-import type { MarketAggregate, StrategyPosition, TradeRecord, TraderSummary, WhaleSignal } from "./types.js";
+import type { MarketAggregate, StrategyPosition, StrategyTrade, TradeRecord, TraderSummary, WhaleSignal } from "./types.js";
 
 type PersistedSignal = WhaleSignal & {
   updatedAt: Date;
@@ -69,6 +69,7 @@ export type PersistedUserWebhookSetting = {
   webhookUrl?: string;
   monitoredWallet?: string;
   autoTradeEnabled?: boolean;
+  liveTradeEnabled?: boolean;
   startingBalanceUsd?: number;
   currentBalanceUsd?: number;
   riskPercent?: number;
@@ -135,6 +136,15 @@ export type PersistedStrategyPosition = StrategyPosition & {
   updatedAtDate: Date;
 };
 
+export type PersistedLiveStrategyPosition = StrategyPosition & {
+  updatedAtDate: Date;
+};
+
+export type PersistedLiveStrategyTrade = StrategyTrade & {
+  username: string;
+  updatedAtDate: Date;
+};
+
 export class SignalStorage {
   private client: MongoClient | null = null;
 
@@ -160,6 +170,12 @@ export class SignalStorage {
     await this.strategyPositionCollection().createIndex({ status: 1, updatedAt: -1 });
     await this.strategyPositionCollection().createIndex({ username: 1, status: 1, updatedAt: -1 });
     await this.strategyPositionCollection().createIndex({ username: 1, marketSlug: 1, outcome: 1, status: 1 });
+    await this.liveStrategyPositionCollection().createIndex({ id: 1 }, { unique: true });
+    await this.liveStrategyPositionCollection().createIndex({ status: 1, updatedAt: -1 });
+    await this.liveStrategyPositionCollection().createIndex({ username: 1, status: 1, updatedAt: -1 });
+    await this.liveStrategyPositionCollection().createIndex({ username: 1, marketSlug: 1, outcome: 1, status: 1 });
+    await this.liveStrategyTradeCollection().createIndex({ id: 1 }, { unique: true });
+    await this.liveStrategyTradeCollection().createIndex({ username: 1, timestamp: -1 });
     await this.tradeCollection().createIndex({ tradeId: 1 }, { unique: true });
     await this.tradeCollection().createIndex({ timestamp: -1 });
     await this.observedTradeCollection().createIndex({ tradeId: 1 }, { unique: true });
@@ -349,6 +365,24 @@ export class SignalStorage {
     return position;
   }
 
+  async loadOpenStrategyPositionForMarket(
+    username: string,
+    marketSlug: string,
+  ): Promise<StrategyPosition | null> {
+    const row = await this.strategyPositionCollection().findOne({
+      username,
+      marketSlug,
+      status: "open",
+    });
+
+    if (!row) {
+      return null;
+    }
+
+    const { _id: _ignored, updatedAtDate: _updatedAtDate, ...position } = row;
+    return position;
+  }
+
   async saveStrategyPosition(position: StrategyPosition): Promise<void> {
     const payload: PersistedStrategyPosition = {
       ...position,
@@ -357,6 +391,87 @@ export class SignalStorage {
 
     await this.strategyPositionCollection().updateOne(
       { id: position.id },
+      { $set: payload },
+      { upsert: true },
+    );
+  }
+
+  async loadLiveStrategyPositions(username: string, limit = 100): Promise<StrategyPosition[]> {
+    const rows = await this.liveStrategyPositionCollection()
+      .find({ username }, { sort: { updatedAt: -1 }, limit })
+      .toArray();
+
+    return rows.map(({ _id: _ignored, updatedAtDate: _updatedAtDate, ...position }) => position);
+  }
+
+  async loadOpenLiveStrategyPosition(
+    username: string,
+    marketSlug: string,
+    outcome: string,
+  ): Promise<StrategyPosition | null> {
+    const row = await this.liveStrategyPositionCollection().findOne({
+      username,
+      marketSlug,
+      outcome,
+      status: "open",
+    });
+
+    if (!row) {
+      return null;
+    }
+
+    const { _id: _ignored, updatedAtDate: _updatedAtDate, ...position } = row;
+    return position;
+  }
+
+  async loadOpenLiveStrategyPositionForMarket(
+    username: string,
+    marketSlug: string,
+  ): Promise<StrategyPosition | null> {
+    const row = await this.liveStrategyPositionCollection().findOne({
+      username,
+      marketSlug,
+      status: "open",
+    });
+
+    if (!row) {
+      return null;
+    }
+
+    const { _id: _ignored, updatedAtDate: _updatedAtDate, ...position } = row;
+    return position;
+  }
+
+  async saveLiveStrategyPosition(position: StrategyPosition): Promise<void> {
+    const payload: PersistedLiveStrategyPosition = {
+      ...position,
+      updatedAtDate: new Date(),
+    };
+
+    await this.liveStrategyPositionCollection().updateOne(
+      { id: position.id },
+      { $set: payload },
+      { upsert: true },
+    );
+  }
+
+  async loadLiveStrategyTrades(username: string, limit = 200): Promise<StrategyTrade[]> {
+    const rows = await this.liveStrategyTradeCollection()
+      .find({ username }, { sort: { timestamp: -1 }, limit })
+      .toArray();
+
+    return rows.map(({ _id: _ignored, username: _username, updatedAtDate: _updatedAtDate, ...trade }) => trade);
+  }
+
+  async saveLiveStrategyTrade(username: string, trade: StrategyTrade): Promise<void> {
+    const payload: PersistedLiveStrategyTrade = {
+      ...trade,
+      username,
+      updatedAtDate: new Date(),
+    };
+
+    await this.liveStrategyTradeCollection().updateOne(
+      { id: trade.id },
       { $set: payload },
       { upsert: true },
     );
@@ -472,6 +587,7 @@ export class SignalStorage {
       webhookUrl?: string;
       monitoredWallet?: string;
       autoTradeEnabled?: boolean;
+      liveTradeEnabled?: boolean;
       startingBalanceUsd?: number;
       currentBalanceUsd?: number;
       riskPercent?: number;
@@ -513,6 +629,7 @@ export class SignalStorage {
     webhookUrl: string | null;
     monitoredWallet: string | null;
     autoTradeEnabled: boolean;
+    liveTradeEnabled: boolean;
     startingBalanceUsd: number | null;
     currentBalanceUsd: number | null;
     riskPercent: number | null;
@@ -528,6 +645,7 @@ export class SignalStorage {
       webhookUrl: row?.webhookUrl ?? null,
       monitoredWallet: row?.monitoredWallet ?? null,
       autoTradeEnabled: row?.autoTradeEnabled ?? false,
+      liveTradeEnabled: row?.liveTradeEnabled ?? false,
       startingBalanceUsd: row?.startingBalanceUsd ?? null,
       currentBalanceUsd: row?.currentBalanceUsd ?? null,
       riskPercent: row?.riskPercent ?? null,
@@ -746,6 +864,28 @@ export class SignalStorage {
       .filter((row) => Boolean(row.username));
   }
 
+  async loadLiveTradeUsers(): Promise<Array<{ username: string }>> {
+    const rows = await this.userWebhookCollection()
+      .find(
+        {
+          liveTradeEnabled: true,
+          tradingWalletAddress: { $exists: true, $ne: "" },
+          encryptedPrivateKey: { $exists: true, $ne: "" },
+          encryptedApiKey: { $exists: true, $ne: "" },
+          encryptedApiSecret: { $exists: true, $ne: "" },
+          encryptedApiPassphrase: { $exists: true, $ne: "" },
+        },
+        { projection: { _id: 0, username: 1 } },
+      )
+      .toArray();
+
+    return rows
+      .map((row) => ({
+        username: row.username,
+      }))
+      .filter((row) => Boolean(row.username));
+  }
+
   async loadWatchersForMarket(
     marketSlug: string,
     outcome: string,
@@ -829,6 +969,26 @@ export class SignalStorage {
     return this.client
       .db(config.mongoDbName)
       .collection<PersistedStrategyPosition>("strategy_positions");
+  }
+
+  private liveStrategyPositionCollection() {
+    if (!this.client) {
+      throw new Error("Mongo client not connected");
+    }
+
+    return this.client
+      .db(config.mongoDbName)
+      .collection<PersistedLiveStrategyPosition>("live_strategy_positions");
+  }
+
+  private liveStrategyTradeCollection() {
+    if (!this.client) {
+      throw new Error("Mongo client not connected");
+    }
+
+    return this.client
+      .db(config.mongoDbName)
+      .collection<PersistedLiveStrategyTrade>("live_strategy_trades");
   }
 
   private marketAggregateCollection() {

@@ -142,12 +142,14 @@ export type UserProfileResponse = {
   webhookUrl: string;
   monitoredWallet: string;
   paperTradingEnabled: boolean;
+  liveTradingEnabled: boolean;
   startingBalanceUsd: number;
   currentBalanceUsd: number;
   riskPercent: number;
   tradingWalletAddress: string;
   tradingSignatureType: "EOA" | "POLY_PROXY";
   hasTradingCredentials: boolean;
+  liveTradingReady: boolean;
   watches: Array<{
     marketSlug: string;
     outcome: string;
@@ -199,6 +201,9 @@ export type StrategyTrade = {
   price: number;
   shares: number;
   usd: number;
+  orderId?: string;
+  status?: string;
+  mode?: "paper" | "live";
 };
 
 export type StrategyDashboardResponse = {
@@ -213,4 +218,9 @@ export type StrategyDashboardResponse = {
   };
   positions: StrategyPosition[];
   trades: StrategyTrade[];
+};
+
+export type LiveStrategyDashboardResponse = StrategyDashboardResponse & {
+  enabled: boolean;
+  ready: boolean;
 };
