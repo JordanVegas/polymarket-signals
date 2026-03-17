@@ -21,6 +21,7 @@ import type {
 
 const GAMMA_MARKETS_URL = "https://gamma-api.polymarket.com/markets";
 const DATA_API_URL = "https://data-api.polymarket.com";
+const CLOB_API_URL = "https://clob.polymarket.com";
 const CLOB_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
 
 type RawMarket = {
@@ -82,6 +83,13 @@ type MarketTradeMessage = {
   side?: "BUY" | "SELL";
   timestamp?: string;
   transaction_hash?: string;
+};
+
+type OrderBookResponse = {
+  asks?: Array<{
+    price?: string;
+    size?: string;
+  }>;
 };
 
 type SignalAccumulator = {
@@ -1691,7 +1699,7 @@ export class PolymarketSignalService {
         return;
       }
 
-      const entryPrice = getSimulatedMarketEntryPrice(currentPrice);
+      const entryPrice = await this.getPaperEntryPrice(aggregate.marketSlug, edgeOutcome, currentPrice);
       const nextPosition: StrategyPosition = {
         id: `${username}:${marketSlug}:${edgeOutcome}`,
         username,
@@ -2119,6 +2127,46 @@ export class PolymarketSignalService {
   ): Promise<number> {
     const positions = await this.storage.loadStrategyPositions(username, 1_000);
     return calculatePaperCashBalanceFromPositions(positions, startingBalanceUsd);
+  }
+
+  private async getPaperEntryPrice(
+    marketSlug: string,
+    outcome: string,
+    fallbackPrice: number,
+  ): Promise<number> {
+    const assetId = this.findAssetIdForMarketOutcome(marketSlug, outcome);
+    if (!assetId) {
+      return fallbackPrice;
+    }
+
+    const url = new URL(`${CLOB_API_URL}/book`);
+    url.searchParams.set("token_id", assetId);
+    const response = await this.safeFetch(url, `book ${marketSlug} ${outcome}`);
+    if (!response || !response.ok) {
+      return fallbackPrice;
+    }
+
+    const payload = (await response.json()) as OrderBookResponse;
+    const bestAsk = payload.asks
+      ?.map((entry) => Number(entry.price))
+      .filter((price) => Number.isFinite(price) && price > 0)
+      .sort((left, right) => left - right)[0];
+
+    return bestAsk ?? fallbackPrice;
+  }
+
+  private findAssetIdForMarketOutcome(marketSlug: string, outcome: string): string | null {
+    for (const [assetId, market] of this.marketsByAssetId.entries()) {
+      if (market.slug !== marketSlug) {
+        continue;
+      }
+
+      if ((market.outcomeByAssetId[assetId] ?? "").trim().toLowerCase() === outcome.trim().toLowerCase()) {
+        return assetId;
+      }
+    }
+
+    return null;
   }
 }
 
@@ -2564,11 +2612,6 @@ const calculatePaperCashBalanceFromPositions = (
       positions.reduce((sum, position) => sum + position.entryNotionalUsd, 0) +
       positions.reduce((sum, position) => sum + position.realizedUsd, 0),
   );
-
-const getSimulatedMarketEntryPrice = (displayedPrice: number): number => {
-  const premium = Math.max(0.005, displayedPrice * 0.01);
-  return Math.min(0.995, displayedPrice + premium);
-};
 
 const buildStrategyTrades = (position: StrategyPosition): StrategyTrade[] => {
   const trades: StrategyTrade[] = [];
