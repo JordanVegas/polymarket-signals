@@ -60,6 +60,7 @@ export const config = {
   marketTradeFetchConcurrency: parseNumber(process.env.MARKET_TRADE_FETCH_CONCURRENCY, 4),
   trackedTraderPollConcurrency: parseNumber(process.env.TRACKED_TRADER_POLL_CONCURRENCY, 3),
   fetchConnectTimeoutMs: parseNumber(process.env.FETCH_CONNECT_TIMEOUT_MS, 30_000),
+  apiProxyUrl: process.env.POLYMARKET_PROXY_URL || process.env.API_PROXY_URL || "",
   recentCatchupLookbackMinutes: parseNumber(process.env.RECENT_CATCHUP_LOOKBACK_MINUTES, 30),
   recentCatchupMaxOffset: parseNumber(process.env.RECENT_CATCHUP_MAX_OFFSET, 3_000),
   historicalFetchEnabled: parseBoolean(process.env.HISTORICAL_FETCH_ENABLED, false),

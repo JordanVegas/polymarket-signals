@@ -11,7 +11,7 @@ import {
   type OrderBookSummary,
 } from "@polymarket/clob-client";
 import WebSocket from "ws";
-import { Agent } from "undici";
+import { Agent, ProxyAgent } from "undici";
 import { SignalStorage, type PersistedCluster, type PersistedTrackedTrader } from "./storage.js";
 import type {
   AppSnapshot,
@@ -277,9 +277,19 @@ export class PolymarketSignalService {
   private readonly accumulators = new Map<string, SignalAccumulator>();
   private readonly traderCache = new Map<string, { summary: TraderSummary; fetchedAt: number }>();
   private readonly storage = new SignalStorage();
-  private readonly fetchDispatcher = new Agent({
-    connectTimeout: config.fetchConnectTimeoutMs,
-  });
+  private readonly fetchDispatcher = config.apiProxyUrl
+    ? new ProxyAgent({
+        uri: config.apiProxyUrl,
+        requestTls: {
+          rejectUnauthorized: true,
+        },
+        proxyTls: {
+          rejectUnauthorized: true,
+        },
+      })
+    : new Agent({
+        connectTimeout: config.fetchConnectTimeoutMs,
+      });
   private readonly pendingUnknownAssetTrades = new Map<string, TradeRecord[]>();
   private readonly marketSocketShards = new Map<number, MarketSocketShard>();
   private readonly marketTradeFetchInFlight = new Map<string, Promise<void>>();
