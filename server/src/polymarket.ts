@@ -1,5 +1,6 @@
 import { config } from "./config.js";
 import WebSocket from "ws";
+import { Agent } from "undici";
 import { SignalStorage, type PersistedCluster } from "./storage.js";
 import type {
   AppSnapshot,
@@ -196,6 +197,9 @@ export class PolymarketSignalService {
   private readonly accumulators = new Map<string, SignalAccumulator>();
   private readonly traderCache = new Map<string, { summary: TraderSummary; fetchedAt: number }>();
   private readonly storage = new SignalStorage();
+  private readonly fetchDispatcher = new Agent({
+    connectTimeout: config.fetchConnectTimeoutMs,
+  });
   private readonly pendingUnknownAssetTrades = new Map<string, TradeRecord[]>();
   private readonly marketSocketShards = new Map<number, MarketSocketShard>();
   private readonly marketTradeFetchInFlight = new Map<string, Promise<void>>();
@@ -1384,7 +1388,9 @@ export class PolymarketSignalService {
 
   private async safeFetch(input: string | URL, context: string): Promise<Response | null> {
     try {
-      return await fetch(input);
+      return await fetch(input, {
+        dispatcher: this.fetchDispatcher as unknown as NonNullable<RequestInit["dispatcher"]>,
+      });
     } catch (error) {
       logFetchFailure(context, error);
       return null;

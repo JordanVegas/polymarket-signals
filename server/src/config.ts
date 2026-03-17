@@ -55,6 +55,7 @@ export const config = {
   maxSignals: parseNumber(process.env.MAX_SIGNALS, 75),
   marketRefreshMs: parseNumber(process.env.MARKET_REFRESH_MS, 10 * 60_000),
   tradePollMs: parseNumber(process.env.TRADE_POLL_MS, 2_500),
+  fetchConnectTimeoutMs: parseNumber(process.env.FETCH_CONNECT_TIMEOUT_MS, 30_000),
   recentCatchupLookbackMinutes: parseNumber(process.env.RECENT_CATCHUP_LOOKBACK_MINUTES, 30),
   recentCatchupMaxOffset: parseNumber(process.env.RECENT_CATCHUP_MAX_OFFSET, 3_000),
   historicalFetchEnabled: parseBoolean(process.env.HISTORICAL_FETCH_ENABLED, false),
