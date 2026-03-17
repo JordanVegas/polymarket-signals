@@ -275,8 +275,10 @@ const copy = {
     entrySize: "Entry size",
     positionValue: "Position value",
     remainingShares: "Remaining shares",
-    strategyTrades: "Strategy trades",
-    noStrategyTrades: "No strategy trades yet.",
+    strategyTrades: "Activity log",
+    noStrategyTrades: "No activity yet.",
+    activityTime: "Time",
+    activityDetails: "Details",
     entryTrade: "Entry",
     trim90: "Trim 0.90",
     trim93: "Trim 0.93",
@@ -413,8 +415,10 @@ const copy = {
     entrySize: "גודל כניסה",
     positionValue: "שווי פוזיציה",
     remainingShares: "שאר מניות",
-    strategyTrades: "עסקאות אסטרטגיה",
-    noStrategyTrades: "עדיין אין עסקאות אסטרטגיה.",
+    strategyTrades: "יומן פעילות",
+    noStrategyTrades: "עדיין אין פעילות.",
+    activityTime: "זמן",
+    activityDetails: "פרטים",
     entryTrade: "כניסה",
     trim90: "מימוש 0.90",
     trim93: "מימוש 0.93",
@@ -1417,7 +1421,9 @@ function App() {
                       <div className="profile-watch-copy">
                         <strong>{trade.marketQuestion}</strong>
                         <span>{`${trade.side} ${trade.outcome}`}</span>
-                        <span>{`${trade.reason} · ${formatRelativeTime(trade.timestamp, t)}`}</span>
+                        <span>{`${t.activityTime}: ${formatRelativeTime(trade.timestamp, t)} · ${formatTimestamp(trade.timestamp, t.pending)}`}</span>
+                        <span>{`${trade.reason} - ${formatRelativeTime(trade.timestamp, t)}`}</span>
+                        <span>{`${t.activityDetails}: ${trade.shares.toFixed(2)} shares ? ${currencyFormatter.format(trade.usd)} @ ${trade.price.toFixed(3)}`}</span>
                       </div>
                       <div className="profile-watch-actions">
                         <span className="strategy-trade-amount">
