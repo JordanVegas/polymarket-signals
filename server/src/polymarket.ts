@@ -100,6 +100,12 @@ type SignalAccumulator = {
   signalId?: string;
 };
 
+type PendingMarketTradeFetch = {
+  marketConditionId: string;
+  assetId: string;
+  timestampSec: number;
+};
+
 type MarketSocketShard = {
   id: number;
   assetIds: string[];
@@ -203,7 +209,10 @@ export class PolymarketSignalService {
   private readonly pendingUnknownAssetTrades = new Map<string, TradeRecord[]>();
   private readonly marketSocketShards = new Map<number, MarketSocketShard>();
   private readonly marketTradeFetchInFlight = new Map<string, Promise<void>>();
+  private readonly queuedMarketTradeFetches = new Map<string, PendingMarketTradeFetch>();
   private readonly lastMarketTradeFetchAt = new Map<string, number>();
+  private marketTradeFetchDrainTimer: NodeJS.Timeout | null = null;
+  private activeMarketTradeFetchCount = 0;
   private marketSyncTimer: NodeJS.Timeout | null = null;
   private tradePollTimer: NodeJS.Timeout | null = null;
   private portfolioSyncTimer: NodeJS.Timeout | null = null;
@@ -255,6 +264,9 @@ export class PolymarketSignalService {
     }
     if (this.portfolioSyncTimer) {
       clearInterval(this.portfolioSyncTimer);
+    }
+    if (this.marketTradeFetchDrainTimer) {
+      clearTimeout(this.marketTradeFetchDrainTimer);
     }
     this.teardownAllMarketSockets();
   }
@@ -1054,25 +1066,111 @@ export class PolymarketSignalService {
       return;
     }
 
+    const nextRequest: PendingMarketTradeFetch = {
+      marketConditionId,
+      assetId,
+      timestampSec,
+    };
     const lastFetchAt = this.lastMarketTradeFetchAt.get(marketConditionId) ?? 0;
-    if (Date.now() - lastFetchAt < 10_000) {
+    if (
+      Date.now() - lastFetchAt < 10_000 ||
+      this.marketTradeFetchInFlight.has(marketConditionId) ||
+      this.activeMarketTradeFetchCount >= config.marketTradeFetchConcurrency
+    ) {
+      this.queueMarketTradeFetch(nextRequest);
       return;
     }
 
-    if (this.marketTradeFetchInFlight.has(marketConditionId)) {
-      return;
+    this.startMarketTradeFetch(nextRequest);
+  }
+
+  private queueMarketTradeFetch(request: PendingMarketTradeFetch): void {
+    const existing = this.queuedMarketTradeFetches.get(request.marketConditionId);
+    if (!existing || request.timestampSec >= existing.timestampSec) {
+      this.queuedMarketTradeFetches.set(request.marketConditionId, request);
     }
 
-    const task = this.fetchRecentTradesForMarket(marketConditionId, assetId, timestampSec)
+    this.scheduleMarketTradeFetchDrain();
+  }
+
+  private startMarketTradeFetch(request: PendingMarketTradeFetch): void {
+    this.lastMarketTradeFetchAt.set(request.marketConditionId, Date.now());
+    this.activeMarketTradeFetchCount += 1;
+
+    const task = this.fetchRecentTradesForMarket(
+      request.marketConditionId,
+      request.assetId,
+      request.timestampSec,
+    )
       .catch((error) => {
-        logFetchFailure(`market trade recovery ${marketConditionId}`, error);
+        logFetchFailure(`market trade recovery ${request.marketConditionId}`, error);
       })
       .finally(() => {
-        this.marketTradeFetchInFlight.delete(marketConditionId);
+        this.marketTradeFetchInFlight.delete(request.marketConditionId);
+        this.activeMarketTradeFetchCount = Math.max(0, this.activeMarketTradeFetchCount - 1);
+        this.scheduleMarketTradeFetchDrain();
       });
 
-    this.lastMarketTradeFetchAt.set(marketConditionId, Date.now());
-    this.marketTradeFetchInFlight.set(marketConditionId, task);
+    this.marketTradeFetchInFlight.set(request.marketConditionId, task);
+  }
+
+  private scheduleMarketTradeFetchDrain(): void {
+    if (this.marketTradeFetchDrainTimer) {
+      clearTimeout(this.marketTradeFetchDrainTimer);
+      this.marketTradeFetchDrainTimer = null;
+    }
+
+    if (this.queuedMarketTradeFetches.size === 0) {
+      return;
+    }
+
+    const now = Date.now();
+    let nextDelayMs = 10_000;
+
+    for (const marketConditionId of this.queuedMarketTradeFetches.keys()) {
+      const lastFetchAt = this.lastMarketTradeFetchAt.get(marketConditionId) ?? 0;
+      const delayMs = Math.max(0, 10_000 - (now - lastFetchAt));
+      nextDelayMs = Math.min(nextDelayMs, delayMs);
+    }
+
+    this.marketTradeFetchDrainTimer = setTimeout(() => {
+      this.marketTradeFetchDrainTimer = null;
+      this.drainMarketTradeFetchQueue();
+    }, nextDelayMs);
+  }
+
+  private drainMarketTradeFetchQueue(): void {
+    if (this.activeMarketTradeFetchCount >= config.marketTradeFetchConcurrency) {
+      this.scheduleMarketTradeFetchDrain();
+      return;
+    }
+
+    const now = Date.now();
+    const queuedRequests = Array.from(this.queuedMarketTradeFetches.values()).sort(
+      (left, right) => right.timestampSec - left.timestampSec,
+    );
+
+    for (const request of queuedRequests) {
+      if (this.activeMarketTradeFetchCount >= config.marketTradeFetchConcurrency) {
+        break;
+      }
+
+      if (this.marketTradeFetchInFlight.has(request.marketConditionId)) {
+        continue;
+      }
+
+      const lastFetchAt = this.lastMarketTradeFetchAt.get(request.marketConditionId) ?? 0;
+      if (now - lastFetchAt < 10_000) {
+        continue;
+      }
+
+      this.queuedMarketTradeFetches.delete(request.marketConditionId);
+      this.startMarketTradeFetch(request);
+    }
+
+    if (this.queuedMarketTradeFetches.size > 0) {
+      this.scheduleMarketTradeFetchDrain();
+    }
   }
 
   private async fetchRecentTradesForMarket(
