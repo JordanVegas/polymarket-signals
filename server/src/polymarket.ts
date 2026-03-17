@@ -242,6 +242,7 @@ export class PolymarketSignalService {
     await this.restoreActiveClusters();
     await this.syncMarkets();
     this.captureInitialActiveMarkets();
+    this.runBackgroundTask("market aggregate refresh", this.refreshMarketAggregates());
     this.startTradePolling();
     this.runBackgroundTask("recent catch-up", this.catchUpRecentTrades());
     if (config.historicalFetchEnabled && config.startupHistoricalBackfillEnabled) {
@@ -341,14 +342,12 @@ export class PolymarketSignalService {
     const activeMarketSlugs = Array.from(
       new Set(Array.from(this.marketsByAssetId.values(), (market) => market.slug)),
     );
-    const signals = resolveActiveBuySignals(
-      (await this.storage.loadSignalsForMarketSlugs(activeMarketSlugs)).map(applySignalLabelStyle),
-    );
+    const aggregates = await this.storage.loadMarketAggregates(activeMarketSlugs);
     const watchedOutcomesByMarket = username
       ? await this.storage.loadWatchedOutcomesByMarket(username)
       : new Map<string, Set<string>>();
     const filteredMarkets = applyViewFilter(
-      applyWatchState(aggregateMarkets(signals), watchedOutcomesByMarket),
+      applyWatchState(aggregates, watchedOutcomesByMarket),
       view,
     );
     const markets = filterMarkets(sortMarkets(filteredMarkets, sort), search);
@@ -1289,6 +1288,7 @@ export class PolymarketSignalService {
     accumulator.signalId = signalId;
     await this.storage.saveCluster(this.toPersistedCluster(accumulator));
     await this.storage.saveSignal(styledSignal);
+    await this.refreshMarketAggregate(accumulator.market.slug);
 
     if (config.marketHistoryCatchupEnabled && this.initialActiveConditionIds.has(accumulator.market.conditionId)) {
       this.runBackgroundTask(
@@ -1490,6 +1490,38 @@ export class PolymarketSignalService {
     }
 
     await this.storage.updateTrackedTraderPollState(trader.wallet, latestSeenTimestamp);
+  }
+
+  private async refreshMarketAggregates(): Promise<void> {
+    const activeMarketSlugs = Array.from(
+      new Set(Array.from(this.marketsByAssetId.values(), (market) => market.slug)),
+    );
+    const signals = (await this.storage.loadSignalsForMarketSlugs(activeMarketSlugs)).map(applySignalLabelStyle);
+    const activeSignals = resolveActiveBuySignals(signals);
+    const aggregates = aggregateMarkets(activeSignals);
+    const aggregateBySlug = new Map(aggregates.map((aggregate) => [aggregate.marketSlug, aggregate] as const));
+
+    for (const marketSlug of activeMarketSlugs) {
+      const aggregate = aggregateBySlug.get(marketSlug);
+      if (aggregate) {
+        await this.storage.saveMarketAggregate(aggregate);
+      } else {
+        await this.storage.deleteMarketAggregate(marketSlug);
+      }
+    }
+  }
+
+  private async refreshMarketAggregate(marketSlug: string): Promise<void> {
+    const signals = (await this.storage.loadSignalsForMarketSlugs([marketSlug])).map(applySignalLabelStyle);
+    const activeSignals = resolveActiveBuySignals(signals);
+    const aggregate = aggregateMarkets(activeSignals)[0];
+
+    if (aggregate) {
+      await this.storage.saveMarketAggregate(aggregate);
+      return;
+    }
+
+    await this.storage.deleteMarketAggregate(marketSlug);
   }
 
   private async drainTrackedTraderPollQueue(): Promise<void> {

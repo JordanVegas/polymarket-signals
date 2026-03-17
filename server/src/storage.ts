@@ -1,6 +1,6 @@
 import { MongoClient } from "mongodb";
 import { config } from "./config.js";
-import type { TradeRecord, TraderSummary, WhaleSignal } from "./types.js";
+import type { MarketAggregate, TradeRecord, TraderSummary, WhaleSignal } from "./types.js";
 
 type PersistedSignal = WhaleSignal & {
   updatedAt: Date;
@@ -81,6 +81,10 @@ export type PersistedTrackedTrader = TraderSummary & {
   updatedAt: Date;
 };
 
+export type PersistedMarketAggregate = MarketAggregate & {
+  updatedAt: Date;
+};
+
 export type PersistedMarketAlertWatch = {
   username: string;
   marketSlug: string;
@@ -111,6 +115,10 @@ export class SignalStorage {
     await this.collection().createIndex({ id: 1 }, { unique: true });
     await this.collection().createIndex({ timestamp: -1 });
     await this.collection().createIndex({ marketSlug: 1, timestamp: -1 });
+    await this.marketAggregateCollection().createIndex({ marketSlug: 1 }, { unique: true });
+    await this.marketAggregateCollection().createIndex({ latestTimestamp: -1 });
+    await this.marketAggregateCollection().createIndex({ weightedScore: -1, latestTimestamp: -1 });
+    await this.marketAggregateCollection().createIndex({ participantCount: -1, latestTimestamp: -1 });
     await this.tradeCollection().createIndex({ tradeId: 1 }, { unique: true });
     await this.tradeCollection().createIndex({ timestamp: -1 });
     await this.observedTradeCollection().createIndex({ tradeId: 1 }, { unique: true });
@@ -170,6 +178,35 @@ export class SignalStorage {
       { $set: payload },
       { upsert: true },
     );
+  }
+
+  async loadMarketAggregates(marketSlugs: string[]): Promise<MarketAggregate[]> {
+    if (marketSlugs.length === 0) {
+      return [];
+    }
+
+    const rows = await this.marketAggregateCollection()
+      .find({ marketSlug: { $in: marketSlugs } })
+      .toArray();
+
+    return rows.map(({ _id: _ignored, updatedAt: _updatedAt, ...aggregate }) => aggregate);
+  }
+
+  async saveMarketAggregate(aggregate: MarketAggregate): Promise<void> {
+    const payload: PersistedMarketAggregate = {
+      ...aggregate,
+      updatedAt: new Date(),
+    };
+
+    await this.marketAggregateCollection().updateOne(
+      { marketSlug: aggregate.marketSlug },
+      { $set: payload },
+      { upsert: true },
+    );
+  }
+
+  async deleteMarketAggregate(marketSlug: string): Promise<void> {
+    await this.marketAggregateCollection().deleteOne({ marketSlug });
   }
 
   async markTradeProcessed(trade: PersistedTrade): Promise<boolean> {
@@ -567,6 +604,16 @@ export class SignalStorage {
     return this.client
       .db(config.mongoDbName)
       .collection<PersistedTrade>("processed_trades");
+  }
+
+  private marketAggregateCollection() {
+    if (!this.client) {
+      throw new Error("Mongo client not connected");
+    }
+
+    return this.client
+      .db(config.mongoDbName)
+      .collection<PersistedMarketAggregate>("market_aggregates");
   }
 
   private clusterCollection() {
