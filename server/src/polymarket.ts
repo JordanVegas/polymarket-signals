@@ -1729,6 +1729,7 @@ export class PolymarketSignalService {
     const qualifiesIgnoringPriceCap = isBestTradeMarket(aggregate, {
       ignorePriceCap: true,
       ignorePriceDeviation: true,
+      minOutcomeShare: 0.55,
     });
 
     let nextPosition: StrategyPosition = {
@@ -1768,6 +1769,7 @@ export class PolymarketSignalService {
       const thesisBreakReasons = getBestTradeFailureReasons(aggregate, {
         ignorePriceCap: true,
         ignorePriceDeviation: true,
+        minOutcomeShare: 0.55,
       });
       exitReason = `Thesis break: ${thesisBreakReasons.join(", ")}`;
     } else if (currentPrice >= 0.995) {
@@ -2407,23 +2409,26 @@ const applyViewFilter = (
 
 const isBestTradeMarket = (
   market: MarketAggregate,
-  options?: { ignorePriceCap?: boolean; ignorePriceDeviation?: boolean },
+  options?: { ignorePriceCap?: boolean; ignorePriceDeviation?: boolean; minOutcomeShare?: number },
 ): boolean => {
   return getBestTradeFailureReasons(market, options).length === 0;
 };
 
 const getBestTradeFailureReasons = (
   market: MarketAggregate,
-  options?: { ignorePriceCap?: boolean; ignorePriceDeviation?: boolean },
+  options?: { ignorePriceCap?: boolean; ignorePriceDeviation?: boolean; minOutcomeShare?: number },
 ): string[] => {
   const reasons: string[] = [];
   const leadingOutcomeWeight = market.outcomeWeights[0]?.weight ?? 0;
+  const minOutcomeShare = options?.minOutcomeShare ?? 0.7;
   if (market.weightedScore < 70) {
     reasons.push(`market weight ${market.weightedScore.toFixed(0)} < 70`);
   }
 
-  if (leadingOutcomeWeight < market.weightedScore * 0.7) {
-    reasons.push(`outcome weight share ${(market.weightedScore > 0 ? (leadingOutcomeWeight / market.weightedScore) * 100 : 0).toFixed(0)}% < 70%`);
+  if (leadingOutcomeWeight < market.weightedScore * minOutcomeShare) {
+    reasons.push(
+      `outcome weight share ${(market.weightedScore > 0 ? (leadingOutcomeWeight / market.weightedScore) * 100 : 0).toFixed(0)}% < ${(minOutcomeShare * 100).toFixed(0)}%`,
+    );
   }
 
   if (market.participantCount < 3) {
