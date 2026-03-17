@@ -672,7 +672,7 @@ export class PolymarketSignalService {
 
     const price = Number(message.price);
     const size = Number(message.size);
-    if (!Number.isFinite(price) || !Number.isFinite(size) || price * size < 500) {
+    if (!Number.isFinite(price) || !Number.isFinite(size) || price * size < 8_000) {
       return;
     }
 
