@@ -222,6 +222,7 @@ export class PolymarketSignalService {
   private readonly queuedMarketTradeFetches = new Map<string, PendingMarketTradeFetch>();
   private readonly lastMarketTradeFetchAt = new Map<string, number>();
   private readonly trackedTraderPollInFlight = new Set<string>();
+  private readonly strategyUserReconcilesInFlight = new Set<string>();
   private readonly requestMetrics = new Map<string, RequestMetric>();
   private marketTradeFetchDrainTimer: NodeJS.Timeout | null = null;
   private trackedTraderPollDrainTimer: NodeJS.Timeout | null = null;
@@ -450,7 +451,7 @@ export class PolymarketSignalService {
   }
 
   async getStrategyPositions(username: string): Promise<StrategyPosition[]> {
-    await this.reconcileStrategyPositionsForUser(username);
+    this.scheduleStrategyReconcileForUser(username);
     return this.storage.loadStrategyPositions(username, 200);
   }
 
@@ -546,7 +547,7 @@ export class PolymarketSignalService {
       clearTradingCredentials: updates.clearTradingCredentials,
     });
     await this.syncTrackedWalletWatchesForUser(normalizedUsername, normalizedMonitoredWallet);
-    await this.reconcileStrategyPositionsForUser(normalizedUsername);
+    this.scheduleStrategyReconcileForUser(normalizedUsername);
     return this.getUserProfile(normalizedUsername);
   }
 
@@ -1624,6 +1625,21 @@ export class PolymarketSignalService {
         await this.reconcileStrategyPosition(marketSlug, user);
       }
     }
+  }
+
+  private scheduleStrategyReconcileForUser(username: string): void {
+    const normalizedUsername = username.trim();
+    if (!normalizedUsername || this.strategyUserReconcilesInFlight.has(normalizedUsername)) {
+      return;
+    }
+
+    this.strategyUserReconcilesInFlight.add(normalizedUsername);
+    this.runBackgroundTask(
+      `strategy reconcile ${normalizedUsername}`,
+      this.reconcileStrategyPositionsForUser(normalizedUsername).finally(() => {
+        this.strategyUserReconcilesInFlight.delete(normalizedUsername);
+      }),
+    );
   }
 
   private async reconcileStrategyPositionsForUser(username: string): Promise<void> {

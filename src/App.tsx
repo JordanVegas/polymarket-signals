@@ -1106,6 +1106,11 @@ function App() {
                 </label>
               </div>
 
+              <div className="profile-copy">
+                <p className="section-kicker">{t.liveTrading}</p>
+                <p>{t.liveTradingBody}</p>
+              </div>
+
               <label className="profile-field">
                 <span>{t.tradingWalletAddress}</span>
                 <input
@@ -1115,11 +1120,6 @@ function App() {
                   placeholder="0x..."
                 />
               </label>
-
-              <div className="profile-copy">
-                <p className="section-kicker">{t.liveTrading}</p>
-                <p>{t.liveTradingBody}</p>
-              </div>
 
               <label className="profile-field">
                 <span>{t.tradingSignatureType}</span>
