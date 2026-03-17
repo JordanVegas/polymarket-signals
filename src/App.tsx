@@ -492,6 +492,7 @@ function App() {
             const url = new URL("/api/markets", window.location.origin);
             url.searchParams.set("sort", marketSort);
             url.searchParams.set("search", deferredSearchQuery);
+            url.searchParams.set("view", currentPath === "/best-trades" ? "best" : "monitor");
             url.searchParams.set("page", String(page));
             url.searchParams.set("pageSize", String(MARKET_PAGE_SIZE));
             const response = await fetch(url);
@@ -766,7 +767,7 @@ function App() {
         <aside className={`side-menu ${isMenuOpen ? "side-menu-open" : ""}`} aria-hidden={!isMenuOpen}>
           <div className="side-menu-header">
             <div className="page-brand" aria-label="Whale shark pro">
-              ðŸ‹ &gt; ðŸ¦ˆ &gt; ðŸ˜Ž
+              🐋 &gt; 🦈 &gt; 😎
             </div>
             <button type="button" className="nav-button" onClick={() => setIsMenuOpen(false)}>
               {t.closeMenu}

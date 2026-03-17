@@ -101,10 +101,11 @@ app.get("/api/markets", async (request, response) => {
       ? sortParam
       : "recent"
   ) as "recent" | "weighted" | "buyWeight" | "flow" | "participants";
+  const view = String(request.query.view ?? "monitor") === "best" ? "best" : "monitor";
   const search = String(request.query.search ?? "");
   const page = Number(request.query.page ?? 1);
   const pageSize = Number(request.query.pageSize ?? 24);
-  response.json(await service.getMarketPage(sort, search, page, pageSize, request.sessionUser?.username));
+  response.json(await service.getMarketPage(sort, search, view, page, pageSize, request.sessionUser?.username));
 });
 
 app.post("/api/market-alerts/watch", async (request, response) => {

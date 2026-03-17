@@ -333,6 +333,7 @@ export class PolymarketSignalService {
   async getMarketPage(
     sort: MarketSortOption,
     search: string,
+    view: "monitor" | "best",
     page: number,
     pageSize: number,
     username?: string,
@@ -346,10 +347,11 @@ export class PolymarketSignalService {
     const watchedOutcomesByMarket = username
       ? await this.storage.loadWatchedOutcomesByMarket(username)
       : new Map<string, Set<string>>();
-    const markets = filterMarkets(
-      sortMarkets(applyWatchState(aggregateMarkets(signals), watchedOutcomesByMarket), sort),
-      search,
+    const filteredMarkets = applyViewFilter(
+      applyWatchState(aggregateMarkets(signals), watchedOutcomesByMarket),
+      view,
     );
+    const markets = filterMarkets(sortMarkets(filteredMarkets, sort), search);
     const safePage = Math.max(1, page);
     const safePageSize = Math.max(1, Math.min(pageSize, 100));
     const start = (safePage - 1) * safePageSize;
@@ -2064,6 +2066,44 @@ const filterMarkets = (markets: MarketAggregate[], query: string): MarketAggrega
 
     return haystack.includes(normalizedQuery);
   });
+};
+
+const applyViewFilter = (
+  markets: MarketAggregate[],
+  view: "monitor" | "best",
+): MarketAggregate[] => {
+  if (view !== "best") {
+    return markets;
+  }
+
+  return markets.filter(isBestTradeMarket);
+};
+
+const isBestTradeMarket = (market: MarketAggregate): boolean => {
+  const leadingOutcomeWeight = market.outcomeWeights[0]?.weight ?? 0;
+  if (market.weightedScore < 70) {
+    return false;
+  }
+
+  if (leadingOutcomeWeight < market.weightedScore * 0.7) {
+    return false;
+  }
+
+  if (market.participantCount < 3) {
+    return false;
+  }
+
+  if (Date.now() - market.latestTimestamp > 24 * 60 * 60_000) {
+    return false;
+  }
+
+  if (market.observedAvgEntry === null || market.observedAvgEntry <= 0) {
+    return false;
+  }
+
+  const currentDisplayedPrice = market.latestSignal.averagePrice;
+  const priceDeviation = Math.abs(currentDisplayedPrice - market.observedAvgEntry) / market.observedAvgEntry;
+  return priceDeviation <= 0.05;
 };
 
 const getMarketWatchOutcome = (market: MarketAggregate): string =>
