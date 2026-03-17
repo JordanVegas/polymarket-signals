@@ -1,6 +1,14 @@
 import { MongoClient } from "mongodb";
 import { config } from "./config.js";
-import type { MarketAggregate, StrategyPosition, StrategyTrade, TradeRecord, TraderSummary, WhaleSignal } from "./types.js";
+import type {
+  GapOpportunity,
+  MarketAggregate,
+  StrategyPosition,
+  StrategyTrade,
+  TradeRecord,
+  TraderSummary,
+  WhaleSignal,
+} from "./types.js";
 
 type PersistedSignal = WhaleSignal & {
   updatedAt: Date;
@@ -96,6 +104,10 @@ export type PersistedMarketAggregate = MarketAggregate & {
   updatedAt: Date;
 };
 
+export type PersistedGapOpportunity = GapOpportunity & {
+  updatedAtDate: Date;
+};
+
 export type PersistedBestTradeCandidate = {
   marketSlug: string;
   outcome: string;
@@ -162,6 +174,9 @@ export class SignalStorage {
     await this.marketAggregateCollection().createIndex({ latestTimestamp: -1 });
     await this.marketAggregateCollection().createIndex({ weightedScore: -1, latestTimestamp: -1 });
     await this.marketAggregateCollection().createIndex({ participantCount: -1, latestTimestamp: -1 });
+    await this.gapOpportunityCollection().createIndex({ id: 1 }, { unique: true });
+    await this.gapOpportunityCollection().createIndex({ grossEdge: -1, updatedAt: -1 });
+    await this.gapOpportunityCollection().createIndex({ combinedNoAsk: 1, updatedAt: -1 });
     await this.bestTradeCandidateCollection().createIndex({ marketSlug: 1, outcome: 1 }, { unique: true });
     await this.bestTradeCandidateCollection().createIndex({ resolvedAt: 1, updatedAt: -1 });
     await this.bestTradeCandidateCollection().createIndex({ won: 1, resolvedAt: -1 });
@@ -265,6 +280,44 @@ export class SignalStorage {
 
   async deleteMarketAggregate(marketSlug: string): Promise<void> {
     await this.marketAggregateCollection().deleteOne({ marketSlug });
+  }
+
+  async saveGapOpportunity(gap: GapOpportunity): Promise<void> {
+    const payload: PersistedGapOpportunity = {
+      ...gap,
+      updatedAtDate: new Date(),
+    };
+
+    await this.gapOpportunityCollection().updateOne(
+      { id: gap.id },
+      { $set: payload },
+      { upsert: true },
+    );
+  }
+
+  async deleteGapOpportunity(id: string): Promise<void> {
+    await this.gapOpportunityCollection().deleteOne({ id });
+  }
+
+  async loadGapOpportunities(page: number, pageSize: number): Promise<{
+    items: GapOpportunity[];
+    total: number;
+  }> {
+    const safePage = Math.max(1, page);
+    const safePageSize = Math.max(1, Math.min(pageSize, 100));
+    const [rows, total] = await Promise.all([
+      this.gapOpportunityCollection()
+        .find({ combinedNoAsk: { $lt: 1 } }, { sort: { grossEdge: -1, updatedAt: -1 } })
+        .skip((safePage - 1) * safePageSize)
+        .limit(safePageSize)
+        .toArray(),
+      this.gapOpportunityCollection().countDocuments({ combinedNoAsk: { $lt: 1 } }),
+    ]);
+
+    return {
+      items: rows.map(({ _id: _ignored, updatedAtDate: _updatedAtDate, ...gap }) => gap),
+      total,
+    };
   }
 
   async upsertBestTradeCandidate(candidate: Omit<PersistedBestTradeCandidate, "updatedAt">): Promise<void> {
@@ -999,6 +1052,16 @@ export class SignalStorage {
     return this.client
       .db(config.mongoDbName)
       .collection<PersistedMarketAggregate>("market_aggregates");
+  }
+
+  private gapOpportunityCollection() {
+    if (!this.client) {
+      throw new Error("Mongo client not connected");
+    }
+
+    return this.client
+      .db(config.mongoDbName)
+      .collection<PersistedGapOpportunity>("market_gaps");
   }
 
   private bestTradeCandidateCollection() {

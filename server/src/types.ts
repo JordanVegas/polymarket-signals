@@ -8,6 +8,9 @@ export type MarketRecord = {
   liquidity: number;
   volume24hr: number;
   outcomeByAssetId: Record<string, string>;
+  category?: string;
+  eventSlug?: string;
+  eventTitle?: string;
 };
 
 export type TradeRecord = {
@@ -130,6 +133,34 @@ export type MarketPageResponse = {
     lossCount: number;
     winRate: number | null;
   };
+};
+
+export type GapMarketPair = {
+  marketSlug: string;
+  marketQuestion: string;
+  marketUrl: string;
+  noAssetId: string;
+  noAsk: number | null;
+  noAskSize: number | null;
+};
+
+export type GapOpportunity = {
+  id: string;
+  eventSlug: string;
+  eventTitle: string;
+  combinedNoAsk: number | null;
+  grossEdge: number | null;
+  executableStake: number | null;
+  updatedAt: number;
+  legs: [GapMarketPair, GapMarketPair];
+};
+
+export type GapPageResponse = {
+  items: GapOpportunity[];
+  total: number;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
 };
 
 export type WatchMarketResult = {

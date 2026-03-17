@@ -131,6 +131,12 @@ app.get("/api/markets", async (request, response) => {
   response.json(await service.getMarketPage(sort, search, view, page, pageSize, request.sessionUser?.username));
 });
 
+app.get("/api/gaps", async (request, response) => {
+  const page = Number(request.query.page ?? 1);
+  const pageSize = Number(request.query.pageSize ?? 24);
+  response.json(await service.getGapPage(page, pageSize));
+});
+
 app.get("/api/strategy-positions", async (request, response) => {
   if (!request.sessionUser?.username) {
     response.status(401).json({ error: "Unauthorized" });

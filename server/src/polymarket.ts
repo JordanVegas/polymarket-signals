@@ -15,6 +15,8 @@ import { Agent } from "undici";
 import { SignalStorage, type PersistedCluster, type PersistedTrackedTrader } from "./storage.js";
 import type {
   AppSnapshot,
+  GapOpportunity,
+  GapPageResponse,
   LiveStrategyDashboardResponse,
   MarketAggregate,
   MarketPageResponse,
@@ -51,6 +53,11 @@ type RawMarket = {
   closed?: boolean;
   updatedAt?: string;
   closedTime?: string;
+  category?: string;
+  events?: Array<{
+    slug?: string;
+    title?: string;
+  }>;
 };
 
 type RawPosition = {
@@ -101,6 +108,15 @@ type MarketTradeMessage = {
   transaction_hash?: string;
 };
 
+type MarketBestBidAskMessage = {
+  event_type?: string;
+  asset_id?: string;
+  market?: string;
+  best_bid?: string;
+  best_ask?: string;
+  timestamp?: string;
+};
+
 type OrderBookResponse = {
   asks?: Array<{
     price?: string;
@@ -139,6 +155,26 @@ type RequestMetric = {
   success: number;
   failure: number;
   recentTimestamps: number[];
+};
+
+type GapCandidate = {
+  id: string;
+  eventSlug: string;
+  eventTitle: string;
+  legs: [
+    {
+      marketSlug: string;
+      marketQuestion: string;
+      marketUrl: string;
+      noAssetId: string;
+    },
+    {
+      marketSlug: string;
+      marketQuestion: string;
+      marketUrl: string;
+      noAssetId: string;
+    },
+  ];
 };
 
 type MarketSocketShard = {
@@ -251,6 +287,9 @@ export class PolymarketSignalService {
   private readonly strategyUserQueues = new Map<string, Promise<void>>();
   private readonly liveStrategyUserQueues = new Map<string, Promise<void>>();
   private readonly requestMetrics = new Map<string, RequestMetric>();
+  private readonly bestAskByAssetId = new Map<string, { price: number; size: number | null; updatedAt: number }>();
+  private readonly gapCandidatesById = new Map<string, GapCandidate>();
+  private readonly gapCandidateIdsByAssetId = new Map<string, Set<string>>();
   private marketTradeFetchDrainTimer: NodeJS.Timeout | null = null;
   private trackedTraderPollDrainTimer: NodeJS.Timeout | null = null;
   private activeMarketTradeFetchCount = 0;
@@ -410,6 +449,20 @@ export class PolymarketSignalService {
             },
           }
         : {}),
+    };
+  }
+
+  async getGapPage(page: number, pageSize: number): Promise<GapPageResponse> {
+    const safePage = Math.max(1, page);
+    const safePageSize = Math.max(1, Math.min(pageSize, 100));
+    const result = await this.storage.loadGapOpportunities(safePage, safePageSize);
+
+    return {
+      items: result.items,
+      total: result.total,
+      page: safePage,
+      pageSize: safePageSize,
+      hasMore: safePage * safePageSize < result.total,
     };
   }
 
@@ -703,6 +756,9 @@ export class PolymarketSignalService {
           liquidity: Number(market.liquidityNum ?? 0),
           volume24hr: Number(market.volume24hr ?? 0),
           outcomeByAssetId,
+          category: market.category,
+          eventSlug: market.events?.[0]?.slug ?? market.slug,
+          eventTitle: market.events?.[0]?.title ?? market.question,
         };
 
         assetIds.forEach((assetId) => {
@@ -723,6 +779,7 @@ export class PolymarketSignalService {
 
     this.lastMarketSyncAt = Date.now();
     this.rebuildMarketSockets();
+    await this.refreshGapCandidates();
   }
 
   private captureInitialActiveMarkets(): void {
@@ -783,6 +840,7 @@ export class PolymarketSignalService {
         JSON.stringify({
           type: "market",
           assets_ids: shard.assetIds,
+          custom_feature_enabled: true,
         }),
       );
       shard.heartbeatTimer = setInterval(() => {
@@ -852,30 +910,61 @@ export class PolymarketSignalService {
 
     if (Array.isArray(parsed)) {
       for (const item of parsed) {
-        this.processSocketEvent(item as MarketTradeMessage);
+        this.processSocketEvent(item as MarketTradeMessage | MarketBestBidAskMessage);
       }
       return;
     }
 
-    this.processSocketEvent(parsed as MarketTradeMessage);
+    this.processSocketEvent(parsed as MarketTradeMessage | MarketBestBidAskMessage);
   }
 
-  private processSocketEvent(message: MarketTradeMessage): void {
-    if (message.event_type !== "last_trade_price" || !message.asset_id || !message.timestamp) {
+  private processSocketEvent(message: MarketTradeMessage | MarketBestBidAskMessage): void {
+    if (!message.asset_id || !message.timestamp) {
       return;
     }
 
-    const price = Number(message.price);
-    const size = Number(message.size);
+    const seenAt = Date.now();
+    this.lastWebsocketMessageAt = seenAt;
+    this.websocketAssetSeenAt.set(message.asset_id, seenAt);
+
+    if (message.event_type === "best_bid_ask") {
+      this.processBestBidAskEvent(message as MarketBestBidAskMessage);
+      return;
+    }
+
+    if (message.event_type !== "last_trade_price") {
+      return;
+    }
+
+    const tradeMessage = message as MarketTradeMessage;
+    const price = Number(tradeMessage.price);
+    const size = Number(tradeMessage.size);
     if (!Number.isFinite(price) || !Number.isFinite(size) || price * size < 8_000) {
       return;
     }
 
     this.lastTradeAt = Date.now();
-    const seenAt = Date.now();
-    this.lastWebsocketMessageAt = seenAt;
-    this.websocketAssetSeenAt.set(message.asset_id, seenAt);
-    this.scheduleMarketTradeFetch(message);
+    this.scheduleMarketTradeFetch(tradeMessage);
+  }
+
+  private processBestBidAskEvent(message: MarketBestBidAskMessage): void {
+    if (!message.asset_id) {
+      return;
+    }
+
+    const bestAsk = Number(message.best_ask);
+    const bestBid = Number(message.best_bid);
+    const price = Number.isFinite(bestAsk) && bestAsk > 0 ? bestAsk : Number.isFinite(bestBid) && bestBid > 0 ? bestBid : null;
+    if (price === null) {
+      return;
+    }
+
+    this.bestAskByAssetId.set(message.asset_id, {
+      price,
+      size: null,
+      updatedAt: Date.now(),
+    });
+    void this.refreshGapCandidatesForAsset(message.asset_id);
   }
 
   private startTradePolling(): void {
@@ -1723,6 +1812,172 @@ export class PolymarketSignalService {
     }
 
     await this.storage.deleteMarketAggregate(marketSlug);
+  }
+
+  private async refreshGapCandidates(): Promise<void> {
+    const nextCandidates = this.buildGapCandidates();
+    const previousIds = new Set(this.gapCandidatesById.keys());
+    this.gapCandidatesById.clear();
+    this.gapCandidateIdsByAssetId.clear();
+
+    for (const candidate of nextCandidates) {
+      this.gapCandidatesById.set(candidate.id, candidate);
+      for (const leg of candidate.legs) {
+        const ids = this.gapCandidateIdsByAssetId.get(leg.noAssetId) ?? new Set<string>();
+        ids.add(candidate.id);
+        this.gapCandidateIdsByAssetId.set(leg.noAssetId, ids);
+      }
+      await this.refreshGapOpportunity(candidate);
+      previousIds.delete(candidate.id);
+    }
+
+    for (const staleId of previousIds) {
+      await this.storage.deleteGapOpportunity(staleId);
+    }
+  }
+
+  private async refreshGapCandidatesForAsset(assetId: string): Promise<void> {
+    const candidateIds = this.gapCandidateIdsByAssetId.get(assetId);
+    if (!candidateIds?.size) {
+      return;
+    }
+
+    for (const candidateId of candidateIds) {
+      const candidate = this.gapCandidatesById.get(candidateId);
+      if (!candidate) {
+        continue;
+      }
+      await this.refreshGapOpportunity(candidate);
+    }
+  }
+
+  private buildGapCandidates(): GapCandidate[] {
+    const eventGroups = new Map<string, MarketRecord[]>();
+    for (const market of new Map(Array.from(this.marketsByAssetId.values(), (market) => [market.slug, market] as const)).values()) {
+      if (!isSportsMarket(market)) {
+        continue;
+      }
+      if (!isBinaryYesNoMarket(market)) {
+        continue;
+      }
+
+      const eventKey = market.eventSlug ?? market.slug;
+      const group = eventGroups.get(eventKey) ?? [];
+      group.push(market);
+      eventGroups.set(eventKey, group);
+    }
+
+    const candidates: GapCandidate[] = [];
+    for (const [eventSlug, markets] of eventGroups) {
+      if (markets.length !== 2) {
+        continue;
+      }
+
+      const [first, second] = markets.sort((left, right) => left.slug.localeCompare(right.slug));
+      const firstNoAssetId = findAssetIdForOutcome(first, "No");
+      const secondNoAssetId = findAssetIdForOutcome(second, "No");
+      if (!firstNoAssetId || !secondNoAssetId) {
+        continue;
+      }
+
+      candidates.push({
+        id: `${eventSlug}:${first.slug}:${second.slug}`,
+        eventSlug,
+        eventTitle: first.eventTitle ?? second.eventTitle ?? first.question,
+        legs: [
+          {
+            marketSlug: first.slug,
+            marketQuestion: first.question,
+            marketUrl: `https://polymarket.com/event/${first.slug}`,
+            noAssetId: firstNoAssetId,
+          },
+          {
+            marketSlug: second.slug,
+            marketQuestion: second.question,
+            marketUrl: `https://polymarket.com/event/${second.slug}`,
+            noAssetId: secondNoAssetId,
+          },
+        ],
+      });
+    }
+
+    return candidates;
+  }
+
+  private async refreshGapOpportunity(candidate: GapCandidate): Promise<void> {
+    const [firstQuote, secondQuote] = await Promise.all([
+      this.getBestAskQuote(candidate.legs[0].noAssetId),
+      this.getBestAskQuote(candidate.legs[1].noAssetId),
+    ]);
+
+    const combinedNoAsk =
+      firstQuote?.price != null && secondQuote?.price != null ? firstQuote.price + secondQuote.price : null;
+    const grossEdge = combinedNoAsk != null ? 1 - combinedNoAsk : null;
+    const executableStake =
+      firstQuote?.size != null && secondQuote?.size != null
+        ? Math.min(firstQuote.size * firstQuote.price, secondQuote.size * secondQuote.price)
+        : null;
+
+    const gap: GapOpportunity = {
+      id: candidate.id,
+      eventSlug: candidate.eventSlug,
+      eventTitle: candidate.eventTitle,
+      combinedNoAsk,
+      grossEdge,
+      executableStake,
+      updatedAt: Date.now(),
+      legs: [
+        {
+          marketSlug: candidate.legs[0].marketSlug,
+          marketQuestion: candidate.legs[0].marketQuestion,
+          marketUrl: candidate.legs[0].marketUrl,
+          noAssetId: candidate.legs[0].noAssetId,
+          noAsk: firstQuote?.price ?? null,
+          noAskSize: firstQuote?.size ?? null,
+        },
+        {
+          marketSlug: candidate.legs[1].marketSlug,
+          marketQuestion: candidate.legs[1].marketQuestion,
+          marketUrl: candidate.legs[1].marketUrl,
+          noAssetId: candidate.legs[1].noAssetId,
+          noAsk: secondQuote?.price ?? null,
+          noAskSize: secondQuote?.size ?? null,
+        },
+      ],
+    };
+
+    await this.storage.saveGapOpportunity(gap);
+  }
+
+  private async getBestAskQuote(assetId: string): Promise<{ price: number; size: number | null } | null> {
+    const cached = this.bestAskByAssetId.get(assetId);
+    if (cached && Date.now() - cached.updatedAt < 60_000) {
+      return { price: cached.price, size: cached.size };
+    }
+
+    const url = new URL(`${CLOB_API_URL}/book`);
+    url.searchParams.set("token_id", assetId);
+    const response = await this.safeFetch(url, `gap book ${assetId}`);
+    if (!response?.ok) {
+      return cached ? { price: cached.price, size: cached.size } : null;
+    }
+
+    const payload = (await response.json()) as OrderBookResponse;
+    const bestAsk = payload.asks
+      ?.map((entry) => ({ price: Number(entry.price), size: Number(entry.size) }))
+      .filter((entry) => Number.isFinite(entry.price) && entry.price > 0)
+      .sort((left, right) => left.price - right.price)[0];
+    if (!bestAsk) {
+      return cached ? { price: cached.price, size: cached.size } : null;
+    }
+
+    const quote = {
+      price: bestAsk.price,
+      size: Number.isFinite(bestAsk.size) && bestAsk.size > 0 ? bestAsk.size : null,
+      updatedAt: Date.now(),
+    };
+    this.bestAskByAssetId.set(assetId, quote);
+    return { price: quote.price, size: quote.size };
   }
 
   private async syncBestTradeCandidates(aggregates: MarketAggregate[]): Promise<void> {
@@ -3289,6 +3544,34 @@ const delay = (ms: number): Promise<void> =>
   new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+
+const isSportsMarket = (market: MarketRecord): boolean => {
+  const category = market.category?.trim().toLowerCase() ?? "";
+  if (category.includes("sport")) {
+    return true;
+  }
+
+  const eventTitle = market.eventTitle?.trim().toLowerCase() ?? "";
+  return ["mlb", "nba", "nfl", "nhl", "uefa", "soccer", "football", "baseball", "basketball", "tennis", "golf", "mma", "ufc", "lol", "esports", "cricket"].some(
+    (keyword) => eventTitle.includes(keyword),
+  );
+};
+
+const isBinaryYesNoMarket = (market: MarketRecord): boolean => {
+  const outcomes = Object.values(market.outcomeByAssetId).map((value) => value.trim().toLowerCase());
+  return outcomes.length === 2 && outcomes.includes("yes") && outcomes.includes("no");
+};
+
+const findAssetIdForOutcome = (market: MarketRecord, outcome: string): string | null => {
+  const normalizedOutcome = outcome.trim().toLowerCase();
+  for (const [assetId, assetOutcome] of Object.entries(market.outcomeByAssetId)) {
+    if (assetOutcome.trim().toLowerCase() === normalizedOutcome) {
+      return assetId;
+    }
+  }
+
+  return null;
+};
 
 const buildStrategyTrades = (position: StrategyPosition): StrategyTrade[] => {
   const trades: StrategyTrade[] = [];

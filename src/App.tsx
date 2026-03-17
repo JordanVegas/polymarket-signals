@@ -171,8 +171,44 @@ type LiveStrategyDashboardResponse = StrategyDashboardResponse & {
   ready: boolean;
 };
 
+type GapOpportunity = {
+  id: string;
+  eventSlug: string;
+  eventTitle: string;
+  combinedNoAsk: number | null;
+  grossEdge: number | null;
+  executableStake: number | null;
+  updatedAt: number;
+  legs: [
+    {
+      marketSlug: string;
+      marketQuestion: string;
+      marketUrl: string;
+      noAssetId: string;
+      noAsk: number | null;
+      noAskSize: number | null;
+    },
+    {
+      marketSlug: string;
+      marketQuestion: string;
+      marketUrl: string;
+      noAssetId: string;
+      noAsk: number | null;
+      noAskSize: number | null;
+    },
+  ];
+};
+
+type GapPageResponse = {
+  items: GapOpportunity[];
+  total: number;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+};
+
 type Language = "en" | "he";
-type PageRoute = "/" | "/best-trades" | "/auto-trade" | "/profile";
+type PageRoute = "/" | "/best-trades" | "/paper-auto-trade" | "/live-auto-trade" | "/gaps" | "/profile";
 
 const positiveOutcomeKeywords = ["yes", "up", "above", "over", "higher", "more", "long"];
 const negativeOutcomeKeywords = ["no", "down", "below", "under", "lower", "less", "short"];
@@ -202,7 +238,13 @@ const currencyFormatter = new Intl.NumberFormat("en-US", {
 const MARKET_PAGE_SIZE = 24;
 
 function getPageRoute(pathname: string): PageRoute {
-  if (pathname === "/profile" || pathname === "/best-trades" || pathname === "/auto-trade") {
+  if (
+    pathname === "/profile" ||
+    pathname === "/best-trades" ||
+    pathname === "/paper-auto-trade" ||
+    pathname === "/live-auto-trade" ||
+    pathname === "/gaps"
+  ) {
     return pathname;
   }
 
@@ -214,7 +256,9 @@ const copy = {
     profile: "Profile",
     monitor: "Monitor",
     bestTrades: "Best trades",
-    autoTrade: "Auto trade",
+    paperAutoTrade: "Paper auto trading",
+    liveAutoTrade: "Live auto trading",
+    gaps: "Gaps",
     menu: "Menu",
     closeMenu: "Close menu",
     frontendStream: "Frontend stream",
@@ -289,8 +333,19 @@ const copy = {
     bestTradesLosses: "Losses",
     bestTradesTracked: "Tracked",
     bestTradesWinRatePending: "Pending",
-    autoTradeTitle: "Auto trade",
+    autoTradeTitle: "Paper auto trading",
     autoTradeSubtitle: "Paper positions based on the best-trade entry and thesis-break exit logic.",
+    liveAutoTradeTitle: "Live auto trading",
+    liveAutoTradeSubtitle: "Real Polymarket orders driven by the same best-trade strategy.",
+    gapsTitle: "Gaps",
+    gapsSubtitle: "Sports no/no pairs where the executable asks add up to less than 1.",
+    combinedNoAsk: "No + No",
+    grossEdge: "Gross edge",
+    executableStake: "Executable",
+    noAsk: "No ask",
+    gapLegA: "Leg A",
+    gapLegB: "Leg B",
+    noGaps: "No executable gaps right now.",
     noStrategyPositions: "No strategy positions yet.",
     cashBalance: "Cash balance",
     openExposure: "Open exposure",
@@ -366,7 +421,9 @@ const copy = {
     profile: "פרופיל",
     monitor: "מוניטור",
     bestTrades: "העסקאות הטובות ביותר",
-    autoTrade: "מסחר אוטומטי",
+    paperAutoTrade: "מסחר אוטומטי בדמו",
+    liveAutoTrade: "מסחר אוטומטי אמיתי",
+    gaps: "פערים",
     menu: "תפריט",
     closeMenu: "סגור תפריט",
     frontendStream: "חיבור לשרת",
@@ -441,8 +498,19 @@ const copy = {
     bestTradesLosses: "הפסדים",
     bestTradesTracked: "במעקב",
     bestTradesWinRatePending: "ממתין",
-    autoTradeTitle: "מסחר אוטומטי",
+    autoTradeTitle: "מסחר אוטומטי בדמו",
     autoTradeSubtitle: "פוזיציות נייר שמבוססות על כניסת Best trade ויציאה לפי שבירת התזה.",
+    liveAutoTradeTitle: "מסחר אוטומטי אמיתי",
+    liveAutoTradeSubtitle: "פקודות אמיתיות בפולימרקט שמבוססות על אותה אסטרטגיית Best trade.",
+    gapsTitle: "פערים",
+    gapsSubtitle: "זוגות ספורט No/No שבהם סכום האסקים קטן מ-1.",
+    combinedNoAsk: "No + No",
+    grossEdge: "פער גולמי",
+    executableStake: "סכום בר ביצוע",
+    noAsk: "No ask",
+    gapLegA: "רגל א'",
+    gapLegB: "רגל ב'",
+    noGaps: "אין כרגע פערים ברי ביצוע.",
     noStrategyPositions: "עדיין אין פוזיציות אסטרטגיה.",
     cashBalance: "מזומן",
     openExposure: "חשיפה פתוחה",
@@ -549,6 +617,14 @@ function App() {
     hasMore: false,
   });
   const [isLoadingMarkets, setIsLoadingMarkets] = useState(false);
+  const [gapPage, setGapPage] = useState<GapPageResponse>({
+    items: [],
+    total: 0,
+    page: 1,
+    pageSize: MARKET_PAGE_SIZE,
+    hasMore: false,
+  });
+  const [isLoadingGaps, setIsLoadingGaps] = useState(false);
   const [alertActionMarketSlug, setAlertActionMarketSlug] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [profile, setProfile] = useState<UserProfileResponse | null>(null);
@@ -713,14 +789,63 @@ function App() {
 
   useEffect(() => {
     setPageCount(1);
-  }, [marketSort, deferredSearchQuery]);
+  }, [marketSort, deferredSearchQuery, currentPath]);
 
   useEffect(() => {
-    if (currentPath === "/profile") {
+    if (currentPath === "/profile" || currentPath === "/paper-auto-trade" || currentPath === "/live-auto-trade") {
       return;
     }
 
     let cancelled = false;
+
+    if (currentPath === "/gaps") {
+      const loadGapPages = async () => {
+        setIsLoadingGaps(true);
+
+        try {
+          const responses = await Promise.all(
+            Array.from({ length: pageCount }, async (_value, index) => {
+              const page = index + 1;
+              const url = new URL("/api/gaps", window.location.origin);
+              url.searchParams.set("page", String(page));
+              url.searchParams.set("pageSize", String(MARKET_PAGE_SIZE));
+              const response = await fetch(url);
+              return (await response.json()) as GapPageResponse;
+            }),
+          );
+
+          if (cancelled) {
+            return;
+          }
+
+          const lastResponse = responses[responses.length - 1] ?? {
+            items: [],
+            total: 0,
+            page: 1,
+            pageSize: MARKET_PAGE_SIZE,
+            hasMore: false,
+          };
+
+          setGapPage({
+            items: responses.flatMap((response) => response.items),
+            total: lastResponse.total,
+            page: lastResponse.page,
+            pageSize: lastResponse.pageSize,
+            hasMore: lastResponse.hasMore,
+          });
+        } finally {
+          if (!cancelled) {
+            setIsLoadingGaps(false);
+          }
+        }
+      };
+
+      void loadGapPages();
+
+      return () => {
+        cancelled = true;
+      };
+    }
 
     const loadMarketPages = async () => {
       setIsLoadingMarkets(true);
@@ -776,7 +901,7 @@ function App() {
   }, [currentPath, marketSort, deferredSearchQuery, pageCount, deferredRefreshVersion]);
 
   useEffect(() => {
-    if (currentPath !== "/auto-trade") {
+    if (currentPath !== "/paper-auto-trade" && currentPath !== "/live-auto-trade") {
       return;
     }
 
@@ -863,7 +988,9 @@ function App() {
 
   useEffect(() => {
     const sentinel = loadMoreRef.current;
-    if (!sentinel || !marketPage.hasMore || isLoadingMarkets) {
+    const hasMore = currentPath === "/gaps" ? gapPage.hasMore : marketPage.hasMore;
+    const isLoading = currentPath === "/gaps" ? isLoadingGaps : isLoadingMarkets;
+    if (!sentinel || !hasMore || isLoading) {
       return;
     }
 
@@ -885,9 +1012,10 @@ function App() {
     return () => {
       observer.disconnect();
     };
-  }, [isLoadingMarkets, marketPage.hasMore]);
+  }, [currentPath, gapPage.hasMore, isLoadingGaps, isLoadingMarkets, marketPage.hasMore]);
 
   const visibleMarkets = useMemo(() => marketPage.items, [marketPage.items]);
+  const visibleGaps = useMemo(() => gapPage.items, [gapPage.items]);
 
   const navigateTo = (path: PageRoute) => {
     if (window.location.pathname !== path) {
@@ -1110,10 +1238,24 @@ function App() {
             </button>
             <button
               type="button"
-              className={`side-menu-link ${currentPath === "/auto-trade" ? "side-menu-link-active" : ""}`}
-              onClick={() => navigateTo("/auto-trade")}
+              className={`side-menu-link ${currentPath === "/paper-auto-trade" ? "side-menu-link-active" : ""}`}
+              onClick={() => navigateTo("/paper-auto-trade")}
             >
-              {t.autoTrade}
+              {t.paperAutoTrade}
+            </button>
+            <button
+              type="button"
+              className={`side-menu-link ${currentPath === "/live-auto-trade" ? "side-menu-link-active" : ""}`}
+              onClick={() => navigateTo("/live-auto-trade")}
+            >
+              {t.liveAutoTrade}
+            </button>
+            <button
+              type="button"
+              className={`side-menu-link ${currentPath === "/gaps" ? "side-menu-link-active" : ""}`}
+              onClick={() => navigateTo("/gaps")}
+            >
+              {t.gaps}
             </button>
             <button
               type="button"
@@ -1401,11 +1543,11 @@ function App() {
               </div>
             </div>
           </section>
-        ) : currentPath === "/auto-trade" ? (
+        ) : currentPath === "/paper-auto-trade" ? (
           <section className="feed-section">
             <div className="feed-header">
               <div>
-                <p className="section-kicker">{t.autoTrade}</p>
+                <p className="section-kicker">{t.paperAutoTrade}</p>
                 <h2>{t.autoTradeTitle}</h2>
                 <p className="feed-subtitle">{t.autoTradeSubtitle}</p>
               </div>
@@ -1623,6 +1765,176 @@ function App() {
                 <p className="profile-empty">{t.noLiveStrategyTrades}</p>
               )}
             </div>
+          </section>
+        ) : currentPath === "/live-auto-trade" ? (
+          <section className="feed-section">
+            <div className="feed-header">
+              <div>
+                <p className="section-kicker">{t.liveAutoTrade}</p>
+                <h2>{t.liveAutoTradeTitle}</h2>
+                <p className="feed-subtitle">{t.liveAutoTradeSubtitle}</p>
+              </div>
+            </div>
+
+            <div className="hero-panel auto-trade-stats">
+              <StatusRow label={t.cashBalance} value={currencyFormatter.format(liveStrategyDashboard.summary.cashBalanceUsd)} tone="neutral" />
+              <StatusRow label={t.openExposure} value={currencyFormatter.format(liveStrategyDashboard.summary.openExposureUsd)} tone="neutral" />
+              <StatusRow label={t.totalEquity} value={currencyFormatter.format(liveStrategyDashboard.summary.totalEquityUsd)} tone="green" />
+              <StatusRow label={t.realizedPnl} value={currencyFormatter.format(liveStrategyDashboard.summary.unrealizedUsd)} tone={liveStrategyDashboard.summary.unrealizedUsd >= 0 ? "green" : "blue"} />
+              <StatusRow label={t.openPositions} value={liveStrategyDashboard.summary.openPositionCount.toString()} tone="neutral" />
+              <StatusRow label={t.closedPositions} value={liveStrategyDashboard.summary.closedPositionCount.toString()} tone="neutral" />
+            </div>
+            <p className="profile-helper">
+              {liveStrategyDashboard.enabled
+                ? liveStrategyDashboard.ready
+                  ? t.liveTradingReady
+                  : t.liveTradingNotReady
+                : t.liveTrading}
+            </p>
+            {liveStrategyDashboard.positions.length ? (
+              <div className="signal-grid">
+                {liveStrategyDashboard.positions.map((position) => (
+                  <article className="signal-card" key={position.id}>
+                    <div className="signal-media">
+                      {normalizeSecureUrl(position.marketImage) ? (
+                        <img src={normalizeSecureUrl(position.marketImage)!} alt={position.marketQuestion} />
+                      ) : (
+                        <div className="image-fallback">{position.outcome[0]}</div>
+                      )}
+                      <div className={`pill ${position.status === "open" ? "pill-cyan" : "pill-neutral"}`}>
+                        {position.status === "open" ? t.statusOpen : t.statusClosed}
+                      </div>
+                    </div>
+
+                    <div className="signal-body">
+                      <div className="signal-topline">
+                        <span>{formatRelativeTime(position.updatedAt, t)}</span>
+                        <span>{t.openedAt}: {formatTimestamp(position.openedAt, t.pending)}</span>
+                      </div>
+
+                      <h3>{position.marketQuestion}</h3>
+                      <p className="signal-thesis">
+                        <strong>{position.outcome}</strong>
+                        <span className="signal-thesis-trade">
+                          <span>{t.confidence}</span>
+                          <span className="outcome-chip outcome-chip-positive">{position.setupQuality}/100</span>
+                        </span>
+                      </p>
+
+                      <div className="metric-row">
+                        <Metric label={t.avgEntry} value={position.entryPrice.toFixed(3)} />
+                        <Metric label={t.lastPrice} value={position.lastPrice.toFixed(3)} />
+                        <Metric label={t.soldPercent} value={`${position.soldPercent}%`} />
+                      </div>
+
+                      <div className="metric-row">
+                        <Metric label={t.entrySize} value={currencyFormatter.format(position.entryNotionalUsd)} />
+                        <Metric label={t.positionValue} value={currencyFormatter.format(position.remainingShares * position.lastPrice)} />
+                        <Metric label={t.remainingShares} value={position.remainingShares.toFixed(2)} />
+                      </div>
+
+                      {position.exitReason ? (
+                        <p className="signal-rationale">
+                          <span>{t.exitReason}</span>
+                          <strong>{position.exitReason}</strong>
+                        </p>
+                      ) : null}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p className="profile-empty">{t.noLiveStrategyPositions}</p>
+            )}
+            {liveStrategyDashboard.trades.length ? (
+              <div className="profile-watch-list">
+                {liveStrategyDashboard.trades.map((trade) => (
+                  <article className="profile-watch-item" key={trade.id}>
+                    <div className="profile-watch-copy">
+                      <strong>{trade.marketQuestion}</strong>
+                      <span>{`${trade.side} ${trade.outcome}`}</span>
+                      <span>{`${t.activityTime}: ${formatRelativeTime(trade.timestamp, t)} - ${formatTimestamp(trade.timestamp, t.pending)}`}</span>
+                      <span>{`${trade.reason}${trade.orderId ? ` - ${trade.orderId}` : ""}`}</span>
+                      <span>{`${t.activityDetails}: ${trade.shares.toFixed(2)} shares - ${currencyFormatter.format(trade.usd)} @ ${trade.price.toFixed(3)}`}</span>
+                    </div>
+                    <div className="profile-watch-actions">
+                      <span className="strategy-trade-amount">
+                        {currencyFormatter.format(trade.usd)} @ {trade.price.toFixed(3)}
+                      </span>
+                      <a href={normalizeSecureUrl(trade.marketUrl) ?? trade.marketUrl} target="_blank" rel="noreferrer">
+                        {t.openMarket}
+                      </a>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p className="profile-empty">{t.noLiveStrategyTrades}</p>
+            )}
+          </section>
+        ) : currentPath === "/gaps" ? (
+          <section className="feed-section">
+            <div className="feed-header">
+              <div>
+                <p className="section-kicker">{t.gaps}</p>
+                <h2>{t.gapsTitle}</h2>
+                <p className="feed-subtitle">{t.gapsSubtitle}</p>
+              </div>
+            </div>
+
+            {visibleGaps.length === 0 && !isLoadingGaps ? (
+              <div className="empty-state">
+                <div className="empty-pulse" />
+                <h3>{t.gapsTitle}</h3>
+                <p>{t.noGaps}</p>
+              </div>
+            ) : (
+              <>
+                <div className="signal-grid">
+                  {visibleGaps.map((gap) => (
+                    <article className="signal-card" key={gap.id}>
+                      <div className="signal-body">
+                        <div className="signal-topline">
+                          <span>{formatRelativeTime(gap.updatedAt, t)}</span>
+                          <span>{gap.eventSlug}</span>
+                        </div>
+
+                        <h3>{gap.eventTitle}</h3>
+
+                        <div className="metric-row">
+                          <Metric label={t.combinedNoAsk} value={gap.combinedNoAsk !== null ? gap.combinedNoAsk.toFixed(3) : "-"} />
+                          <Metric label={t.grossEdge} value={gap.grossEdge !== null ? `${(gap.grossEdge * 100).toFixed(2)}%` : "-"} />
+                          <Metric label={t.executableStake} value={gap.executableStake !== null ? currencyFormatter.format(gap.executableStake) : "-"} />
+                        </div>
+
+                        <div className="profile-watch-list">
+                          {gap.legs.map((leg, index) => (
+                            <article className="profile-watch-item" key={`${gap.id}:${leg.marketSlug}`}>
+                              <div className="profile-watch-copy">
+                                <strong>{index === 0 ? t.gapLegA : t.gapLegB}</strong>
+                                <span>{leg.marketQuestion}</span>
+                                <span>{`${t.noAsk}: ${leg.noAsk !== null ? leg.noAsk.toFixed(3) : "-"}`}</span>
+                                <span>{`${t.executableStake}: ${leg.noAskSize !== null && leg.noAsk !== null ? currencyFormatter.format(leg.noAskSize * leg.noAsk) : "-"}`}</span>
+                              </div>
+                              <div className="profile-watch-actions">
+                                <a href={normalizeSecureUrl(leg.marketUrl) ?? leg.marketUrl} target="_blank" rel="noreferrer">
+                                  {t.openMarket}
+                                </a>
+                              </div>
+                            </article>
+                          ))}
+                        </div>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+                {gapPage.hasMore || isLoadingGaps ? (
+                  <div className="load-more-sentinel" ref={loadMoreRef}>
+                    {isLoadingGaps ? t.loadingMarkets : t.scrollForMore}
+                  </div>
+                ) : null}
+              </>
+            )}
           </section>
         ) : (
           <section className="feed-section">
