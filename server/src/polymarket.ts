@@ -2134,6 +2134,10 @@ const isBestTradeMarket = (market: MarketAggregate): boolean => {
   }
 
   const currentDisplayedPrice = market.latestSignal.averagePrice;
+  if (currentDisplayedPrice >= 0.9) {
+    return false;
+  }
+
   const priceDeviation = Math.abs(currentDisplayedPrice - market.observedAvgEntry) / market.observedAvgEntry;
   return priceDeviation <= 0.05;
 };
