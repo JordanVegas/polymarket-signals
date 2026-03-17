@@ -175,7 +175,7 @@ type GapOpportunity = {
   id: string;
   eventSlug: string;
   eventTitle: string;
-  pairType: "head_to_head_no_no";
+  pairType: "head_to_head_no_no" | "direct_market_pair";
   pairLabel: string;
   combinedNoAsk: number | null;
   grossEdge: number | null;
@@ -342,10 +342,10 @@ const copy = {
     gapsTitle: "Gaps",
     gapsSubtitle: "Sports no/no pairs where the executable asks add up to less than 1.",
     gapPairType: "Pair type",
-    combinedNoAsk: "No + No",
+    combinedNoAsk: "Combined asks",
     grossEdge: "Gross edge",
     executableStake: "Executable",
-    noAsk: "No ask",
+    noAsk: "Ask",
     gapLegA: "Leg A",
     gapLegB: "Leg B",
     noGaps: "No executable gaps right now.",
@@ -508,10 +508,10 @@ const copy = {
     gapsTitle: "פערים",
     gapsSubtitle: "זוגות ספורט No/No שבהם סכום האסקים קטן מ-1.",
     gapPairType: "סוג זוג",
-    combinedNoAsk: "No + No",
+    combinedNoAsk: "סך האסקים",
     grossEdge: "פער גולמי",
     executableStake: "סכום בר ביצוע",
-    noAsk: "No ask",
+    noAsk: "אסק",
     gapLegA: "רגל א'",
     gapLegB: "רגל ב'",
     noGaps: "אין כרגע פערים ברי ביצוע.",

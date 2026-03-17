@@ -161,7 +161,7 @@ type GapCandidate = {
   id: string;
   eventSlug: string;
   eventTitle: string;
-  pairType: "head_to_head_no_no";
+  pairType: "head_to_head_no_no" | "direct_market_pair";
   pairLabel: string;
   legs: [
     {
@@ -1859,9 +1859,6 @@ export class PolymarketSignalService {
       if (!isSportsMarket(market)) {
         continue;
       }
-      if (!isBinaryYesNoMarket(market)) {
-        continue;
-      }
 
       const eventKey = market.eventSlug ?? market.slug;
       const group = eventGroups.get(eventKey) ?? [];
@@ -1871,6 +1868,7 @@ export class PolymarketSignalService {
 
     const candidates: GapCandidate[] = [];
     for (const [eventSlug, markets] of eventGroups) {
+      candidates.push(...buildDirectMarketGapCandidates(eventSlug, markets));
       const matchups = buildHeadToHeadGapCandidates(eventSlug, markets);
       if (matchups.length === 0) {
         continue;
@@ -3631,6 +3629,61 @@ const buildHeadToHeadGapCandidates = (
   return candidates;
 };
 
+const buildDirectMarketGapCandidates = (
+  eventSlug: string,
+  markets: MarketRecord[],
+): GapCandidate[] => {
+  const candidates: GapCandidate[] = [];
+
+  for (const market of markets) {
+    if (isBinaryYesNoMarket(market)) {
+      continue;
+    }
+
+    const outcomeEntries = Object.entries(market.outcomeByAssetId);
+    if (outcomeEntries.length !== 2) {
+      continue;
+    }
+
+    const eventTitle = market.eventTitle ?? market.question;
+    const teams = parseMatchupTeams(eventTitle);
+    if (!teams) {
+      continue;
+    }
+
+    const firstOutcomeTeam = identifyMentionedTeam(outcomeEntries[0][1], teams);
+    const secondOutcomeTeam = identifyMentionedTeam(outcomeEntries[1][1], teams);
+    if (firstOutcomeTeam === null || secondOutcomeTeam === null || firstOutcomeTeam === secondOutcomeTeam) {
+      continue;
+    }
+
+    const objective = deriveDirectMarketObjective(market, outcomeEntries.map((entry) => entry[1]));
+    candidates.push({
+      id: `${eventSlug}:direct:${market.slug}`,
+      eventSlug,
+      eventTitle,
+      pairType: "direct_market_pair",
+      pairLabel: `Direct market · ${formatGapObjectiveLabel(objective)}`,
+      legs: [
+        {
+          marketSlug: market.slug,
+          marketQuestion: `${market.question} — ${outcomeEntries[0][1]}`,
+          marketUrl: `https://polymarket.com/event/${market.slug}`,
+          noAssetId: outcomeEntries[0][0],
+        },
+        {
+          marketSlug: market.slug,
+          marketQuestion: `${market.question} — ${outcomeEntries[1][1]}`,
+          marketUrl: `https://polymarket.com/event/${market.slug}`,
+          noAssetId: outcomeEntries[1][0],
+        },
+      ],
+    });
+  }
+
+  return candidates;
+};
+
 const parseMatchupTeams = (eventTitle: string): [string, string] | null => {
   const normalized = eventTitle.trim();
   const separators = [" vs. ", " vs ", " v. ", " v ", " @ ", " at "];
@@ -3669,14 +3722,45 @@ const normalizeTeamName = (value: string): string =>
     .replace(/\s+/g, " ")
     .trim();
 
+const buildTeamAliases = (team: string): string[] => {
+  const sanitized = sanitizeTeamName(team);
+  const normalized = normalizeTeamName(sanitized);
+  const words = normalized.split(" ").filter(Boolean);
+  const aliases = new Set<string>();
+
+  if (normalized) {
+    aliases.add(normalized);
+  }
+
+  for (const word of words) {
+    aliases.add(word);
+  }
+
+  const firstWord = words[0];
+  if (firstWord && firstWord.length >= 3) {
+    aliases.add(firstWord.slice(0, 3));
+  }
+
+  if (words.length >= 2) {
+    aliases.add(words.map((word) => word[0]).join(""));
+  }
+
+  const clubSuffix = words[words.length - 1];
+  if (firstWord && clubSuffix && ["fc", "cf", "sc", "ac"].includes(clubSuffix)) {
+    aliases.add(`${firstWord[0]}${clubSuffix}`);
+  }
+
+  return Array.from(aliases).filter(Boolean);
+};
+
 const identifyMentionedTeam = (
   question: string,
   teams: [string, string],
 ): 0 | 1 | null => {
   const normalizedQuestion = normalizeTeamName(question);
   const matches = teams
-    .map((team, index) => ({ index: index as 0 | 1, team: normalizeTeamName(team) }))
-    .filter(({ team }) => team && normalizedQuestion.includes(team));
+    .map((team, index) => ({ index: index as 0 | 1, aliases: buildTeamAliases(team) }))
+    .filter(({ aliases }) => aliases.some((alias) => alias && normalizedQuestion.includes(alias)));
 
   if (matches.length !== 1) {
     return null;
@@ -3706,6 +3790,24 @@ const deriveGapObjective = (
   return null;
 };
 
+const deriveDirectMarketObjective = (
+  market: MarketRecord,
+  outcomes: string[],
+): string => {
+  const normalizedQuestion = normalizeTeamName(market.question);
+  const normalizedOutcomes = outcomes.map((outcome) => normalizeTeamName(outcome));
+
+  if (normalizedOutcomes.some((outcome) => /(^| )[-+]\d+(\.\d+)?($| )/.test(outcome))) {
+    return "spread";
+  }
+
+  if (/\bspread\b/.test(normalizedQuestion)) {
+    return "spread";
+  }
+
+  return "win";
+};
+
 const formatGapObjectiveLabel = (objective: string): string => {
   if (objective === "win") {
     return "Win";
@@ -3713,6 +3815,10 @@ const formatGapObjectiveLabel = (objective: string): string => {
 
   if (objective === "advance") {
     return "Advance";
+  }
+
+  if (objective === "spread") {
+    return "Spread";
   }
 
   return objective;

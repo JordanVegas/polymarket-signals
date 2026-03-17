@@ -148,7 +148,7 @@ export type GapOpportunity = {
   id: string;
   eventSlug: string;
   eventTitle: string;
-  pairType: "head_to_head_no_no";
+  pairType: "head_to_head_no_no" | "direct_market_pair";
   pairLabel: string;
   combinedNoAsk: number | null;
   grossEdge: number | null;
