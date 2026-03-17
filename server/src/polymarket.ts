@@ -1699,7 +1699,10 @@ export class PolymarketSignalService {
         return;
       }
 
-      const entryPrice = await this.getPaperEntryPrice(aggregate.marketSlug, edgeOutcome, currentPrice);
+      const entryPrice = await this.getPaperEntryPrice(aggregate.marketSlug, edgeOutcome);
+      if (!entryPrice || !Number.isFinite(entryPrice) || entryPrice <= 0) {
+        return;
+      }
       const nextPosition: StrategyPosition = {
         id: `${username}:${marketSlug}:${edgeOutcome}`,
         username,
@@ -2132,27 +2135,34 @@ export class PolymarketSignalService {
   private async getPaperEntryPrice(
     marketSlug: string,
     outcome: string,
-    fallbackPrice: number,
-  ): Promise<number> {
+  ): Promise<number | null> {
     const assetId = this.findAssetIdForMarketOutcome(marketSlug, outcome);
     if (!assetId) {
-      return fallbackPrice;
+      return null;
     }
 
     const url = new URL(`${CLOB_API_URL}/book`);
     url.searchParams.set("token_id", assetId);
-    const response = await this.safeFetch(url, `book ${marketSlug} ${outcome}`);
-    if (!response || !response.ok) {
-      return fallbackPrice;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const response = await this.safeFetch(url, `book ${marketSlug} ${outcome}`);
+      if (response?.ok) {
+        const payload = (await response.json()) as OrderBookResponse;
+        const bestAsk = payload.asks
+          ?.map((entry) => Number(entry.price))
+          .filter((price) => Number.isFinite(price) && price > 0)
+          .sort((left, right) => left - right)[0];
+
+        if (bestAsk) {
+          return bestAsk;
+        }
+      }
+
+      if (attempt < 2) {
+        await delay(250 * (attempt + 1));
+      }
     }
 
-    const payload = (await response.json()) as OrderBookResponse;
-    const bestAsk = payload.asks
-      ?.map((entry) => Number(entry.price))
-      .filter((price) => Number.isFinite(price) && price > 0)
-      .sort((left, right) => left - right)[0];
-
-    return bestAsk ?? fallbackPrice;
+    return null;
   }
 
   private findAssetIdForMarketOutcome(marketSlug: string, outcome: string): string | null {
@@ -2612,6 +2622,11 @@ const calculatePaperCashBalanceFromPositions = (
       positions.reduce((sum, position) => sum + position.entryNotionalUsd, 0) +
       positions.reduce((sum, position) => sum + position.realizedUsd, 0),
   );
+
+const delay = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 
 const buildStrategyTrades = (position: StrategyPosition): StrategyTrade[] => {
   const trades: StrategyTrade[] = [];
