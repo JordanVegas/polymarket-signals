@@ -277,19 +277,24 @@ export class PolymarketSignalService {
   private readonly accumulators = new Map<string, SignalAccumulator>();
   private readonly traderCache = new Map<string, { summary: TraderSummary; fetchedAt: number }>();
   private readonly storage = new SignalStorage();
-  private readonly fetchDispatcher = config.apiProxyUrl
-    ? new ProxyAgent({
-        uri: config.apiProxyUrl,
-        requestTls: {
-          rejectUnauthorized: true,
-        },
-        proxyTls: {
-          rejectUnauthorized: true,
-        },
-      })
-    : new Agent({
-        connectTimeout: config.fetchConnectTimeoutMs,
-      });
+  private readonly fetchDispatchers = config.apiProxyUrls.length
+    ? config.apiProxyUrls.map(
+        (proxyUrl) =>
+          new ProxyAgent({
+            uri: proxyUrl,
+            requestTls: {
+              rejectUnauthorized: true,
+            },
+            proxyTls: {
+              rejectUnauthorized: true,
+            },
+          }),
+      )
+    : [
+        new Agent({
+          connectTimeout: config.fetchConnectTimeoutMs,
+        }),
+      ];
   private readonly pendingUnknownAssetTrades = new Map<string, TradeRecord[]>();
   private readonly marketSocketShards = new Map<number, MarketSocketShard>();
   private readonly marketTradeFetchInFlight = new Map<string, Promise<void>>();
@@ -317,6 +322,7 @@ export class PolymarketSignalService {
   private lastForcedMarketSyncAt = 0;
   private forcingMarketSync: Promise<void> | null = null;
   private nextShardId = 1;
+  private nextFetchDispatcherIndex = 0;
   private listeners = new Set<(payload: WhaleSignal) => void>();
 
   async start(): Promise<void> {
@@ -951,7 +957,7 @@ export class PolymarketSignalService {
     const tradeMessage = message as MarketTradeMessage;
     const price = Number(tradeMessage.price);
     const size = Number(tradeMessage.size);
-    if (!Number.isFinite(price) || !Number.isFinite(size) || price * size < 8_000) {
+    if (!Number.isFinite(price) || !Number.isFinite(size) || price * size < 100) {
       return;
     }
 
@@ -2573,8 +2579,9 @@ export class PolymarketSignalService {
   private async safeFetch(input: string | URL, context: string): Promise<Response | null> {
     const endpoint = this.getRequestMetricKey(input);
     try {
+      const dispatcher = this.getNextFetchDispatcher();
       const response = await fetch(input, {
-        dispatcher: this.fetchDispatcher as unknown as NonNullable<RequestInit["dispatcher"]>,
+        dispatcher: dispatcher as unknown as NonNullable<RequestInit["dispatcher"]>,
       });
       this.recordRequestMetric(endpoint, response.ok);
       return response;
@@ -2583,6 +2590,14 @@ export class PolymarketSignalService {
       logFetchFailure(context, error);
       return null;
     }
+  }
+
+  private getNextFetchDispatcher(): Agent | ProxyAgent {
+    const dispatcher =
+      this.fetchDispatchers[this.nextFetchDispatcherIndex % this.fetchDispatchers.length]
+      ?? this.fetchDispatchers[0];
+    this.nextFetchDispatcherIndex = (this.nextFetchDispatcherIndex + 1) % this.fetchDispatchers.length;
+    return dispatcher;
   }
 
   private getRequestMetricKey(input: string | URL): string {

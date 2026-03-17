@@ -1,3 +1,5 @@
+import fs from "node:fs";
+
 const parseNumber = (value: string | undefined, fallback: number): number => {
   if (!value) {
     return fallback;
@@ -36,6 +38,50 @@ const withDatabaseName = (mongoUri: string, databaseName: string): string => {
 
 const defaultMongoUri = process.env.MONGO_URI || "mongodb://127.0.0.1:27017";
 
+const normalizeProxyUrl = (value: string): string => {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+
+  return `http://${trimmed}`;
+};
+
+const parseProxyUrls = (): string[] => {
+  const inline = process.env.POLYMARKET_PROXY_URLS || process.env.API_PROXY_URLS || "";
+  const filePath = process.env.POLYMARKET_PROXY_FILE || process.env.API_PROXY_FILE || "";
+
+  const urls = new Set<string>();
+
+  for (const entry of inline.split(/[\r\n,;]+/)) {
+    const normalized = normalizeProxyUrl(entry);
+    if (normalized) {
+      urls.add(normalized);
+    }
+  }
+
+  if (filePath.trim() && fs.existsSync(filePath.trim())) {
+    const fileContents = fs.readFileSync(filePath.trim(), "utf8");
+    for (const entry of fileContents.split(/[\r\n]+/)) {
+      const normalized = normalizeProxyUrl(entry);
+      if (normalized) {
+        urls.add(normalized);
+      }
+    }
+  }
+
+  const single = normalizeProxyUrl(process.env.POLYMARKET_PROXY_URL || process.env.API_PROXY_URL || "");
+  if (single) {
+    urls.add(single);
+  }
+
+  return Array.from(urls);
+};
+
 export const config = {
   port: parseNumber(process.env.PORT, 3001),
   mongoUri: defaultMongoUri,
@@ -60,7 +106,7 @@ export const config = {
   marketTradeFetchConcurrency: parseNumber(process.env.MARKET_TRADE_FETCH_CONCURRENCY, 4),
   trackedTraderPollConcurrency: parseNumber(process.env.TRACKED_TRADER_POLL_CONCURRENCY, 3),
   fetchConnectTimeoutMs: parseNumber(process.env.FETCH_CONNECT_TIMEOUT_MS, 30_000),
-  apiProxyUrl: process.env.POLYMARKET_PROXY_URL || process.env.API_PROXY_URL || "",
+  apiProxyUrls: parseProxyUrls(),
   recentCatchupLookbackMinutes: parseNumber(process.env.RECENT_CATCHUP_LOOKBACK_MINUTES, 30),
   recentCatchupMaxOffset: parseNumber(process.env.RECENT_CATCHUP_MAX_OFFSET, 3_000),
   historicalFetchEnabled: parseBoolean(process.env.HISTORICAL_FETCH_ENABLED, false),
