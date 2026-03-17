@@ -354,6 +354,12 @@ export class SignalStorage {
       .toArray();
   }
 
+  async countTrackedTraders(): Promise<number> {
+    return this.trackedTraderCollection().countDocuments({
+      tier: { $in: ["whale", "shark", "pro"] },
+    });
+  }
+
   async updateTrackedTraderPollState(wallet: string, lastSeenActivityTimestamp: number): Promise<void> {
     await this.trackedTraderCollection().updateOne(
       { wallet },

@@ -297,6 +297,7 @@ export class PolymarketSignalService {
     const recentCutoff = Date.now() - 15 * 60_000;
     let websocketAssetsSeenRecentlyCount = 0;
     let websocketConnectedShardCount = 0;
+    const trackedTraderCount = await this.storage.countTrackedTraders();
 
     for (const seenAt of this.websocketAssetSeenAt.values()) {
       if (seenAt >= recentCutoff) {
@@ -322,6 +323,8 @@ export class PolymarketSignalService {
         websocketAssetsSeenCount: this.websocketAssetSeenAt.size,
         websocketAssetsSeenRecentlyCount,
         lastWebsocketMessageAt: this.lastWebsocketMessageAt,
+        trackedTraderCount,
+        trackedTraderPollInFlight: this.trackedTraderPollInFlight.size,
         requestStats: this.getRequestStats(),
       },
     };
