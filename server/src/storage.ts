@@ -638,23 +638,19 @@ export class SignalStorage {
       .filter((row) => Boolean(row.username && row.monitoredWallet));
   }
 
-  async loadAutoTradeUsers(): Promise<
-    Array<{ username: string; currentBalanceUsd: number; riskPercent: number }>
-  > {
+  async loadAutoTradeUsers(): Promise<Array<{ username: string }>> {
     const rows = await this.userWebhookCollection()
       .find(
         { autoTradeEnabled: true },
-        { projection: { _id: 0, username: 1, currentBalanceUsd: 1, startingBalanceUsd: 1, riskPercent: 1 } },
+        { projection: { _id: 0, username: 1 } },
       )
       .toArray();
 
     return rows
       .map((row) => ({
         username: row.username,
-        currentBalanceUsd: Math.max(0, Number(row.currentBalanceUsd ?? row.startingBalanceUsd ?? 0)),
-        riskPercent: Number(row.riskPercent ?? 5),
       }))
-      .filter((row) => Boolean(row.username) && Number.isFinite(row.currentBalanceUsd) && row.currentBalanceUsd > 0);
+      .filter((row) => Boolean(row.username));
   }
 
   async loadWatchersForMarket(

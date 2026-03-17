@@ -224,6 +224,7 @@ export class PolymarketSignalService {
   private readonly queuedMarketTradeFetches = new Map<string, PendingMarketTradeFetch>();
   private readonly lastMarketTradeFetchAt = new Map<string, number>();
   private readonly trackedTraderPollInFlight = new Set<string>();
+  private readonly strategyUserQueues = new Map<string, Promise<void>>();
   private readonly requestMetrics = new Map<string, RequestMetric>();
   private marketTradeFetchDrainTimer: NodeJS.Timeout | null = null;
   private trackedTraderPollDrainTimer: NodeJS.Timeout | null = null;
@@ -427,7 +428,7 @@ export class PolymarketSignalService {
       monitoredWallet: settings.monitoredWallet ?? "",
       paperTradingEnabled: settings.autoTradeEnabled ?? false,
       startingBalanceUsd: settings.startingBalanceUsd ?? 1_000,
-      currentBalanceUsd: settings.currentBalanceUsd ?? settings.startingBalanceUsd ?? 1_000,
+      currentBalanceUsd: await this.calculatePaperCashBalance(normalizedUsername, settings.startingBalanceUsd ?? 1_000),
       riskPercent: settings.riskPercent ?? 5,
       tradingWalletAddress: settings.tradingWalletAddress ?? "",
       tradingSignatureType: settings.tradingSignatureType ?? "EOA",
@@ -455,7 +456,10 @@ export class PolymarketSignalService {
       this.storage.loadStrategyPositions(username, 200),
       this.storage.getUserSettings(username),
     ]);
-    return buildStrategyDashboard(positions, settings.currentBalanceUsd ?? settings.startingBalanceUsd ?? 0);
+    return buildStrategyDashboard(
+      positions,
+      await this.calculatePaperCashBalance(username, settings.startingBalanceUsd ?? 0),
+    );
   }
 
   async updateUserProfile(
@@ -1379,7 +1383,7 @@ export class PolymarketSignalService {
     await this.refreshMarketAggregate(accumulator.market.slug);
       const autoTradeUsers = await this.storage.loadAutoTradeUsers();
       for (const user of autoTradeUsers) {
-        await this.reconcileStrategyPosition(accumulator.market.slug, user);
+        await this.queueStrategyReconcile(accumulator.market.slug, user.username);
       }
 
     if (config.marketHistoryCatchupEnabled && this.initialActiveConditionIds.has(accumulator.market.conditionId)) {
@@ -1616,14 +1620,40 @@ export class PolymarketSignalService {
     await this.storage.deleteMarketAggregate(marketSlug);
   }
 
+  private queueStrategyReconcile(marketSlug: string, username: string): Promise<void> {
+    const normalizedUsername = username.trim();
+    if (!normalizedUsername) {
+      return Promise.resolve();
+    }
+
+    const previous = this.strategyUserQueues.get(normalizedUsername) ?? Promise.resolve();
+    const next = previous
+      .catch(() => undefined)
+      .then(() => this.reconcileStrategyPosition(marketSlug, normalizedUsername));
+    this.strategyUserQueues.set(normalizedUsername, next.finally(() => {
+      if (this.strategyUserQueues.get(normalizedUsername) === next) {
+        this.strategyUserQueues.delete(normalizedUsername);
+      }
+    }));
+    return next;
+  }
+
   private async reconcileStrategyPosition(
     marketSlug: string,
-    user: { username: string; currentBalanceUsd: number; riskPercent: number },
+    username: string,
   ): Promise<void> {
     const aggregate = (await this.storage.loadMarketAggregates([marketSlug]))[0];
     if (!aggregate) {
       return;
     }
+
+    const settings = await this.storage.getUserSettings(username);
+    if (!settings.autoTradeEnabled) {
+      return;
+    }
+    const startingBalanceUsd = settings.startingBalanceUsd ?? 1_000;
+    const currentBalanceUsd = await this.calculatePaperCashBalance(username, startingBalanceUsd);
+    const riskPercent = settings.riskPercent ?? 5;
 
     const edgeOutcome = aggregate.outcomeWeights[0]?.outcome ?? aggregate.latestSignal.outcome;
     const setupQuality = getSetupQualityScore(aggregate);
@@ -1633,7 +1663,7 @@ export class PolymarketSignalService {
     const currentWeightByWallet = new Map(
       currentParticipants.map((participant) => [participant.wallet, participant.weight] as const),
     );
-    const position = await this.storage.loadOpenStrategyPosition(user.username, marketSlug, edgeOutcome);
+    const position = await this.storage.loadOpenStrategyPosition(username, marketSlug, edgeOutcome);
 
     if (!position) {
       if (!isBestTradeMarket(aggregate)) {
@@ -1655,15 +1685,15 @@ export class PolymarketSignalService {
 
       const entryNotionalUsd = Math.max(
         0,
-        Math.min(user.currentBalanceUsd, user.currentBalanceUsd * (Math.max(0, user.riskPercent) / 100)),
+        Math.min(currentBalanceUsd, currentBalanceUsd * (Math.max(0, riskPercent) / 100)),
       );
       if (entryNotionalUsd <= 0 || currentPrice <= 0) {
         return;
       }
 
       const nextPosition: StrategyPosition = {
-        id: `${user.username}:${marketSlug}:${edgeOutcome}`,
-        username: user.username,
+        id: `${username}:${marketSlug}:${edgeOutcome}`,
+        username,
         marketSlug,
         marketQuestion: aggregate.marketQuestion,
         marketUrl: aggregate.marketUrl,
@@ -1686,9 +1716,6 @@ export class PolymarketSignalService {
         originalParticipants,
       };
       await this.storage.saveStrategyPosition(nextPosition);
-      await this.storage.updateUserSettings(user.username, {
-        currentBalanceUsd: Math.max(0, user.currentBalanceUsd - entryNotionalUsd),
-      });
       return;
     }
 
@@ -1719,10 +1746,6 @@ export class PolymarketSignalService {
         soldPercent: Math.max(nextPosition.soldPercent, 25),
         trim90Hit: true,
       };
-      await this.storage.updateUserSettings(user.username, {
-        currentBalanceUsd: user.currentBalanceUsd + realizedUsd,
-      });
-      user.currentBalanceUsd += realizedUsd;
     }
 
     if (!nextPosition.trim93Hit && currentPrice >= 0.93) {
@@ -1735,10 +1758,6 @@ export class PolymarketSignalService {
         soldPercent: Math.max(nextPosition.soldPercent, 50),
         trim93Hit: true,
       };
-      await this.storage.updateUserSettings(user.username, {
-        currentBalanceUsd: user.currentBalanceUsd + realizedUsd,
-      });
-      user.currentBalanceUsd += realizedUsd;
     }
 
     let exitReason: string | undefined;
@@ -1760,9 +1779,6 @@ export class PolymarketSignalService {
         soldPercent: 100,
         exitReason,
       };
-      await this.storage.updateUserSettings(user.username, {
-        currentBalanceUsd: user.currentBalanceUsd + realizedUsd,
-      });
     }
 
     await this.storage.saveStrategyPosition(nextPosition);
@@ -2085,6 +2101,14 @@ export class PolymarketSignalService {
     }
 
     return { marketSlug, outcome };
+  }
+
+  private async calculatePaperCashBalance(
+    username: string,
+    startingBalanceUsd: number,
+  ): Promise<number> {
+    const positions = await this.storage.loadStrategyPositions(username, 1_000);
+    return calculatePaperCashBalanceFromPositions(positions, startingBalanceUsd);
   }
 }
 
@@ -2503,6 +2527,17 @@ const buildStrategyDashboard = (
     trades,
   };
 };
+
+const calculatePaperCashBalanceFromPositions = (
+  positions: StrategyPosition[],
+  startingBalanceUsd: number,
+): number =>
+  Math.max(
+    0,
+    startingBalanceUsd -
+      positions.reduce((sum, position) => sum + position.entryNotionalUsd, 0) +
+      positions.reduce((sum, position) => sum + position.realizedUsd, 0),
+  );
 
 const buildStrategyTrades = (position: StrategyPosition): StrategyTrade[] => {
   const trades: StrategyTrade[] = [];
