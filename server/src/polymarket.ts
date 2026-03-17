@@ -106,6 +106,13 @@ type PendingMarketTradeFetch = {
   timestampSec: number;
 };
 
+type RequestMetric = {
+  total: number;
+  success: number;
+  failure: number;
+  recentTimestamps: number[];
+};
+
 type MarketSocketShard = {
   id: number;
   assetIds: string[];
@@ -192,6 +199,7 @@ const positiveOutcomeKeywords = ["yes", "up", "above", "over", "higher", "more",
 const negativeOutcomeKeywords = ["no", "down", "below", "under", "lower", "less", "short"];
 const TRADER_MEMORY_CACHE_TTL_MS = 5 * 60_000;
 const TRADER_DB_CACHE_TTL_MS = 7 * 24 * 60 * 60_000;
+const REQUEST_STATS_WINDOW_MS = 10 * 60_000;
 
 type IngestResult = "ingested" | "queued";
 
@@ -212,6 +220,7 @@ export class PolymarketSignalService {
   private readonly queuedMarketTradeFetches = new Map<string, PendingMarketTradeFetch>();
   private readonly lastMarketTradeFetchAt = new Map<string, number>();
   private readonly trackedTraderPollInFlight = new Set<string>();
+  private readonly requestMetrics = new Map<string, RequestMetric>();
   private marketTradeFetchDrainTimer: NodeJS.Timeout | null = null;
   private trackedTraderPollDrainTimer: NodeJS.Timeout | null = null;
   private activeMarketTradeFetchCount = 0;
@@ -313,6 +322,7 @@ export class PolymarketSignalService {
         websocketAssetsSeenCount: this.websocketAssetSeenAt.size,
         websocketAssetsSeenRecentlyCount,
         lastWebsocketMessageAt: this.lastWebsocketMessageAt,
+        requestStats: this.getRequestStats(),
       },
     };
   }
@@ -1593,14 +1603,108 @@ export class PolymarketSignalService {
   }
 
   private async safeFetch(input: string | URL, context: string): Promise<Response | null> {
+    const endpoint = this.getRequestMetricKey(input);
     try {
-      return await fetch(input, {
+      const response = await fetch(input, {
         dispatcher: this.fetchDispatcher as unknown as NonNullable<RequestInit["dispatcher"]>,
       });
+      this.recordRequestMetric(endpoint, response.ok);
+      return response;
     } catch (error) {
+      this.recordRequestMetric(endpoint, false);
       logFetchFailure(context, error);
       return null;
     }
+  }
+
+  private getRequestMetricKey(input: string | URL): string {
+    const raw = typeof input === "string" ? input : input.toString();
+
+    try {
+      const url = new URL(raw);
+      if (url.hostname.includes("gamma-api.polymarket.com")) {
+        return "gamma_markets";
+      }
+
+      if (!url.hostname.includes("polymarket.com")) {
+        return `${url.hostname}${url.pathname}`;
+      }
+
+      if (url.pathname === "/markets") {
+        return "gamma_markets";
+      }
+
+      if (url.pathname === "/trades") {
+        return url.searchParams.has("market") ? "market_trades" : "global_trades";
+      }
+
+      if (url.pathname === "/activity") {
+        return "activity";
+      }
+
+      if (url.pathname === "/positions") {
+        return "positions";
+      }
+
+      if (url.pathname === "/closed-positions") {
+        return "closed_positions";
+      }
+
+      if (url.pathname === "/value") {
+        return "value";
+      }
+
+      return `${url.hostname}${url.pathname}`;
+    } catch {
+      return "unknown";
+    }
+  }
+
+  private recordRequestMetric(endpoint: string, wasSuccessful: boolean): void {
+    const now = Date.now();
+    const metric = this.requestMetrics.get(endpoint) ?? {
+      total: 0,
+      success: 0,
+      failure: 0,
+      recentTimestamps: [],
+    };
+
+    metric.total += 1;
+    if (wasSuccessful) {
+      metric.success += 1;
+    } else {
+      metric.failure += 1;
+    }
+    metric.recentTimestamps.push(now);
+    metric.recentTimestamps = metric.recentTimestamps.filter(
+      (timestamp) => now - timestamp <= REQUEST_STATS_WINDOW_MS,
+    );
+
+    this.requestMetrics.set(endpoint, metric);
+  }
+
+  private getRequestStats(): AppSnapshot["status"]["requestStats"] {
+    const now = Date.now();
+    const endpoints = Array.from(this.requestMetrics.entries())
+      .map(([endpoint, metric]) => {
+        const recent = metric.recentTimestamps.filter(
+          (timestamp) => now - timestamp <= REQUEST_STATS_WINDOW_MS,
+        );
+        metric.recentTimestamps = recent;
+        return {
+          endpoint,
+          total: metric.total,
+          success: metric.success,
+          failure: metric.failure,
+          recent: recent.length,
+        };
+      })
+      .sort((left, right) => right.recent - left.recent || right.total - left.total);
+
+    return {
+      windowMinutes: REQUEST_STATS_WINDOW_MS / 60_000,
+      endpoints,
+    };
   }
 
   private runBackgroundTask(context: string, task: Promise<unknown>): void {

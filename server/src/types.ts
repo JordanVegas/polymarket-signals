@@ -74,6 +74,16 @@ export type AppSnapshot = {
     websocketAssetsSeenCount: number;
     websocketAssetsSeenRecentlyCount: number;
     lastWebsocketMessageAt: number | null;
+    requestStats: {
+      windowMinutes: number;
+      endpoints: Array<{
+        endpoint: string;
+        total: number;
+        success: number;
+        failure: number;
+        recent: number;
+      }>;
+    };
   };
 };
 
