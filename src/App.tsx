@@ -83,6 +83,13 @@ type UserProfileResponse = {
   username: string;
   webhookUrl: string;
   monitoredWallet: string;
+  autoTradeEnabled: boolean;
+  startingBalanceUsd: number;
+  currentBalanceUsd: number;
+  riskPercent: number;
+  tradingWalletAddress: string;
+  tradingSignatureType: "EOA" | "POLY_PROXY";
+  hasTradingCredentials: boolean;
   watches: Array<{
     marketSlug: string;
     outcome: string;
@@ -94,6 +101,7 @@ type UserProfileResponse = {
 
 type StrategyPosition = {
   id: string;
+  username: string;
   marketSlug: string;
   marketQuestion: string;
   marketUrl: string;
@@ -104,6 +112,9 @@ type StrategyPosition = {
   updatedAt: number;
   entryPrice: number;
   lastPrice: number;
+  entryNotionalUsd: number;
+  remainingShares: number;
+  realizedUsd: number;
   originalSmartMoneyWeight: number;
   remainingSmartMoneyWeight: number;
   soldPercent: number;
@@ -184,11 +195,28 @@ const copy = {
     profileSuffix: "'s profile",
     profileBody:
       "Save your Discord webhook here once, then use Get sell alerts on any market card you want to track for exit signals.",
+    tradingProfileBody:
+      "Arm auto trade here, set your bankroll and risk, and save your Polymarket trading credentials encrypted on the server.",
     discordWebhookUrl: "Discord webhook URL",
     monitoredWallet: "Tracked Polymarket wallet",
-    saveWebhook: "Save webhook",
+    autoTradeEnabled: "Auto trade armed",
+    startingBalance: "Starting balance",
+    currentBalance: "Current balance",
+    riskPercent: "Risk per trade %",
+    tradingWalletAddress: "Trading wallet address",
+    tradingSignatureType: "Signature type",
+    tradingSignatureTypeEoa: "EOA",
+    tradingSignatureTypeProxy: "Poly proxy",
+    privateKey: "Private key",
+    apiKey: "API key",
+    apiSecret: "API secret",
+    apiPassphrase: "API passphrase",
+    credentialsSaved: "Trading credentials saved",
+    replaceCredentials: "Paste all four fields to replace saved credentials",
+    clearCredentials: "Clear saved credentials",
+    saveWebhook: "Save settings",
     saving: "Saving...",
-    discordWebhookSaved: "Discord webhook saved",
+    discordWebhookSaved: "Profile saved",
     removing: "Removing...",
     activeWatches: "Active watches",
     noActiveWatches: "No sell-alert watches are active yet.",
@@ -284,11 +312,28 @@ const copy = {
     profileSuffix: " של",
     profileBody:
       "שמור כאן פעם אחת את כתובת הוובהוק של דיסקורד, ואז השתמש ב-Get sell alerts על כל כרטיס שוק שתרצה לעקוב אחריו ליציאה.",
+    tradingProfileBody:
+      "כאן אפשר להפעיל אוטו-טרייד, לקבוע בנק רול וסיכון, ולשמור את פרטי המסחר של פולימרקט כשהם מוצפנים על השרת.",
     discordWebhookUrl: "כתובת וובהוק של דיסקורד",
     monitoredWallet: "ארנק פולימרקט למעקב",
-    saveWebhook: "שמור וובהוק",
+    autoTradeEnabled: "אוטו טרייד פעיל",
+    startingBalance: "בנק רול התחלתי",
+    currentBalance: "יתרה נוכחית",
+    riskPercent: "סיכון לעסקה %",
+    tradingWalletAddress: "כתובת ארנק למסחר",
+    tradingSignatureType: "סוג חתימה",
+    tradingSignatureTypeEoa: "EOA",
+    tradingSignatureTypeProxy: "Poly proxy",
+    privateKey: "מפתח פרטי",
+    apiKey: "API key",
+    apiSecret: "API secret",
+    apiPassphrase: "API passphrase",
+    credentialsSaved: "פרטי המסחר נשמרו",
+    replaceCredentials: "כדי להחליף פרטים שמורים, יש להדביק את כל ארבעת השדות",
+    clearCredentials: "מחק פרטי מסחר שמורים",
+    saveWebhook: "שמור הגדרות",
     saving: "שומר...",
-    discordWebhookSaved: "וובהוק דיסקורד נשמר",
+    discordWebhookSaved: "הפרופיל נשמר",
     removing: "מסיר...",
     activeWatches: "מעקבים פעילים",
     noActiveWatches: "עדיין אין מעקבי התראות מכירה פעילים.",
@@ -397,6 +442,17 @@ function App() {
   const [profile, setProfile] = useState<UserProfileResponse | null>(null);
   const [profileFormWebhookUrl, setProfileFormWebhookUrl] = useState("");
   const [profileFormMonitoredWallet, setProfileFormMonitoredWallet] = useState("");
+  const [profileFormAutoTradeEnabled, setProfileFormAutoTradeEnabled] = useState(false);
+  const [profileFormStartingBalanceUsd, setProfileFormStartingBalanceUsd] = useState("1000");
+  const [profileFormRiskPercent, setProfileFormRiskPercent] = useState("5");
+  const [profileFormTradingWalletAddress, setProfileFormTradingWalletAddress] = useState("");
+  const [profileFormTradingSignatureType, setProfileFormTradingSignatureType] =
+    useState<"EOA" | "POLY_PROXY">("EOA");
+  const [profileFormPrivateKey, setProfileFormPrivateKey] = useState("");
+  const [profileFormApiKey, setProfileFormApiKey] = useState("");
+  const [profileFormApiSecret, setProfileFormApiSecret] = useState("");
+  const [profileFormApiPassphrase, setProfileFormApiPassphrase] = useState("");
+  const [profileFormClearTradingCredentials, setProfileFormClearTradingCredentials] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [removingWatchKey, setRemovingWatchKey] = useState<string | null>(null);
   const [profileMessage, setProfileMessage] = useState<string | null>(null);
@@ -628,6 +684,16 @@ function App() {
         setProfile(payload);
         setProfileFormWebhookUrl(payload.webhookUrl);
         setProfileFormMonitoredWallet(payload.monitoredWallet);
+        setProfileFormAutoTradeEnabled(payload.autoTradeEnabled);
+        setProfileFormStartingBalanceUsd(String(payload.startingBalanceUsd));
+        setProfileFormRiskPercent(String(payload.riskPercent));
+        setProfileFormTradingWalletAddress(payload.tradingWalletAddress);
+        setProfileFormTradingSignatureType(payload.tradingSignatureType);
+        setProfileFormPrivateKey("");
+        setProfileFormApiKey("");
+        setProfileFormApiSecret("");
+        setProfileFormApiPassphrase("");
+        setProfileFormClearTradingCredentials(false);
       }
     };
 
@@ -738,6 +804,16 @@ function App() {
         body: JSON.stringify({
           webhookUrl: profileFormWebhookUrl,
           monitoredWallet: profileFormMonitoredWallet,
+          autoTradeEnabled: profileFormAutoTradeEnabled,
+          startingBalanceUsd: Number(profileFormStartingBalanceUsd || 0),
+          riskPercent: Number(profileFormRiskPercent || 0),
+          tradingWalletAddress: profileFormTradingWalletAddress,
+          tradingSignatureType: profileFormTradingSignatureType,
+          privateKey: profileFormPrivateKey,
+          apiKey: profileFormApiKey,
+          apiSecret: profileFormApiSecret,
+          apiPassphrase: profileFormApiPassphrase,
+          clearTradingCredentials: profileFormClearTradingCredentials,
         }),
       });
       const payload = (await response.json()) as UserProfileResponse & { error?: string };
@@ -748,7 +824,19 @@ function App() {
       setProfile(payload);
       setProfileFormWebhookUrl(payload.webhookUrl);
       setProfileFormMonitoredWallet(payload.monitoredWallet);
-      setProfileMessage(t.discordWebhookSaved);
+      setProfileFormAutoTradeEnabled(payload.autoTradeEnabled);
+      setProfileFormStartingBalanceUsd(String(payload.startingBalanceUsd));
+      setProfileFormRiskPercent(String(payload.riskPercent));
+      setProfileFormTradingWalletAddress(payload.tradingWalletAddress);
+      setProfileFormTradingSignatureType(payload.tradingSignatureType);
+      setProfileFormPrivateKey("");
+      setProfileFormApiKey("");
+      setProfileFormApiSecret("");
+      setProfileFormApiPassphrase("");
+      setProfileFormClearTradingCredentials(false);
+      setProfileMessage(
+        payload.hasTradingCredentials ? `${t.discordWebhookSaved}. ${t.credentialsSaved}.` : t.discordWebhookSaved,
+      );
     } catch (error) {
       setProfileMessage(error instanceof Error ? error.message : t.unableToSaveProfile);
     } finally {
@@ -940,6 +1028,7 @@ function App() {
                 <p className="section-kicker">{t.discordAlerts}</p>
                 <h3>{profileTitle}</h3>
                 <p>{t.profileBody}</p>
+                <p>{t.tradingProfileBody}</p>
               </div>
 
               <label className="profile-field">
@@ -960,6 +1049,123 @@ function App() {
                   onChange={(event) => setProfileFormMonitoredWallet(event.target.value)}
                   placeholder="0x..."
                 />
+              </label>
+
+              <label className="profile-toggle">
+                <input
+                  type="checkbox"
+                  checked={profileFormAutoTradeEnabled}
+                  onChange={(event) => setProfileFormAutoTradeEnabled(event.target.checked)}
+                />
+                <span>{t.autoTradeEnabled}</span>
+              </label>
+
+              <div className="profile-field-grid">
+                <label className="profile-field">
+                  <span>{t.startingBalance}</span>
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={profileFormStartingBalanceUsd}
+                    onChange={(event) => setProfileFormStartingBalanceUsd(event.target.value)}
+                  />
+                </label>
+
+                <label className="profile-field">
+                  <span>{t.currentBalance}</span>
+                  <input type="text" value={currencyFormatter.format(profile?.currentBalanceUsd ?? 0)} disabled />
+                </label>
+
+                <label className="profile-field">
+                  <span>{t.riskPercent}</span>
+                  <input
+                    type="number"
+                    min="0.1"
+                    max="100"
+                    step="0.1"
+                    value={profileFormRiskPercent}
+                    onChange={(event) => setProfileFormRiskPercent(event.target.value)}
+                  />
+                </label>
+              </div>
+
+              <label className="profile-field">
+                <span>{t.tradingWalletAddress}</span>
+                <input
+                  type="text"
+                  value={profileFormTradingWalletAddress}
+                  onChange={(event) => setProfileFormTradingWalletAddress(event.target.value)}
+                  placeholder="0x..."
+                />
+              </label>
+
+              <label className="profile-field">
+                <span>{t.tradingSignatureType}</span>
+                <select
+                  value={profileFormTradingSignatureType}
+                  onChange={(event) =>
+                    setProfileFormTradingSignatureType(
+                      event.target.value === "POLY_PROXY" ? "POLY_PROXY" : "EOA",
+                    )
+                  }
+                >
+                  <option value="EOA">{t.tradingSignatureTypeEoa}</option>
+                  <option value="POLY_PROXY">{t.tradingSignatureTypeProxy}</option>
+                </select>
+              </label>
+
+              <div className="profile-field-grid">
+                <label className="profile-field">
+                  <span>{t.privateKey}</span>
+                  <input
+                    type="password"
+                    value={profileFormPrivateKey}
+                    onChange={(event) => setProfileFormPrivateKey(event.target.value)}
+                    placeholder={profile?.hasTradingCredentials ? "••••••••" : "0x..."}
+                  />
+                </label>
+
+                <label className="profile-field">
+                  <span>{t.apiKey}</span>
+                  <input
+                    type="password"
+                    value={profileFormApiKey}
+                    onChange={(event) => setProfileFormApiKey(event.target.value)}
+                    placeholder={profile?.hasTradingCredentials ? "••••••••" : ""}
+                  />
+                </label>
+
+                <label className="profile-field">
+                  <span>{t.apiSecret}</span>
+                  <input
+                    type="password"
+                    value={profileFormApiSecret}
+                    onChange={(event) => setProfileFormApiSecret(event.target.value)}
+                    placeholder={profile?.hasTradingCredentials ? "••••••••" : ""}
+                  />
+                </label>
+
+                <label className="profile-field">
+                  <span>{t.apiPassphrase}</span>
+                  <input
+                    type="password"
+                    value={profileFormApiPassphrase}
+                    onChange={(event) => setProfileFormApiPassphrase(event.target.value)}
+                    placeholder={profile?.hasTradingCredentials ? "••••••••" : ""}
+                  />
+                </label>
+              </div>
+
+              <p className="profile-helper">{t.replaceCredentials}</p>
+
+              <label className="profile-toggle">
+                <input
+                  type="checkbox"
+                  checked={profileFormClearTradingCredentials}
+                  onChange={(event) => setProfileFormClearTradingCredentials(event.target.checked)}
+                />
+                <span>{t.clearCredentials}</span>
               </label>
 
               {profileMessage ? <p className="profile-message">{profileMessage}</p> : null}

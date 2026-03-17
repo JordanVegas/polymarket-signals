@@ -68,6 +68,16 @@ export type PersistedUserWebhookSetting = {
   username: string;
   webhookUrl?: string;
   monitoredWallet?: string;
+  autoTradeEnabled?: boolean;
+  startingBalanceUsd?: number;
+  currentBalanceUsd?: number;
+  riskPercent?: number;
+  tradingWalletAddress?: string;
+  tradingSignatureType?: "EOA" | "POLY_PROXY";
+  encryptedPrivateKey?: string;
+  encryptedApiKey?: string;
+  encryptedApiSecret?: string;
+  encryptedApiPassphrase?: string;
   updatedAt: Date;
 };
 
@@ -125,7 +135,8 @@ export class SignalStorage {
     await this.marketAggregateCollection().createIndex({ participantCount: -1, latestTimestamp: -1 });
     await this.strategyPositionCollection().createIndex({ id: 1 }, { unique: true });
     await this.strategyPositionCollection().createIndex({ status: 1, updatedAt: -1 });
-    await this.strategyPositionCollection().createIndex({ marketSlug: 1, outcome: 1, status: 1 });
+    await this.strategyPositionCollection().createIndex({ username: 1, status: 1, updatedAt: -1 });
+    await this.strategyPositionCollection().createIndex({ username: 1, marketSlug: 1, outcome: 1, status: 1 });
     await this.tradeCollection().createIndex({ tradeId: 1 }, { unique: true });
     await this.tradeCollection().createIndex({ timestamp: -1 });
     await this.observedTradeCollection().createIndex({ tradeId: 1 }, { unique: true });
@@ -217,16 +228,21 @@ export class SignalStorage {
     await this.marketAggregateCollection().deleteOne({ marketSlug });
   }
 
-  async loadStrategyPositions(limit = 100): Promise<StrategyPosition[]> {
+  async loadStrategyPositions(username: string, limit = 100): Promise<StrategyPosition[]> {
     const rows = await this.strategyPositionCollection()
-      .find({}, { sort: { updatedAt: -1 }, limit })
+      .find({ username }, { sort: { updatedAt: -1 }, limit })
       .toArray();
 
     return rows.map(({ _id: _ignored, updatedAtDate: _updatedAtDate, ...position }) => position);
   }
 
-  async loadOpenStrategyPosition(marketSlug: string, outcome: string): Promise<StrategyPosition | null> {
+  async loadOpenStrategyPosition(
+    username: string,
+    marketSlug: string,
+    outcome: string,
+  ): Promise<StrategyPosition | null> {
     const row = await this.strategyPositionCollection().findOne({
+      username,
       marketSlug,
       outcome,
       status: "open",
@@ -359,16 +375,40 @@ export class SignalStorage {
 
   async updateUserSettings(
     username: string,
-    updates: { webhookUrl?: string; monitoredWallet?: string },
+    updates: {
+      webhookUrl?: string;
+      monitoredWallet?: string;
+      autoTradeEnabled?: boolean;
+      startingBalanceUsd?: number;
+      currentBalanceUsd?: number;
+      riskPercent?: number;
+      tradingWalletAddress?: string;
+      tradingSignatureType?: "EOA" | "POLY_PROXY";
+      encryptedPrivateKey?: string;
+      encryptedApiKey?: string;
+      encryptedApiSecret?: string;
+      encryptedApiPassphrase?: string;
+      clearTradingCredentials?: boolean;
+    },
   ): Promise<void> {
+    const { clearTradingCredentials, ...restUpdates } = updates;
+    const unset: Record<string, "" | 1> = {};
+    if (clearTradingCredentials) {
+      unset.encryptedPrivateKey = "";
+      unset.encryptedApiKey = "";
+      unset.encryptedApiSecret = "";
+      unset.encryptedApiPassphrase = "";
+    }
+
     await this.userWebhookCollection().updateOne(
       { username },
       {
         $set: {
           username,
-          ...updates,
+          ...restUpdates,
           updatedAt: new Date(),
         },
+        ...(Object.keys(unset).length > 0 ? { $unset: unset } : {}),
       },
       { upsert: true },
     );
@@ -376,11 +416,34 @@ export class SignalStorage {
 
   async getUserSettings(
     username: string,
-  ): Promise<{ webhookUrl: string | null; monitoredWallet: string | null }> {
+  ): Promise<{
+    webhookUrl: string | null;
+    monitoredWallet: string | null;
+    autoTradeEnabled: boolean;
+    startingBalanceUsd: number | null;
+    currentBalanceUsd: number | null;
+    riskPercent: number | null;
+    tradingWalletAddress: string | null;
+    tradingSignatureType: "EOA" | "POLY_PROXY";
+    encryptedPrivateKey: string | null;
+    encryptedApiKey: string | null;
+    encryptedApiSecret: string | null;
+    encryptedApiPassphrase: string | null;
+  }> {
     const row = await this.userWebhookCollection().findOne({ username });
     return {
       webhookUrl: row?.webhookUrl ?? null,
       monitoredWallet: row?.monitoredWallet ?? null,
+      autoTradeEnabled: row?.autoTradeEnabled ?? false,
+      startingBalanceUsd: row?.startingBalanceUsd ?? null,
+      currentBalanceUsd: row?.currentBalanceUsd ?? null,
+      riskPercent: row?.riskPercent ?? null,
+      tradingWalletAddress: row?.tradingWalletAddress ?? null,
+      tradingSignatureType: row?.tradingSignatureType ?? "EOA",
+      encryptedPrivateKey: row?.encryptedPrivateKey ?? null,
+      encryptedApiKey: row?.encryptedApiKey ?? null,
+      encryptedApiSecret: row?.encryptedApiSecret ?? null,
+      encryptedApiPassphrase: row?.encryptedApiPassphrase ?? null,
     };
   }
 
@@ -573,6 +636,25 @@ export class SignalStorage {
         monitoredWallet: row.monitoredWallet ?? "",
       }))
       .filter((row) => Boolean(row.username && row.monitoredWallet));
+  }
+
+  async loadAutoTradeUsers(): Promise<
+    Array<{ username: string; currentBalanceUsd: number; riskPercent: number }>
+  > {
+    const rows = await this.userWebhookCollection()
+      .find(
+        { autoTradeEnabled: true },
+        { projection: { _id: 0, username: 1, currentBalanceUsd: 1, startingBalanceUsd: 1, riskPercent: 1 } },
+      )
+      .toArray();
+
+    return rows
+      .map((row) => ({
+        username: row.username,
+        currentBalanceUsd: Math.max(0, Number(row.currentBalanceUsd ?? row.startingBalanceUsd ?? 0)),
+        riskPercent: Number(row.riskPercent ?? 5),
+      }))
+      .filter((row) => Boolean(row.username) && Number.isFinite(row.currentBalanceUsd) && row.currentBalanceUsd > 0);
   }
 
   async loadWatchersForMarket(

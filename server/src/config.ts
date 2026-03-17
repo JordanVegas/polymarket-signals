@@ -43,6 +43,8 @@ export const config = {
   mongoSignalsCollection: process.env.MONGO_SIGNALS_COLLECTION || "signals",
   authMongoUri: process.env.AUTH_MONGO_URI || withDatabaseName(defaultMongoUri, "authentication"),
   webSessionSecret: process.env.WEB_SESSION_SECRET || "change-me",
+  tradingEncryptionSecret:
+    process.env.TRADING_ENCRYPTION_SECRET || process.env.WEB_SESSION_SECRET || "change-me",
   webSessionCookieName: process.env.WEB_SESSION_COOKIE_NAME || "tuf_session",
   webCookieDomain: process.env.WEB_COOKIE_DOMAIN || "",
   minSignalClusterUsd: parseNumber(process.env.MIN_SIGNAL_CLUSTER_USD, 1_000),

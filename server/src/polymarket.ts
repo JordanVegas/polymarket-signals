@@ -1,4 +1,5 @@
 import { config } from "./config.js";
+import { encryptSecret } from "./secrets.js";
 import WebSocket from "ws";
 import { Agent } from "undici";
 import { SignalStorage, type PersistedCluster, type PersistedTrackedTrader } from "./storage.js";
@@ -423,6 +424,18 @@ export class PolymarketSignalService {
       username: normalizedUsername,
       webhookUrl: settings.webhookUrl ?? "",
       monitoredWallet: settings.monitoredWallet ?? "",
+      autoTradeEnabled: settings.autoTradeEnabled ?? false,
+      startingBalanceUsd: settings.startingBalanceUsd ?? 1_000,
+      currentBalanceUsd: settings.currentBalanceUsd ?? settings.startingBalanceUsd ?? 1_000,
+      riskPercent: settings.riskPercent ?? 5,
+      tradingWalletAddress: settings.tradingWalletAddress ?? "",
+      tradingSignatureType: settings.tradingSignatureType ?? "EOA",
+      hasTradingCredentials: Boolean(
+        settings.encryptedPrivateKey &&
+          settings.encryptedApiKey &&
+          settings.encryptedApiSecret &&
+          settings.encryptedApiPassphrase,
+      ),
       watches: watchedMarkets.map((watch) => {
         const market = activeMarketsBySlug.get(watch.marketSlug);
         return {
@@ -436,26 +449,40 @@ export class PolymarketSignalService {
     };
   }
 
-  async getStrategyPositions(): Promise<StrategyPosition[]> {
-    return this.storage.loadStrategyPositions(200);
+  async getStrategyPositions(username: string): Promise<StrategyPosition[]> {
+    return this.storage.loadStrategyPositions(username, 200);
   }
 
   async updateUserProfile(
     username: string,
-    updates: { webhookUrl: string; monitoredWallet: string },
+    updates: {
+      webhookUrl: string;
+      monitoredWallet: string;
+      autoTradeEnabled: boolean;
+      startingBalanceUsd: number;
+      riskPercent: number;
+      tradingWalletAddress: string;
+      tradingSignatureType: "EOA" | "POLY_PROXY";
+      privateKey: string;
+      apiKey: string;
+      apiSecret: string;
+      apiPassphrase: string;
+      clearTradingCredentials: boolean;
+    },
   ): Promise<UserProfileResponse> {
     const normalizedUsername = username.trim();
     const normalizedWebhookUrl = updates.webhookUrl.trim();
     const normalizedMonitoredWallet = updates.monitoredWallet.trim();
+    const normalizedTradingWalletAddress = updates.tradingWalletAddress.trim();
+    const normalizedPrivateKey = updates.privateKey.trim();
+    const normalizedApiKey = updates.apiKey.trim();
+    const normalizedApiSecret = updates.apiSecret.trim();
+    const normalizedApiPassphrase = updates.apiPassphrase.trim();
     if (!normalizedUsername) {
       throw new Error("Username is required");
     }
 
-    if (!normalizedWebhookUrl) {
-      throw new Error("Discord webhook URL is required");
-    }
-
-    if (!isValidDiscordWebhookUrl(normalizedWebhookUrl)) {
+    if (normalizedWebhookUrl && !isValidDiscordWebhookUrl(normalizedWebhookUrl)) {
       throw new Error("Please enter a valid Discord webhook URL");
     }
 
@@ -463,9 +490,59 @@ export class PolymarketSignalService {
       throw new Error("Please enter a valid public Polymarket wallet");
     }
 
+    if (normalizedTradingWalletAddress && !/^0x[a-fA-F0-9]{40}$/.test(normalizedTradingWalletAddress)) {
+      throw new Error("Please enter a valid trading wallet address");
+    }
+
+    if (!Number.isFinite(updates.startingBalanceUsd) || updates.startingBalanceUsd <= 0) {
+      throw new Error("Starting balance must be greater than 0");
+    }
+
+    if (!Number.isFinite(updates.riskPercent) || updates.riskPercent <= 0 || updates.riskPercent > 100) {
+      throw new Error("Risk percent must be between 0 and 100");
+    }
+
+    const signatureType = updates.tradingSignatureType === "POLY_PROXY" ? "POLY_PROXY" : "EOA";
+    const hasNewTradingSecrets = Boolean(
+      normalizedPrivateKey || normalizedApiKey || normalizedApiSecret || normalizedApiPassphrase,
+    );
+
+    if (
+      hasNewTradingSecrets &&
+      (!normalizedPrivateKey || !normalizedApiKey || !normalizedApiSecret || !normalizedApiPassphrase)
+    ) {
+      throw new Error("Private key, API key, API secret, and API passphrase are all required together");
+    }
+
+    if (normalizedPrivateKey && !isLikelyPrivateKey(normalizedPrivateKey)) {
+      throw new Error("Please enter a valid private key");
+    }
+
+    const existingSettings = await this.storage.getUserSettings(normalizedUsername);
     await this.storage.updateUserSettings(normalizedUsername, {
       webhookUrl: normalizedWebhookUrl,
       monitoredWallet: normalizedMonitoredWallet,
+      autoTradeEnabled: updates.autoTradeEnabled,
+      startingBalanceUsd: updates.startingBalanceUsd,
+      currentBalanceUsd:
+        existingSettings.currentBalanceUsd == null
+          ? updates.startingBalanceUsd
+          : Math.max(0, existingSettings.currentBalanceUsd),
+      riskPercent: updates.riskPercent,
+      tradingWalletAddress: normalizedTradingWalletAddress,
+      tradingSignatureType: signatureType,
+      ...(hasNewTradingSecrets
+        ? {
+            encryptedPrivateKey: encryptSecret(normalizedPrivateKey, config.tradingEncryptionSecret),
+            encryptedApiKey: encryptSecret(normalizedApiKey, config.tradingEncryptionSecret),
+            encryptedApiSecret: encryptSecret(normalizedApiSecret, config.tradingEncryptionSecret),
+            encryptedApiPassphrase: encryptSecret(
+              normalizedApiPassphrase,
+              config.tradingEncryptionSecret,
+            ),
+          }
+        : {}),
+      clearTradingCredentials: updates.clearTradingCredentials,
     });
     await this.syncTrackedWalletWatchesForUser(normalizedUsername, normalizedMonitoredWallet);
     return this.getUserProfile(normalizedUsername);
@@ -1295,7 +1372,10 @@ export class PolymarketSignalService {
     await this.storage.saveCluster(this.toPersistedCluster(accumulator));
     await this.storage.saveSignal(styledSignal);
     await this.refreshMarketAggregate(accumulator.market.slug);
-    await this.reconcileStrategyPosition(accumulator.market.slug);
+      const autoTradeUsers = await this.storage.loadAutoTradeUsers();
+      for (const user of autoTradeUsers) {
+        await this.reconcileStrategyPosition(accumulator.market.slug, user);
+      }
 
     if (config.marketHistoryCatchupEnabled && this.initialActiveConditionIds.has(accumulator.market.conditionId)) {
       this.runBackgroundTask(
@@ -1535,13 +1615,19 @@ export class PolymarketSignalService {
     const activeMarketSlugs = Array.from(
       new Set(Array.from(this.marketsByAssetId.values(), (market) => market.slug)),
     );
+    const autoTradeUsers = await this.storage.loadAutoTradeUsers();
 
     for (const marketSlug of activeMarketSlugs) {
-      await this.reconcileStrategyPosition(marketSlug);
+      for (const user of autoTradeUsers) {
+        await this.reconcileStrategyPosition(marketSlug, user);
+      }
     }
   }
 
-  private async reconcileStrategyPosition(marketSlug: string): Promise<void> {
+  private async reconcileStrategyPosition(
+    marketSlug: string,
+    user: { username: string; currentBalanceUsd: number; riskPercent: number },
+  ): Promise<void> {
     const aggregate = (await this.storage.loadMarketAggregates([marketSlug]))[0];
     if (!aggregate) {
       return;
@@ -1555,7 +1641,7 @@ export class PolymarketSignalService {
     const currentWeightByWallet = new Map(
       currentParticipants.map((participant) => [participant.wallet, participant.weight] as const),
     );
-    const position = await this.storage.loadOpenStrategyPosition(marketSlug, edgeOutcome);
+    const position = await this.storage.loadOpenStrategyPosition(user.username, marketSlug, edgeOutcome);
 
     if (!position) {
       if (!isBestTradeMarket(aggregate)) {
@@ -1575,8 +1661,17 @@ export class PolymarketSignalService {
         return;
       }
 
+      const entryNotionalUsd = Math.max(
+        0,
+        Math.min(user.currentBalanceUsd, user.currentBalanceUsd * (Math.max(0, user.riskPercent) / 100)),
+      );
+      if (entryNotionalUsd <= 0 || currentPrice <= 0) {
+        return;
+      }
+
       const nextPosition: StrategyPosition = {
-        id: `${marketSlug}:${edgeOutcome}`,
+        id: `${user.username}:${marketSlug}:${edgeOutcome}`,
+        username: user.username,
         marketSlug,
         marketQuestion: aggregate.marketQuestion,
         marketUrl: aggregate.marketUrl,
@@ -1587,6 +1682,9 @@ export class PolymarketSignalService {
         updatedAt: Date.now(),
         entryPrice: currentPrice,
         lastPrice: currentPrice,
+        entryNotionalUsd,
+        remainingShares: entryNotionalUsd / currentPrice,
+        realizedUsd: 0,
         originalSmartMoneyWeight,
         remainingSmartMoneyWeight: originalSmartMoneyWeight,
         soldPercent: 0,
@@ -1596,6 +1694,9 @@ export class PolymarketSignalService {
         originalParticipants,
       };
       await this.storage.saveStrategyPosition(nextPosition);
+      await this.storage.updateUserSettings(user.username, {
+        currentBalanceUsd: Math.max(0, user.currentBalanceUsd - entryNotionalUsd),
+      });
       return;
     }
 
@@ -1617,19 +1718,35 @@ export class PolymarketSignalService {
     };
 
     if (!nextPosition.trim90Hit && currentPrice >= 0.9) {
+      const sharesToSell = position.remainingShares * 0.5;
+      const realizedUsd = sharesToSell * currentPrice;
       nextPosition = {
         ...nextPosition,
+        remainingShares: Math.max(0, nextPosition.remainingShares - sharesToSell),
+        realizedUsd: nextPosition.realizedUsd + realizedUsd,
         soldPercent: Math.max(nextPosition.soldPercent, 25),
         trim90Hit: true,
       };
+      await this.storage.updateUserSettings(user.username, {
+        currentBalanceUsd: user.currentBalanceUsd + realizedUsd,
+      });
+      user.currentBalanceUsd += realizedUsd;
     }
 
     if (!nextPosition.trim93Hit && currentPrice >= 0.93) {
+      const sharesToSell = nextPosition.remainingShares / 3;
+      const realizedUsd = sharesToSell * currentPrice;
       nextPosition = {
         ...nextPosition,
+        remainingShares: Math.max(0, nextPosition.remainingShares - sharesToSell),
+        realizedUsd: nextPosition.realizedUsd + realizedUsd,
         soldPercent: Math.max(nextPosition.soldPercent, 50),
         trim93Hit: true,
       };
+      await this.storage.updateUserSettings(user.username, {
+        currentBalanceUsd: user.currentBalanceUsd + realizedUsd,
+      });
+      user.currentBalanceUsd += realizedUsd;
     }
 
     let exitReason: string | undefined;
@@ -1642,12 +1759,18 @@ export class PolymarketSignalService {
     }
 
     if (exitReason) {
+      const realizedUsd = nextPosition.remainingShares * currentPrice;
       nextPosition = {
         ...nextPosition,
         status: "closed",
+        remainingShares: 0,
+        realizedUsd: nextPosition.realizedUsd + realizedUsd,
         soldPercent: 100,
         exitReason,
       };
+      await this.storage.updateUserSettings(user.username, {
+        currentBalanceUsd: user.currentBalanceUsd + realizedUsd,
+      });
     }
 
     await this.storage.saveStrategyPosition(nextPosition);
@@ -2342,6 +2465,11 @@ const isValidDiscordWebhookUrl = (value: string): boolean => {
   } catch {
     return false;
   }
+};
+
+const isLikelyPrivateKey = (value: string): boolean => {
+  const normalized = value.startsWith("0x") ? value.slice(2) : value;
+  return /^[a-fA-F0-9]{64}$/.test(normalized);
 };
 
 const formatUsd = (value: number): string =>

@@ -134,6 +134,13 @@ export type UserProfileResponse = {
   username: string;
   webhookUrl: string;
   monitoredWallet: string;
+  autoTradeEnabled: boolean;
+  startingBalanceUsd: number;
+  currentBalanceUsd: number;
+  riskPercent: number;
+  tradingWalletAddress: string;
+  tradingSignatureType: "EOA" | "POLY_PROXY";
+  hasTradingCredentials: boolean;
   watches: Array<{
     marketSlug: string;
     outcome: string;
@@ -145,6 +152,7 @@ export type UserProfileResponse = {
 
 export type StrategyPosition = {
   id: string;
+  username: string;
   marketSlug: string;
   marketQuestion: string;
   marketUrl: string;
@@ -155,6 +163,9 @@ export type StrategyPosition = {
   updatedAt: number;
   entryPrice: number;
   lastPrice: number;
+  entryNotionalUsd: number;
+  remainingShares: number;
+  realizedUsd: number;
   originalSmartMoneyWeight: number;
   remainingSmartMoneyWeight: number;
   soldPercent: number;

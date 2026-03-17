@@ -412,6 +412,46 @@ a {
   font: inherit;
 }
 
+.profile-field select {
+  min-height: 42px;
+  width: 100%;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(19, 30, 38, 0.96);
+  color: inherit;
+  padding: 0 14px;
+  font: inherit;
+}
+
+.profile-field input:disabled {
+  opacity: 0.78;
+  cursor: not-allowed;
+}
+
+.profile-field-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.profile-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: #d0e1eb;
+}
+
+.profile-toggle input {
+  width: 16px;
+  height: 16px;
+}
+
+.profile-helper {
+  margin: -6px 0 0;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+}
+
 .profile-message {
   margin: 0;
   color: #dffcff;
@@ -945,6 +985,10 @@ a {
   .profile-watch-item {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .profile-field-grid {
+    grid-template-columns: 1fr;
   }
 
   .profile-watch-actions {

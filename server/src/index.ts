@@ -81,10 +81,31 @@ app.put("/api/profile", async (request, response) => {
 
     const webhookUrl = String(request.body.webhookUrl ?? "");
     const monitoredWallet = String(request.body.monitoredWallet ?? "");
+    const autoTradeEnabled = Boolean(request.body.autoTradeEnabled);
+    const startingBalanceUsd = Number(request.body.startingBalanceUsd ?? 1000);
+    const riskPercent = Number(request.body.riskPercent ?? 5);
+    const tradingWalletAddress = String(request.body.tradingWalletAddress ?? "");
+    const tradingSignatureType =
+      String(request.body.tradingSignatureType ?? "EOA") === "POLY_PROXY" ? "POLY_PROXY" : "EOA";
+    const privateKey = String(request.body.privateKey ?? "");
+    const apiKey = String(request.body.apiKey ?? "");
+    const apiSecret = String(request.body.apiSecret ?? "");
+    const apiPassphrase = String(request.body.apiPassphrase ?? "");
+    const clearTradingCredentials = Boolean(request.body.clearTradingCredentials);
     response.json(
       await service.updateUserProfile(request.sessionUser.username, {
         webhookUrl,
         monitoredWallet,
+        autoTradeEnabled,
+        startingBalanceUsd,
+        riskPercent,
+        tradingWalletAddress,
+        tradingSignatureType,
+        privateKey,
+        apiKey,
+        apiSecret,
+        apiPassphrase,
+        clearTradingCredentials,
       }),
     );
   } catch (error) {
@@ -114,7 +135,7 @@ app.get("/api/strategy-positions", async (request, response) => {
     return;
   }
 
-  response.json(await service.getStrategyPositions());
+  response.json(await service.getStrategyPositions(request.sessionUser.username));
 });
 
 app.post("/api/market-alerts/watch", async (request, response) => {
