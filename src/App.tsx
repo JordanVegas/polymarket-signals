@@ -1890,10 +1890,10 @@ function App() {
               </div>
             ) : (
               <>
-                <div className="signal-grid">
+                <div className="gaps-grid">
                   {visibleGaps.map((gap) => (
-                    <article className="signal-card" key={gap.id}>
-                      <div className="signal-body">
+                    <article className="gap-card" key={gap.id}>
+                      <div className="gap-card-body">
                         <div className="signal-topline">
                           <span>{formatRelativeTime(gap.updatedAt, t)}</span>
                           <span>{gap.eventSlug}</span>
@@ -1907,16 +1907,16 @@ function App() {
                           <Metric label={t.executableStake} value={gap.executableStake !== null ? currencyFormatter.format(gap.executableStake) : "-"} />
                         </div>
 
-                        <div className="profile-watch-list">
+                        <div className="gap-legs">
                           {gap.legs.map((leg, index) => (
-                            <article className="profile-watch-item" key={`${gap.id}:${leg.marketSlug}`}>
-                              <div className="profile-watch-copy">
+                            <article className="gap-leg" key={`${gap.id}:${leg.marketSlug}`}>
+                              <div className="gap-leg-copy">
                                 <strong>{index === 0 ? t.gapLegA : t.gapLegB}</strong>
                                 <span>{leg.marketQuestion}</span>
                                 <span>{`${t.noAsk}: ${leg.noAsk !== null ? leg.noAsk.toFixed(3) : "-"}`}</span>
                                 <span>{`${t.executableStake}: ${leg.noAskSize !== null && leg.noAsk !== null ? currencyFormatter.format(leg.noAskSize * leg.noAsk) : "-"}`}</span>
                               </div>
-                              <div className="profile-watch-actions">
+                              <div className="gap-leg-actions">
                                 <a href={normalizeSecureUrl(leg.marketUrl) ?? leg.marketUrl} target="_blank" rel="noreferrer">
                                   {t.openMarket}
                                 </a>

@@ -372,6 +372,12 @@ a {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.gaps-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .profile-panel {
   padding: 22px;
   display: grid;
@@ -477,6 +483,58 @@ a {
 .profile-watch-list {
   display: grid;
   gap: 10px;
+}
+
+.gap-legs {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.gap-leg {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.gap-leg-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.gap-leg-copy strong,
+.gap-leg-copy span {
+  overflow-wrap: anywhere;
+}
+
+.gap-leg-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.gap-leg-actions a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  text-decoration: none;
+  font-size: 0.75rem;
+  flex: 0 0 auto;
+}
+
+.gap-leg-actions a:hover {
+  border-color: rgba(255, 255, 255, 0.24);
 }
 
 .profile-watch-item {
@@ -586,6 +644,25 @@ a {
   display: grid;
   grid-template-columns: 130px 1fr;
   overflow: hidden;
+}
+
+.gap-card {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 28px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(14px);
+  overflow: hidden;
+}
+
+.gap-card-body {
+  padding: 18px;
+}
+
+.gap-card h3 {
+  margin: 6px 0 10px;
+  font-size: 1rem;
+  line-height: 1.25;
 }
 
 .signal-media {
@@ -915,6 +992,7 @@ a {
   }
 
   .signal-grid,
+  .gaps-grid,
   .signal-card {
     grid-template-columns: 1fr;
   }
@@ -988,11 +1066,13 @@ a {
   .signal-actions a,
   .signal-actions button,
   .profile-watch-item a,
+  .gap-leg-actions a,
   .profile-watch-remove {
     width: 100%;
   }
 
-  .profile-watch-item {
+  .profile-watch-item,
+  .gap-leg {
     flex-direction: column;
     align-items: stretch;
   }
@@ -1001,7 +1081,8 @@ a {
     grid-template-columns: 1fr;
   }
 
-  .profile-watch-actions {
+  .profile-watch-actions,
+  .gap-leg-actions {
     flex-direction: column;
     align-items: stretch;
   }
