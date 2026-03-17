@@ -77,6 +77,13 @@ type MarketPageResponse = {
   page: number;
   pageSize: number;
   hasMore: boolean;
+  bestTradeStats?: {
+    trackedCount: number;
+    resolvedCount: number;
+    winCount: number;
+    lossCount: number;
+    winRate: number | null;
+  };
 };
 
 type UserProfileResponse = {
@@ -263,6 +270,12 @@ const copy = {
     vegasMonitor: "Vegas Monitor",
     bestTradesTitle: "Best trades",
     bestTradesSubtitle: "Highest-conviction markets surfaced by tracked smart money.",
+    bestTradesWinRate: "Best trade win rate",
+    bestTradesResolved: "Resolved",
+    bestTradesWins: "Wins",
+    bestTradesLosses: "Losses",
+    bestTradesTracked: "Tracked",
+    bestTradesWinRatePending: "Pending",
     autoTradeTitle: "Auto trade",
     autoTradeSubtitle: "Paper positions based on the best-trade entry and thesis-break exit logic.",
     noStrategyPositions: "No strategy positions yet.",
@@ -403,6 +416,12 @@ const copy = {
     vegasMonitor: "Vegas Monitor",
     bestTradesTitle: "העסקאות הטובות ביותר",
     bestTradesSubtitle: "השווקים עם הכי הרבה שכנוע מצד כסף חכם במעקב.",
+    bestTradesWinRate: "אחוז הצלחה",
+    bestTradesResolved: "נסגרו",
+    bestTradesWins: "ניצחונות",
+    bestTradesLosses: "הפסדים",
+    bestTradesTracked: "במעקב",
+    bestTradesWinRatePending: "ממתין",
     autoTradeTitle: "מסחר אוטומטי",
     autoTradeSubtitle: "פוזיציות נייר שמבוססות על כניסת Best trade ויציאה לפי שבירת התזה.",
     noStrategyPositions: "עדיין אין פוזיציות אסטרטגיה.",
@@ -696,6 +715,7 @@ function App() {
           page: 1,
           pageSize: MARKET_PAGE_SIZE,
           hasMore: false,
+          bestTradeStats: undefined,
         };
 
         setMarketPage({
@@ -704,6 +724,7 @@ function App() {
           page: lastResponse.page,
           pageSize: lastResponse.pageSize,
           hasMore: lastResponse.hasMore,
+          bestTradeStats: lastResponse.bestTradeStats,
         });
       } finally {
         if (!cancelled) {
@@ -1471,6 +1492,40 @@ function App() {
                 </label>
               </div>
             </div>
+
+            {isBestTradesPage && marketPage.bestTradeStats ? (
+              <div className="hero-panel auto-trade-stats best-trades-stats">
+                <StatusRow
+                  label={t.bestTradesWinRate}
+                  value={
+                    marketPage.bestTradeStats.winRate === null
+                      ? t.bestTradesWinRatePending
+                      : `${(marketPage.bestTradeStats.winRate * 100).toFixed(1)}%`
+                  }
+                  tone={marketPage.bestTradeStats.winRate !== null && marketPage.bestTradeStats.winRate >= 0.5 ? "green" : "neutral"}
+                />
+                <StatusRow
+                  label={t.bestTradesResolved}
+                  value={marketPage.bestTradeStats.resolvedCount.toString()}
+                  tone="neutral"
+                />
+                <StatusRow
+                  label={t.bestTradesWins}
+                  value={marketPage.bestTradeStats.winCount.toString()}
+                  tone="green"
+                />
+                <StatusRow
+                  label={t.bestTradesLosses}
+                  value={marketPage.bestTradeStats.lossCount.toString()}
+                  tone="blue"
+                />
+                <StatusRow
+                  label={t.bestTradesTracked}
+                  value={marketPage.bestTradeStats.trackedCount.toString()}
+                  tone="neutral"
+                />
+              </div>
+            ) : null}
 
             {visibleMarkets.length === 0 && !isLoadingMarkets ? (
               <div className="empty-state">

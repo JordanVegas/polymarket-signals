@@ -95,6 +95,25 @@ export type PersistedMarketAggregate = MarketAggregate & {
   updatedAt: Date;
 };
 
+export type PersistedBestTradeCandidate = {
+  marketSlug: string;
+  outcome: string;
+  marketQuestion: string;
+  marketUrl: string;
+  marketImage: string;
+  firstQualifiedAt: number;
+  lastQualifiedAt: number;
+  weightedScore: number;
+  leadingOutcomeWeight: number;
+  participantCount: number;
+  observedAvgEntry: number | null;
+  lastPrice: number;
+  resolvedAt?: number;
+  winningOutcome?: string;
+  won?: boolean;
+  updatedAt: Date;
+};
+
 export type PersistedMarketAlertWatch = {
   username: string;
   marketSlug: string;
@@ -133,6 +152,10 @@ export class SignalStorage {
     await this.marketAggregateCollection().createIndex({ latestTimestamp: -1 });
     await this.marketAggregateCollection().createIndex({ weightedScore: -1, latestTimestamp: -1 });
     await this.marketAggregateCollection().createIndex({ participantCount: -1, latestTimestamp: -1 });
+    await this.bestTradeCandidateCollection().createIndex({ marketSlug: 1, outcome: 1 }, { unique: true });
+    await this.bestTradeCandidateCollection().createIndex({ resolvedAt: 1, updatedAt: -1 });
+    await this.bestTradeCandidateCollection().createIndex({ won: 1, resolvedAt: -1 });
+    await this.bestTradeCandidateCollection().createIndex({ lastQualifiedAt: -1 });
     await this.strategyPositionCollection().createIndex({ id: 1 }, { unique: true });
     await this.strategyPositionCollection().createIndex({ status: 1, updatedAt: -1 });
     await this.strategyPositionCollection().createIndex({ username: 1, status: 1, updatedAt: -1 });
@@ -226,6 +249,76 @@ export class SignalStorage {
 
   async deleteMarketAggregate(marketSlug: string): Promise<void> {
     await this.marketAggregateCollection().deleteOne({ marketSlug });
+  }
+
+  async upsertBestTradeCandidate(candidate: Omit<PersistedBestTradeCandidate, "updatedAt">): Promise<void> {
+    await this.bestTradeCandidateCollection().updateOne(
+      { marketSlug: candidate.marketSlug, outcome: candidate.outcome },
+      {
+        $set: {
+          marketQuestion: candidate.marketQuestion,
+          marketUrl: candidate.marketUrl,
+          marketImage: candidate.marketImage,
+          lastQualifiedAt: candidate.lastQualifiedAt,
+          weightedScore: candidate.weightedScore,
+          leadingOutcomeWeight: candidate.leadingOutcomeWeight,
+          participantCount: candidate.participantCount,
+          observedAvgEntry: candidate.observedAvgEntry,
+          lastPrice: candidate.lastPrice,
+          updatedAt: new Date(),
+        },
+        $setOnInsert: {
+          firstQualifiedAt: candidate.firstQualifiedAt,
+        },
+      },
+      { upsert: true },
+    );
+  }
+
+  async loadUnresolvedBestTradeCandidates(limit = 250): Promise<Array<Omit<PersistedBestTradeCandidate, "updatedAt">>> {
+    const rows = await this.bestTradeCandidateCollection()
+      .find({ resolvedAt: { $exists: false } }, { sort: { lastQualifiedAt: -1 }, limit })
+      .toArray();
+
+    return rows.map(({ _id: _ignored, updatedAt: _updatedAt, ...candidate }) => candidate);
+  }
+
+  async resolveBestTradeCandidate(
+    marketSlug: string,
+    outcome: string,
+    resolution: { resolvedAt: number; winningOutcome: string; won: boolean },
+  ): Promise<void> {
+    await this.bestTradeCandidateCollection().updateOne(
+      { marketSlug, outcome },
+      {
+        $set: {
+          resolvedAt: resolution.resolvedAt,
+          winningOutcome: resolution.winningOutcome,
+          won: resolution.won,
+          updatedAt: new Date(),
+        },
+      },
+    );
+  }
+
+  async getBestTradeStats(): Promise<{
+    trackedCount: number;
+    resolvedCount: number;
+    winCount: number;
+    lossCount: number;
+  }> {
+    const [trackedCount, resolvedCount, winCount] = await Promise.all([
+      this.bestTradeCandidateCollection().countDocuments({}),
+      this.bestTradeCandidateCollection().countDocuments({ resolvedAt: { $exists: true } }),
+      this.bestTradeCandidateCollection().countDocuments({ won: true }),
+    ]);
+
+    return {
+      trackedCount,
+      resolvedCount,
+      winCount,
+      lossCount: Math.max(0, resolvedCount - winCount),
+    };
   }
 
   async loadStrategyPositions(username: string, limit = 100): Promise<StrategyPosition[]> {
@@ -746,6 +839,16 @@ export class SignalStorage {
     return this.client
       .db(config.mongoDbName)
       .collection<PersistedMarketAggregate>("market_aggregates");
+  }
+
+  private bestTradeCandidateCollection() {
+    if (!this.client) {
+      throw new Error("Mongo client not connected");
+    }
+
+    return this.client
+      .db(config.mongoDbName)
+      .collection<PersistedBestTradeCandidate>("best_trade_candidates");
   }
 
   private clusterCollection() {

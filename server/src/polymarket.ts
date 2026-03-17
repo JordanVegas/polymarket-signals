@@ -35,6 +35,11 @@ type RawMarket = {
   volume24hr?: number;
   clobTokenIds?: string;
   outcomes?: string;
+  outcomePrices?: string;
+  active?: boolean;
+  closed?: boolean;
+  updatedAt?: string;
+  closedTime?: string;
 };
 
 type RawPosition = {
@@ -240,6 +245,7 @@ export class PolymarketSignalService {
   private marketSyncTimer: NodeJS.Timeout | null = null;
   private tradePollTimer: NodeJS.Timeout | null = null;
   private portfolioSyncTimer: NodeJS.Timeout | null = null;
+  private bestTradeResolutionTimer: NodeJS.Timeout | null = null;
   private lastTradeTimestampSec = 0;
   private websocketConnected = false;
   private lastMarketSyncAt: number | null = null;
@@ -256,6 +262,7 @@ export class PolymarketSignalService {
     await this.syncMarkets();
     this.captureInitialActiveMarkets();
     this.runBackgroundTask("market aggregate refresh", this.refreshMarketAggregates());
+    this.runBackgroundTask("best trade resolution sync", this.syncResolvedBestTradeCandidates());
     this.startTradePolling();
     this.runBackgroundTask("recent catch-up", this.catchUpRecentTrades());
     if (config.historicalFetchEnabled && config.startupHistoricalBackfillEnabled) {
@@ -267,6 +274,9 @@ export class PolymarketSignalService {
     this.portfolioSyncTimer = setInterval(() => {
       this.runBackgroundTask("portfolio watch sync", this.syncTrackedWalletWatches());
     }, 3 * 60_000);
+    this.bestTradeResolutionTimer = setInterval(() => {
+      this.runBackgroundTask("best trade resolution sync", this.syncResolvedBestTradeCandidates());
+    }, 15 * 60_000);
     this.runBackgroundTask("initial portfolio watch sync", this.syncTrackedWalletWatches());
     this.drainTrackedTraderPollQueue();
   }
@@ -369,12 +379,25 @@ export class PolymarketSignalService {
     const start = (safePage - 1) * safePageSize;
     const items = markets.slice(start, start + safePageSize);
 
+    const bestTradeStats = view === "best" ? await this.storage.getBestTradeStats() : null;
+
     return {
       items,
       total: markets.length,
       page: safePage,
       pageSize: safePageSize,
       hasMore: start + safePageSize < markets.length,
+      ...(bestTradeStats
+        ? {
+            bestTradeStats: {
+              ...bestTradeStats,
+              winRate:
+                bestTradeStats.resolvedCount > 0
+                  ? bestTradeStats.winCount / bestTradeStats.resolvedCount
+                  : null,
+            },
+          }
+        : {}),
     };
   }
 
@@ -1604,6 +1627,7 @@ export class PolymarketSignalService {
     const activeSignals = resolveActiveBuySignals(signals);
     const aggregates = aggregateMarkets(activeSignals);
     const aggregateBySlug = new Map(aggregates.map((aggregate) => [aggregate.marketSlug, aggregate] as const));
+    await this.syncBestTradeCandidates(aggregates);
 
     for (const marketSlug of activeMarketSlugs) {
       const aggregate = aggregateBySlug.get(marketSlug);
@@ -1622,10 +1646,116 @@ export class PolymarketSignalService {
 
     if (aggregate) {
       await this.storage.saveMarketAggregate(aggregate);
+      await this.syncBestTradeCandidates([aggregate]);
       return;
     }
 
     await this.storage.deleteMarketAggregate(marketSlug);
+  }
+
+  private async syncBestTradeCandidates(aggregates: MarketAggregate[]): Promise<void> {
+    for (const aggregate of aggregates) {
+      if (!isBestTradeMarket(aggregate)) {
+        continue;
+      }
+
+      const outcome = aggregate.outcomeWeights[0]?.outcome?.trim();
+      if (!outcome) {
+        continue;
+      }
+
+      await this.storage.upsertBestTradeCandidate({
+        marketSlug: aggregate.marketSlug,
+        outcome,
+        marketQuestion: aggregate.marketQuestion,
+        marketUrl: aggregate.marketUrl,
+        marketImage: aggregate.marketImage,
+        firstQualifiedAt: aggregate.latestTimestamp,
+        lastQualifiedAt: aggregate.latestTimestamp,
+        weightedScore: aggregate.weightedScore,
+        leadingOutcomeWeight: aggregate.outcomeWeights[0]?.weight ?? 0,
+        participantCount: aggregate.participantCount,
+        observedAvgEntry: aggregate.observedAvgEntry,
+        lastPrice: aggregate.latestSignal.averagePrice,
+      });
+    }
+  }
+
+  private async syncResolvedBestTradeCandidates(): Promise<void> {
+    const unresolved = await this.storage.loadUnresolvedBestTradeCandidates(250);
+    for (const candidate of unresolved) {
+      const market = await this.fetchMarketBySlug(candidate.marketSlug);
+      if (!market?.closed) {
+        continue;
+      }
+
+      const winningOutcome = this.getWinningOutcomeForClosedMarket(market);
+      if (!winningOutcome) {
+        continue;
+      }
+
+      await this.storage.resolveBestTradeCandidate(candidate.marketSlug, candidate.outcome, {
+        resolvedAt: this.getClosedTimestamp(market) ?? Date.now(),
+        winningOutcome,
+        won: normalizeOutcomeName(winningOutcome) === normalizeOutcomeName(candidate.outcome),
+      });
+    }
+  }
+
+  private async fetchMarketBySlug(slug: string): Promise<RawMarket | null> {
+    const url = new URL(GAMMA_MARKETS_URL);
+    url.searchParams.set("slug", slug);
+    const response = await this.safeFetch(url, `market lookup ${slug}`);
+    if (!response || !response.ok) {
+      return null;
+    }
+
+    const payload = (await response.json()) as RawMarket[];
+    return payload.find((market) => market.slug === slug) ?? payload[0] ?? null;
+  }
+
+  private getWinningOutcomeForClosedMarket(market: RawMarket): string | null {
+    const outcomes = this.safeJsonParse<string[]>(market.outcomes, []);
+    const outcomePrices = this.safeJsonParse<Array<number | string>>(market.outcomePrices, []).map((value) =>
+      Number(value),
+    );
+    if (outcomes.length === 0 || outcomePrices.length !== outcomes.length) {
+      return null;
+    }
+
+    let winningIndex = -1;
+    let winningPrice = Number.NEGATIVE_INFINITY;
+    let tie = false;
+    for (let index = 0; index < outcomePrices.length; index += 1) {
+      const price = outcomePrices[index];
+      if (!Number.isFinite(price)) {
+        continue;
+      }
+
+      if (price > winningPrice) {
+        winningPrice = price;
+        winningIndex = index;
+        tie = false;
+      } else if (price === winningPrice) {
+        tie = true;
+      }
+    }
+
+    if (winningIndex < 0 || tie || winningPrice <= 0) {
+      return null;
+    }
+
+    return outcomes[winningIndex] ?? null;
+  }
+
+  private getClosedTimestamp(market: RawMarket): number | null {
+    const rawValue = market.closedTime ?? market.updatedAt ?? null;
+    if (!rawValue) {
+      return null;
+    }
+
+    const timestamp = Date.parse(rawValue);
+    return Number.isFinite(timestamp) ? timestamp : null;
   }
 
   private queueStrategyReconcile(marketSlug: string, username: string): Promise<void> {
@@ -2622,6 +2752,8 @@ const calculatePaperCashBalanceFromPositions = (
       positions.reduce((sum, position) => sum + position.entryNotionalUsd, 0) +
       positions.reduce((sum, position) => sum + position.realizedUsd, 0),
   );
+
+const normalizeOutcomeName = (value: string): string => value.trim().toLowerCase();
 
 const delay = (ms: number): Promise<void> =>
   new Promise((resolve) => {

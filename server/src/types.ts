@@ -123,6 +123,13 @@ export type MarketPageResponse = {
   page: number;
   pageSize: number;
   hasMore: boolean;
+  bestTradeStats?: {
+    trackedCount: number;
+    resolvedCount: number;
+    winCount: number;
+    lossCount: number;
+    winRate: number | null;
+  };
 };
 
 export type WatchMarketResult = {
