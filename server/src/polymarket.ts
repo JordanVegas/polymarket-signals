@@ -222,7 +222,6 @@ export class PolymarketSignalService {
   private readonly queuedMarketTradeFetches = new Map<string, PendingMarketTradeFetch>();
   private readonly lastMarketTradeFetchAt = new Map<string, number>();
   private readonly trackedTraderPollInFlight = new Set<string>();
-  private readonly strategyUserReconcilesInFlight = new Set<string>();
   private readonly requestMetrics = new Map<string, RequestMetric>();
   private marketTradeFetchDrainTimer: NodeJS.Timeout | null = null;
   private trackedTraderPollDrainTimer: NodeJS.Timeout | null = null;
@@ -246,7 +245,6 @@ export class PolymarketSignalService {
     await this.syncMarkets();
     this.captureInitialActiveMarkets();
     this.runBackgroundTask("market aggregate refresh", this.refreshMarketAggregates());
-    this.runBackgroundTask("strategy position refresh", this.reconcileAllStrategyPositions());
     this.startTradePolling();
     this.runBackgroundTask("recent catch-up", this.catchUpRecentTrades());
     if (config.historicalFetchEnabled && config.startupHistoricalBackfillEnabled) {
@@ -451,7 +449,6 @@ export class PolymarketSignalService {
   }
 
   async getStrategyPositions(username: string): Promise<StrategyPosition[]> {
-    this.scheduleStrategyReconcileForUser(username);
     return this.storage.loadStrategyPositions(username, 200);
   }
 
@@ -547,7 +544,6 @@ export class PolymarketSignalService {
       clearTradingCredentials: updates.clearTradingCredentials,
     });
     await this.syncTrackedWalletWatchesForUser(normalizedUsername, normalizedMonitoredWallet);
-    this.scheduleStrategyReconcileForUser(normalizedUsername);
     return this.getUserProfile(normalizedUsername);
   }
 
@@ -1612,48 +1608,6 @@ export class PolymarketSignalService {
     }
 
     await this.storage.deleteMarketAggregate(marketSlug);
-  }
-
-  private async reconcileAllStrategyPositions(): Promise<void> {
-    const activeMarketSlugs = Array.from(
-      new Set(Array.from(this.marketsByAssetId.values(), (market) => market.slug)),
-    );
-    const autoTradeUsers = await this.storage.loadAutoTradeUsers();
-
-    for (const marketSlug of activeMarketSlugs) {
-      for (const user of autoTradeUsers) {
-        await this.reconcileStrategyPosition(marketSlug, user);
-      }
-    }
-  }
-
-  private scheduleStrategyReconcileForUser(username: string): void {
-    const normalizedUsername = username.trim();
-    if (!normalizedUsername || this.strategyUserReconcilesInFlight.has(normalizedUsername)) {
-      return;
-    }
-
-    this.strategyUserReconcilesInFlight.add(normalizedUsername);
-    this.runBackgroundTask(
-      `strategy reconcile ${normalizedUsername}`,
-      this.reconcileStrategyPositionsForUser(normalizedUsername).finally(() => {
-        this.strategyUserReconcilesInFlight.delete(normalizedUsername);
-      }),
-    );
-  }
-
-  private async reconcileStrategyPositionsForUser(username: string): Promise<void> {
-    const activeMarketSlugs = Array.from(
-      new Set(Array.from(this.marketsByAssetId.values(), (market) => market.slug)),
-    );
-    const autoTradeUser = (await this.storage.loadAutoTradeUsers()).find((user) => user.username === username);
-    if (!autoTradeUser) {
-      return;
-    }
-
-    for (const marketSlug of activeMarketSlugs) {
-      await this.reconcileStrategyPosition(marketSlug, autoTradeUser);
-    }
   }
 
   private async reconcileStrategyPosition(
