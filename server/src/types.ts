@@ -148,6 +148,8 @@ export type GapOpportunity = {
   id: string;
   eventSlug: string;
   eventTitle: string;
+  pairType: "head_to_head_no_no";
+  pairLabel: string;
   combinedNoAsk: number | null;
   grossEdge: number | null;
   executableStake: number | null;

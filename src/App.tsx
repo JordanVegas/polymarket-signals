@@ -175,6 +175,8 @@ type GapOpportunity = {
   id: string;
   eventSlug: string;
   eventTitle: string;
+  pairType: "head_to_head_no_no";
+  pairLabel: string;
   combinedNoAsk: number | null;
   grossEdge: number | null;
   executableStake: number | null;
@@ -339,6 +341,7 @@ const copy = {
     liveAutoTradeSubtitle: "Real Polymarket orders driven by the same best-trade strategy.",
     gapsTitle: "Gaps",
     gapsSubtitle: "Sports no/no pairs where the executable asks add up to less than 1.",
+    gapPairType: "Pair type",
     combinedNoAsk: "No + No",
     grossEdge: "Gross edge",
     executableStake: "Executable",
@@ -504,6 +507,7 @@ const copy = {
     liveAutoTradeSubtitle: "פקודות אמיתיות בפולימרקט שמבוססות על אותה אסטרטגיית Best trade.",
     gapsTitle: "פערים",
     gapsSubtitle: "זוגות ספורט No/No שבהם סכום האסקים קטן מ-1.",
+    gapPairType: "סוג זוג",
     combinedNoAsk: "No + No",
     grossEdge: "פער גולמי",
     executableStake: "סכום בר ביצוע",
@@ -1896,7 +1900,7 @@ function App() {
                       <div className="gap-card-body">
                         <div className="signal-topline">
                           <span>{formatRelativeTime(gap.updatedAt, t)}</span>
-                          <span>{gap.eventSlug}</span>
+                          <span>{gap.pairLabel}</span>
                         </div>
 
                         <h3>{gap.eventTitle}</h3>
