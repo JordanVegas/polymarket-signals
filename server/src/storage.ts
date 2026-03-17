@@ -135,6 +135,7 @@ export class SignalStorage {
     await this.trackedTraderCollection().createIndex({ wallet: 1 }, { unique: true });
     await this.trackedTraderCollection().createIndex({ tier: 1, updatedAt: -1 });
     await this.trackedTraderCollection().createIndex({ lastPolledAt: 1, updatedAt: -1 });
+    await this.dropLegacyMarketAlertIndexes();
     await this.marketAlertWatchCollection().createIndex(
       { username: 1, marketSlug: 1, outcome: 1, source: 1 },
       { unique: true },
@@ -674,6 +675,21 @@ export class SignalStorage {
     return this.client
       .db(config.mongoDbName)
       .collection<PersistedMarketAlertWatch>("market_alert_watches");
+  }
+
+  private async dropLegacyMarketAlertIndexes(): Promise<void> {
+    const collection = this.marketAlertWatchCollection();
+    const indexes = await collection.indexes();
+    const legacyNames = new Set([
+      "username_1_marketSlug_1",
+      "username_1_marketSlug_1_outcome_1",
+    ]);
+
+    for (const index of indexes) {
+      if (index.name && legacyNames.has(index.name)) {
+        await collection.dropIndex(index.name).catch(() => undefined);
+      }
+    }
   }
 
   private traderSummaryCollection() {
