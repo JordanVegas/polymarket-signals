@@ -1762,7 +1762,8 @@ export class PolymarketSignalService {
 
     let exitReason: string | undefined;
     if (!qualifiesIgnoringPriceCap) {
-      exitReason = "Thesis break";
+      const thesisBreakReasons = getBestTradeFailureReasons(aggregate, { ignorePriceCap: true });
+      exitReason = `Thesis break: ${thesisBreakReasons.join(", ")}`;
     } else if (currentPrice >= 0.995) {
       exitReason = "Take profit 0.995";
     } else if (exitedRatio >= 0.5) {
@@ -2402,34 +2403,47 @@ const isBestTradeMarket = (
   market: MarketAggregate,
   options?: { ignorePriceCap?: boolean },
 ): boolean => {
+  return getBestTradeFailureReasons(market, options).length === 0;
+};
+
+const getBestTradeFailureReasons = (
+  market: MarketAggregate,
+  options?: { ignorePriceCap?: boolean },
+): string[] => {
+  const reasons: string[] = [];
   const leadingOutcomeWeight = market.outcomeWeights[0]?.weight ?? 0;
   if (market.weightedScore < 70) {
-    return false;
+    reasons.push(`market weight ${market.weightedScore.toFixed(0)} < 70`);
   }
 
   if (leadingOutcomeWeight < market.weightedScore * 0.7) {
-    return false;
+    reasons.push(`outcome weight share ${(market.weightedScore > 0 ? (leadingOutcomeWeight / market.weightedScore) * 100 : 0).toFixed(0)}% < 70%`);
   }
 
   if (market.participantCount < 3) {
-    return false;
+    reasons.push(`participants ${market.participantCount} < 3`);
   }
 
   if (Date.now() - market.latestTimestamp > 24 * 60 * 60_000) {
-    return false;
+    reasons.push("signal older than 24h");
   }
 
   if (market.observedAvgEntry === null || market.observedAvgEntry <= 0) {
-    return false;
+    reasons.push("missing avg entry");
+    return reasons;
   }
 
   const currentDisplayedPrice = market.latestSignal.averagePrice;
   if (!options?.ignorePriceCap && currentDisplayedPrice >= 0.9) {
-    return false;
+    reasons.push(`price ${currentDisplayedPrice.toFixed(3)} >= 0.900`);
   }
 
   const priceDeviation = Math.abs(currentDisplayedPrice - market.observedAvgEntry) / market.observedAvgEntry;
-  return priceDeviation <= 0.05;
+  if (priceDeviation > 0.05) {
+    reasons.push(`price deviation ${(priceDeviation * 100).toFixed(1)}% > 5%`);
+  }
+
+  return reasons;
 };
 
 const getSetupQualityScore = (market: MarketAggregate): number => {
