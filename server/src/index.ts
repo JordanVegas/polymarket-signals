@@ -81,7 +81,7 @@ app.put("/api/profile", async (request, response) => {
 
     const webhookUrl = String(request.body.webhookUrl ?? "");
     const monitoredWallet = String(request.body.monitoredWallet ?? "");
-    const autoTradeEnabled = Boolean(request.body.autoTradeEnabled);
+    const paperTradingEnabled = Boolean(request.body.paperTradingEnabled);
     const startingBalanceUsd = Number(request.body.startingBalanceUsd ?? 1000);
     const riskPercent = Number(request.body.riskPercent ?? 5);
     const tradingWalletAddress = String(request.body.tradingWalletAddress ?? "");
@@ -96,7 +96,7 @@ app.put("/api/profile", async (request, response) => {
       await service.updateUserProfile(request.sessionUser.username, {
         webhookUrl,
         monitoredWallet,
-        autoTradeEnabled,
+        paperTradingEnabled,
         startingBalanceUsd,
         riskPercent,
         tradingWalletAddress,

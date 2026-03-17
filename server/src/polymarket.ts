@@ -424,7 +424,7 @@ export class PolymarketSignalService {
       username: normalizedUsername,
       webhookUrl: settings.webhookUrl ?? "",
       monitoredWallet: settings.monitoredWallet ?? "",
-      autoTradeEnabled: settings.autoTradeEnabled ?? false,
+      paperTradingEnabled: settings.autoTradeEnabled ?? false,
       startingBalanceUsd: settings.startingBalanceUsd ?? 1_000,
       currentBalanceUsd: settings.currentBalanceUsd ?? settings.startingBalanceUsd ?? 1_000,
       riskPercent: settings.riskPercent ?? 5,
@@ -459,7 +459,7 @@ export class PolymarketSignalService {
     updates: {
       webhookUrl: string;
       monitoredWallet: string;
-      autoTradeEnabled: boolean;
+      paperTradingEnabled: boolean;
       startingBalanceUsd: number;
       riskPercent: number;
       tradingWalletAddress: string;
@@ -523,7 +523,7 @@ export class PolymarketSignalService {
     await this.storage.updateUserSettings(normalizedUsername, {
       webhookUrl: normalizedWebhookUrl,
       monitoredWallet: normalizedMonitoredWallet,
-      autoTradeEnabled: updates.autoTradeEnabled,
+      autoTradeEnabled: updates.paperTradingEnabled,
       startingBalanceUsd: updates.startingBalanceUsd,
       currentBalanceUsd:
         existingSettings.currentBalanceUsd == null

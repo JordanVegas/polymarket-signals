@@ -83,7 +83,7 @@ type UserProfileResponse = {
   username: string;
   webhookUrl: string;
   monitoredWallet: string;
-  autoTradeEnabled: boolean;
+  paperTradingEnabled: boolean;
   startingBalanceUsd: number;
   currentBalanceUsd: number;
   riskPercent: number;
@@ -191,15 +191,21 @@ const copy = {
     settings: "Settings",
     backToMonitor: "Back to monitor",
     discordAlerts: "Discord alerts",
+    paperTrading: "Paper trading",
+    liveTrading: "Live trading",
     profileTitle: "Profile",
     profileSuffix: "'s profile",
     profileBody:
       "Save your Discord webhook here once, then use Get sell alerts on any market card you want to track for exit signals.",
     tradingProfileBody:
       "Arm auto trade here, set your bankroll and risk, and save your Polymarket trading credentials encrypted on the server.",
+    paperTradingBody:
+      "These settings only control the simulated strategy account. They do not place real orders.",
+    liveTradingBody:
+      "These encrypted credentials are kept separate for future real execution. Saving them does not arm live trading yet.",
     discordWebhookUrl: "Discord webhook URL",
     monitoredWallet: "Tracked Polymarket wallet",
-    autoTradeEnabled: "Auto trade armed",
+    paperTradingEnabled: "Paper trading armed",
     startingBalance: "Starting balance",
     currentBalance: "Current balance",
     riskPercent: "Risk per trade %",
@@ -308,15 +314,21 @@ const copy = {
     settings: "הגדרות",
     backToMonitor: "חזרה למוניטור",
     discordAlerts: "התראות דיסקורד",
+    paperTrading: "מסחר דמו",
+    liveTrading: "מסחר אמיתי",
     profileTitle: "פרופיל",
     profileSuffix: " של",
     profileBody:
       "שמור כאן פעם אחת את כתובת הוובהוק של דיסקורד, ואז השתמש ב-Get sell alerts על כל כרטיס שוק שתרצה לעקוב אחריו ליציאה.",
     tradingProfileBody:
       "כאן אפשר להפעיל אוטו-טרייד, לקבוע בנק רול וסיכון, ולשמור את פרטי המסחר של פולימרקט כשהם מוצפנים על השרת.",
+    paperTradingBody:
+      "ההגדרות האלה שולטות רק בחשבון הדמו של האסטרטגיה. הן לא מבצעות פקודות אמיתיות.",
+    liveTradingBody:
+      "פרטי המסחר המוצפנים נשמרים בנפרד עבור ביצוע אמיתי בעתיד. שמירה שלהם עדיין לא מפעילה מסחר אמיתי.",
     discordWebhookUrl: "כתובת וובהוק של דיסקורד",
     monitoredWallet: "ארנק פולימרקט למעקב",
-    autoTradeEnabled: "אוטו טרייד פעיל",
+    paperTradingEnabled: "מסחר דמו פעיל",
     startingBalance: "בנק רול התחלתי",
     currentBalance: "יתרה נוכחית",
     riskPercent: "סיכון לעסקה %",
@@ -442,7 +454,7 @@ function App() {
   const [profile, setProfile] = useState<UserProfileResponse | null>(null);
   const [profileFormWebhookUrl, setProfileFormWebhookUrl] = useState("");
   const [profileFormMonitoredWallet, setProfileFormMonitoredWallet] = useState("");
-  const [profileFormAutoTradeEnabled, setProfileFormAutoTradeEnabled] = useState(false);
+  const [profileFormPaperTradingEnabled, setProfileFormPaperTradingEnabled] = useState(false);
   const [profileFormStartingBalanceUsd, setProfileFormStartingBalanceUsd] = useState("1000");
   const [profileFormRiskPercent, setProfileFormRiskPercent] = useState("5");
   const [profileFormTradingWalletAddress, setProfileFormTradingWalletAddress] = useState("");
@@ -684,7 +696,7 @@ function App() {
         setProfile(payload);
         setProfileFormWebhookUrl(payload.webhookUrl);
         setProfileFormMonitoredWallet(payload.monitoredWallet);
-        setProfileFormAutoTradeEnabled(payload.autoTradeEnabled);
+        setProfileFormPaperTradingEnabled(payload.paperTradingEnabled);
         setProfileFormStartingBalanceUsd(String(payload.startingBalanceUsd));
         setProfileFormRiskPercent(String(payload.riskPercent));
         setProfileFormTradingWalletAddress(payload.tradingWalletAddress);
@@ -804,7 +816,7 @@ function App() {
         body: JSON.stringify({
           webhookUrl: profileFormWebhookUrl,
           monitoredWallet: profileFormMonitoredWallet,
-          autoTradeEnabled: profileFormAutoTradeEnabled,
+          paperTradingEnabled: profileFormPaperTradingEnabled,
           startingBalanceUsd: Number(profileFormStartingBalanceUsd || 0),
           riskPercent: Number(profileFormRiskPercent || 0),
           tradingWalletAddress: profileFormTradingWalletAddress,
@@ -824,7 +836,7 @@ function App() {
       setProfile(payload);
       setProfileFormWebhookUrl(payload.webhookUrl);
       setProfileFormMonitoredWallet(payload.monitoredWallet);
-      setProfileFormAutoTradeEnabled(payload.autoTradeEnabled);
+      setProfileFormPaperTradingEnabled(payload.paperTradingEnabled);
       setProfileFormStartingBalanceUsd(String(payload.startingBalanceUsd));
       setProfileFormRiskPercent(String(payload.riskPercent));
       setProfileFormTradingWalletAddress(payload.tradingWalletAddress);
@@ -1028,7 +1040,6 @@ function App() {
                 <p className="section-kicker">{t.discordAlerts}</p>
                 <h3>{profileTitle}</h3>
                 <p>{t.profileBody}</p>
-                <p>{t.tradingProfileBody}</p>
               </div>
 
               <label className="profile-field">
@@ -1051,13 +1062,18 @@ function App() {
                 />
               </label>
 
+              <div className="profile-copy">
+                <p className="section-kicker">{t.paperTrading}</p>
+                <p>{t.paperTradingBody}</p>
+              </div>
+
               <label className="profile-toggle">
                 <input
                   type="checkbox"
-                  checked={profileFormAutoTradeEnabled}
-                  onChange={(event) => setProfileFormAutoTradeEnabled(event.target.checked)}
+                  checked={profileFormPaperTradingEnabled}
+                  onChange={(event) => setProfileFormPaperTradingEnabled(event.target.checked)}
                 />
-                <span>{t.autoTradeEnabled}</span>
+                <span>{t.paperTradingEnabled}</span>
               </label>
 
               <div className="profile-field-grid">
@@ -1099,6 +1115,11 @@ function App() {
                   placeholder="0x..."
                 />
               </label>
+
+              <div className="profile-copy">
+                <p className="section-kicker">{t.liveTrading}</p>
+                <p>{t.liveTradingBody}</p>
+              </div>
 
               <label className="profile-field">
                 <span>{t.tradingSignatureType}</span>

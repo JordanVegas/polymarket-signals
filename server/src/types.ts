@@ -134,7 +134,7 @@ export type UserProfileResponse = {
   username: string;
   webhookUrl: string;
   monitoredWallet: string;
-  autoTradeEnabled: boolean;
+  paperTradingEnabled: boolean;
   startingBalanceUsd: number;
   currentBalanceUsd: number;
   riskPercent: number;
