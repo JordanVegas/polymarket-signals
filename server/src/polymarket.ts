@@ -269,6 +269,7 @@ const negativeOutcomeKeywords = ["no", "down", "below", "under", "lower", "less"
 const TRADER_MEMORY_CACHE_TTL_MS = 5 * 60_000;
 const TRADER_DB_CACHE_TTL_MS = 7 * 24 * 60 * 60_000;
 const REQUEST_STATS_WINDOW_MS = 10 * 60_000;
+const MARKET_TRADE_FETCH_COOLDOWN_MS = 1_000;
 
 type IngestResult = "ingested" | "queued";
 
@@ -299,14 +300,12 @@ export class PolymarketSignalService {
         new Agent({
           connect: {
             family: 4,
-            timeout: config.fetchConnectTimeoutMs,
           },
         }),
       ];
   private readonly directFetchDispatcher = new Agent({
     connect: {
       family: 4,
-      timeout: config.fetchConnectTimeoutMs,
     },
   });
   private readonly pendingUnknownAssetTrades = new Map<string, TradeRecord[]>();
@@ -1558,7 +1557,7 @@ export class PolymarketSignalService {
     };
     const lastFetchAt = this.lastMarketTradeFetchAt.get(marketConditionId) ?? 0;
     if (
-      Date.now() - lastFetchAt < 10_000 ||
+      Date.now() - lastFetchAt < MARKET_TRADE_FETCH_COOLDOWN_MS ||
       this.marketTradeFetchInFlight.has(marketConditionId)
     ) {
       this.queueMarketTradeFetch(nextRequest);
@@ -1607,11 +1606,11 @@ export class PolymarketSignalService {
     }
 
     const now = Date.now();
-    let nextDelayMs = 10_000;
+    let nextDelayMs = MARKET_TRADE_FETCH_COOLDOWN_MS;
 
     for (const marketConditionId of this.queuedMarketTradeFetches.keys()) {
       const lastFetchAt = this.lastMarketTradeFetchAt.get(marketConditionId) ?? 0;
-      const delayMs = Math.max(0, 10_000 - (now - lastFetchAt));
+      const delayMs = Math.max(0, MARKET_TRADE_FETCH_COOLDOWN_MS - (now - lastFetchAt));
       nextDelayMs = Math.min(nextDelayMs, delayMs);
     }
 
@@ -1633,7 +1632,7 @@ export class PolymarketSignalService {
       }
 
       const lastFetchAt = this.lastMarketTradeFetchAt.get(request.marketConditionId) ?? 0;
-      if (now - lastFetchAt < 10_000) {
+      if (now - lastFetchAt < MARKET_TRADE_FETCH_COOLDOWN_MS) {
         continue;
       }
 
@@ -2895,10 +2894,8 @@ export class PolymarketSignalService {
     const endpoint = this.getRequestMetricKey(target);
     try {
       const dispatcher = this.getFetchDispatcher(target);
-      const signal = AbortSignal.timeout(config.fetchConnectTimeoutMs);
       const response = await fetch(target, {
         dispatcher: dispatcher as unknown as NonNullable<RequestInit["dispatcher"]>,
-        signal,
       });
       this.recordRequestMetric(endpoint, response.ok);
       return response;
