@@ -300,6 +300,12 @@ export class PolymarketSignalService {
           },
         }),
       ];
+  private readonly directFetchDispatcher = new Agent({
+    connect: {
+      family: 4,
+      timeout: config.fetchConnectTimeoutMs,
+    },
+  });
   private readonly pendingUnknownAssetTrades = new Map<string, TradeRecord[]>();
   private readonly marketSocketShards = new Map<number, MarketSocketShard>();
   private readonly marketTradeFetchInFlight = new Map<string, Promise<void>>();
@@ -2700,7 +2706,7 @@ export class PolymarketSignalService {
     const target = this.withCacheBust(input);
     const endpoint = this.getRequestMetricKey(target);
     try {
-      const dispatcher = this.getNextFetchDispatcher();
+      const dispatcher = this.getFetchDispatcher(target);
       const signal = AbortSignal.timeout(config.fetchConnectTimeoutMs);
       const response = await fetch(target, {
         dispatcher: dispatcher as unknown as NonNullable<RequestInit["dispatcher"]>,
@@ -2721,6 +2727,21 @@ export class PolymarketSignalService {
       ?? this.fetchDispatchers[0];
     this.nextFetchDispatcherIndex = (this.nextFetchDispatcherIndex + 1) % this.fetchDispatchers.length;
     return dispatcher;
+  }
+
+  private getFetchDispatcher(input: string | URL): Agent | ProxyAgent {
+    const raw = typeof input === "string" ? input : input.toString();
+
+    try {
+      const url = new URL(raw);
+      if (url.hostname.includes("gamma-api.polymarket.com")) {
+        return this.directFetchDispatcher;
+      }
+    } catch {
+      // Fall through to the default rotating dispatcher.
+    }
+
+    return this.getNextFetchDispatcher();
   }
 
   private withCacheBust(input: string | URL): string | URL {
