@@ -786,7 +786,7 @@ export class PolymarketSignalService {
         }
       }
 
-      await this.storage.updateUserSettings(normalizedUsername, {
+    await this.storage.updateUserSettings(normalizedUsername, {
       webhookUrl: normalizedWebhookUrl,
       monitoredWallet: normalizedMonitoredWallet,
       autoTradeEnabled: updates.paperTradingEnabled,
@@ -797,24 +797,27 @@ export class PolymarketSignalService {
           ? updates.startingBalanceUsd
           : Math.max(0, existingSettings.currentBalanceUsd),
       riskPercent: updates.riskPercent,
-        tradingWalletAddress: normalizedTradingWalletAddress,
-        tradingSignatureType: signatureType,
-        ...(effectiveEncryptedPrivateKey
-          ? {
-              encryptedPrivateKey: effectiveEncryptedPrivateKey,
-              ...(effectiveApiKey
-                ? { encryptedApiKey: encryptSecret(effectiveApiKey, config.tradingEncryptionSecret) }
-                : {}),
-              ...(effectiveApiSecret
-                ? { encryptedApiSecret: encryptSecret(effectiveApiSecret, config.tradingEncryptionSecret) }
-                : {}),
-              ...(effectiveApiPassphrase
-                ? { encryptedApiPassphrase: encryptSecret(effectiveApiPassphrase, config.tradingEncryptionSecret) }
-                : {}),
-            }
-          : {}),
-        clearTradingCredentials: updates.clearTradingCredentials,
-      });
+      tradingWalletAddress: normalizedTradingWalletAddress,
+      tradingSignatureType: signatureType,
+      ...(effectiveEncryptedPrivateKey
+        ? {
+            encryptedPrivateKey: effectiveEncryptedPrivateKey,
+            ...(effectiveApiKey
+              ? { encryptedApiKey: encryptSecret(effectiveApiKey, config.tradingEncryptionSecret) }
+              : {}),
+            ...(effectiveApiSecret
+              ? { encryptedApiSecret: encryptSecret(effectiveApiSecret, config.tradingEncryptionSecret) }
+              : {}),
+            ...(effectiveApiPassphrase
+              ? { encryptedApiPassphrase: encryptSecret(effectiveApiPassphrase, config.tradingEncryptionSecret) }
+              : {}),
+          }
+        : {}),
+      clearTradingCredentials: updates.clearTradingCredentials,
+    });
+    if (updates.liveTradingEnabled) {
+      await this.queueCurrentBestTradeReconcilesForUser(normalizedUsername);
+    }
     await this.syncTrackedWalletWatchesForUser(normalizedUsername, normalizedMonitoredWallet);
     return this.getUserProfile(normalizedUsername);
   }
@@ -1909,6 +1912,8 @@ export class PolymarketSignalService {
         await this.storage.deleteMarketAggregate(marketSlug);
       }
     }
+
+    await this.queueCurrentBestTradeReconciles();
   }
 
   private async refreshMarketAggregate(marketSlug: string): Promise<void> {
@@ -1923,6 +1928,31 @@ export class PolymarketSignalService {
     }
 
     await this.storage.deleteMarketAggregate(marketSlug);
+  }
+
+  private async queueCurrentBestTradeReconciles(): Promise<void> {
+    const [bestTradeSlugs, liveTradeUsers] = await Promise.all([
+      this.storage.loadBestTradeMarketSlugs(),
+      this.storage.loadLiveTradeUsers(),
+    ]);
+
+    if (bestTradeSlugs.length === 0 || liveTradeUsers.length === 0) {
+      return;
+    }
+
+    for (const user of liveTradeUsers) {
+      await this.queueCurrentBestTradeReconcilesForUser(user.username, bestTradeSlugs);
+    }
+  }
+
+  private async queueCurrentBestTradeReconcilesForUser(
+    username: string,
+    bestTradeSlugs?: string[],
+  ): Promise<void> {
+    const marketSlugs = bestTradeSlugs ?? (await this.storage.loadBestTradeMarketSlugs());
+    for (const marketSlug of marketSlugs) {
+      await this.queueLiveStrategyReconcile(marketSlug, username);
+    }
   }
 
   private async refreshGapCandidates(): Promise<void> {

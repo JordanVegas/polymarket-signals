@@ -265,6 +265,14 @@ export class SignalStorage {
     return rows.map(({ _id: _ignored, updatedAt: _updatedAt, ...aggregate }) => aggregate);
   }
 
+  async loadBestTradeMarketSlugs(limit = 500): Promise<string[]> {
+    const rows = await this.marketAggregateCollection()
+      .find({ isBestTrade: true }, { projection: { _id: 0, marketSlug: 1 }, sort: { latestTimestamp: -1 }, limit })
+      .toArray();
+
+    return rows.map((row) => row.marketSlug).filter((marketSlug): marketSlug is string => Boolean(marketSlug));
+  }
+
   async saveMarketAggregate(aggregate: MarketAggregate): Promise<void> {
     const payload: PersistedMarketAggregate = {
       ...aggregate,
