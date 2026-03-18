@@ -2366,7 +2366,6 @@ export class PolymarketSignalService {
     const existingMarketPosition = await this.storage.loadOpenStrategyPositionForMarket(username, marketSlug, strategyKey);
     const trackedOutcome = existingMarketPosition?.outcome ?? edgeOutcome;
     const setupQuality = getSetupQualityScore(aggregate);
-    const currentPrice = aggregate.latestSignal.averagePrice;
     const currentParticipants =
       aggregate.outcomeParticipants?.filter((participant) => participant.outcome === trackedOutcome) ?? [];
     const currentWeightByWallet = new Map(
@@ -2376,6 +2375,11 @@ export class PolymarketSignalService {
 
     if (!position) {
       if (!doesMarketQualifyForStrategy(aggregate, strategyKey)) {
+        return;
+      }
+
+      const currentPrice = getMarketPriceForOutcome(aggregate, edgeOutcome);
+      if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
         return;
       }
 
@@ -2446,7 +2450,11 @@ export class PolymarketSignalService {
       ignorePriceDeviation: true,
       minTotalWeight: 40,
       minOutcomeShare: 0.5,
-    });
+      });
+    const currentPrice = getMarketPriceForOutcome(aggregate, trackedOutcome);
+    if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
+      return;
+    }
     const currentEdgePoints = getEdgePointsForOutcome(aggregate, trackedOutcome);
     const peakEdgePoints = Math.max(position.peakEdgePoints ?? currentEdgePoints, currentEdgePoints);
 
@@ -2575,7 +2583,6 @@ export class PolymarketSignalService {
     }
 
     const setupQuality = getSetupQualityScore(aggregate);
-    const currentPrice = aggregate.latestSignal.averagePrice;
     const currentParticipants =
       aggregate.outcomeParticipants?.filter((participant) => participant.outcome === trackedOutcome) ?? [];
     const currentWeightByWallet = new Map(
@@ -2586,6 +2593,11 @@ export class PolymarketSignalService {
 
     if (!position) {
       if (!doesMarketQualifyForStrategy(aggregate, strategyKey)) {
+        return;
+      }
+
+      const currentPrice = getMarketPriceForOutcome(aggregate, edgeOutcome);
+      if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
         return;
       }
 
@@ -2720,6 +2732,10 @@ export class PolymarketSignalService {
       minTotalWeight: 40,
       minOutcomeShare: 0.5,
     });
+    const currentPrice = getMarketPriceForOutcome(aggregate, trackedOutcome);
+    if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
+      return;
+    }
 
     let nextPosition: StrategyPosition = {
       ...position,
@@ -3609,6 +3625,7 @@ const aggregateMarkets = (signals: WhaleSignal[]): MarketAggregate[] => {
   const markets = new Map<string, MarketAggregate>();
   const traderSpendByMarket = new Map<string, Map<string, { totalUsd: number; trader: TraderSummary }>>();
   const outcomeTotalsByMarket = new Map<string, Map<string, { totalUsd: number; totalShares: number }>>();
+  const outcomeLatestPriceByMarket = new Map<string, Map<string, { price: number; timestamp: number }>>();
   const traderOutcomeSpendByMarket = new Map<
     string,
     Map<string, Map<string, { totalUsd: number; trader: TraderSummary }>>
@@ -3630,6 +3647,7 @@ const aggregateMarkets = (signals: WhaleSignal[]): MarketAggregate[] => {
         pros: 0,
         weightedScore: 0,
         outcomeWeights: [],
+        outcomeLatestPrices: [],
         observedAvgEntry: null,
         participantCount: 0,
         isWatched: false,
@@ -3665,6 +3683,17 @@ const aggregateMarkets = (signals: WhaleSignal[]): MarketAggregate[] => {
     marketOutcomeTotals.set(signal.outcome, outcomeTotals);
     outcomeTotalsByMarket.set(signal.marketSlug, marketOutcomeTotals);
 
+    const marketOutcomeLatestPrices =
+      outcomeLatestPriceByMarket.get(signal.marketSlug) ?? new Map<string, { price: number; timestamp: number }>();
+    const existingOutcomePrice = marketOutcomeLatestPrices.get(signal.outcome);
+    if (!existingOutcomePrice || signal.timestamp >= existingOutcomePrice.timestamp) {
+      marketOutcomeLatestPrices.set(signal.outcome, {
+        price: signal.averagePrice,
+        timestamp: signal.timestamp,
+      });
+    }
+    outcomeLatestPriceByMarket.set(signal.marketSlug, marketOutcomeLatestPrices);
+
     const marketOutcomeTraders =
       traderOutcomeSpendByMarket.get(signal.marketSlug) ??
       new Map<string, Map<string, { totalUsd: number; trader: TraderSummary }>>();
@@ -3687,6 +3716,7 @@ const aggregateMarkets = (signals: WhaleSignal[]): MarketAggregate[] => {
   for (const [marketSlug, aggregate] of markets) {
     const traders = traderSpendByMarket.get(marketSlug);
     const outcomeTotals = outcomeTotalsByMarket.get(marketSlug);
+    const outcomeLatestPrices = outcomeLatestPriceByMarket.get(marketSlug);
     const outcomeTraders = traderOutcomeSpendByMarket.get(marketSlug);
     if (!traders) {
       continue;
@@ -3746,6 +3776,13 @@ const aggregateMarkets = (signals: WhaleSignal[]): MarketAggregate[] => {
     aggregate.outcomeWeights = Array.from(outcomeWeights.entries())
       .map(([outcome, weight]) => ({ outcome, weight }))
       .sort((left, right) => right.weight - left.weight);
+    aggregate.outcomeLatestPrices = Array.from(outcomeLatestPrices?.entries() ?? [])
+      .map(([outcome, entry]) => ({
+        outcome,
+        price: entry.price,
+        timestamp: entry.timestamp,
+      }))
+      .sort((left, right) => right.timestamp - left.timestamp);
     aggregate.outcomeParticipants = Array.from(outcomeTraders?.entries() ?? [])
       .flatMap(([wallet, traderOutcomes]) =>
         Array.from(traderOutcomes.entries()).flatMap(([outcome, { totalUsd, trader }]) => {
@@ -4409,6 +4446,19 @@ const getEdgePointsForOutcome = (aggregate: MarketAggregate, outcome: string): n
       .map((entry) => entry.weight),
   );
   return trackedWeight - opposingWeight;
+};
+
+const getMarketPriceForOutcome = (aggregate: MarketAggregate, outcome: string): number => {
+  const normalizedOutcome = normalizeOutcomeName(outcome);
+  const outcomePrice = aggregate.outcomeLatestPrices?.find(
+    (entry) => normalizeOutcomeName(entry.outcome) === normalizedOutcome,
+  )?.price;
+
+  if (Number.isFinite(outcomePrice) && outcomePrice! > 0) {
+    return outcomePrice!;
+  }
+
+  return aggregate.observedAvgEntry ?? aggregate.latestSignal.averagePrice;
 };
 
 const qualifiesEdgeSwingMarket = (aggregate: MarketAggregate): boolean => {

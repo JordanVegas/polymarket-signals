@@ -78,6 +78,11 @@ type MarketAggregate = {
   pros: number;
   weightedScore: number;
   outcomeWeights: Array<{ outcome: string; weight: number }>;
+  outcomeLatestPrices?: Array<{
+    outcome: string;
+    price: number;
+    timestamp: number;
+  }>;
   observedAvgEntry: number | null;
   participantCount: number;
   isWatched: boolean;
