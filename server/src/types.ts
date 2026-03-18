@@ -79,14 +79,17 @@ export type AppSnapshot = {
     lastWebsocketMessageAt: number | null;
     trackedTraderCount: number;
     trackedTraderPollInFlight: number;
+    recentErrorsLast10Minutes: number;
     requestStats: {
       windowMinutes: number;
+      recentFailures: number;
       endpoints: Array<{
         endpoint: string;
         total: number;
         success: number;
         failure: number;
         recent: number;
+        recentFailures: number;
       }>;
     };
   };

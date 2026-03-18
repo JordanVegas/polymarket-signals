@@ -157,6 +157,7 @@ type RequestMetric = {
   success: number;
   failure: number;
   recentTimestamps: number[];
+  recentFailureTimestamps: number[];
 };
 
 type GapCandidate = {
@@ -323,7 +324,6 @@ export class PolymarketSignalService {
   private readonly liveTradingIssues = new Map<string, { message: string; blockedUntil: number }>();
   private marketTradeFetchDrainTimer: NodeJS.Timeout | null = null;
   private trackedTraderPollDrainTimer: NodeJS.Timeout | null = null;
-  private activeMarketTradeFetchCount = 0;
   private marketSyncTimer: NodeJS.Timeout | null = null;
   private tradePollTimer: NodeJS.Timeout | null = null;
   private portfolioSyncTimer: NodeJS.Timeout | null = null;
@@ -404,6 +404,7 @@ export class PolymarketSignalService {
     let websocketAssetsSeenRecentlyCount = 0;
     let websocketConnectedShardCount = 0;
     const trackedTraderCount = await this.storage.countTrackedTraders();
+    const requestStats = this.getRequestStats();
 
     for (const seenAt of this.websocketAssetSeenAt.values()) {
       if (seenAt >= recentCutoff) {
@@ -431,7 +432,8 @@ export class PolymarketSignalService {
         lastWebsocketMessageAt: this.lastWebsocketMessageAt,
         trackedTraderCount,
         trackedTraderPollInFlight: this.trackedTraderPollInFlight.size,
-        requestStats: this.getRequestStats(),
+        recentErrorsLast10Minutes: requestStats.recentFailures,
+        requestStats,
       },
     };
   }
@@ -1557,8 +1559,7 @@ export class PolymarketSignalService {
     const lastFetchAt = this.lastMarketTradeFetchAt.get(marketConditionId) ?? 0;
     if (
       Date.now() - lastFetchAt < 10_000 ||
-      this.marketTradeFetchInFlight.has(marketConditionId) ||
-      this.activeMarketTradeFetchCount >= config.marketTradeFetchConcurrency
+      this.marketTradeFetchInFlight.has(marketConditionId)
     ) {
       this.queueMarketTradeFetch(nextRequest);
       return;
@@ -1578,7 +1579,6 @@ export class PolymarketSignalService {
 
   private startMarketTradeFetch(request: PendingMarketTradeFetch): void {
     this.lastMarketTradeFetchAt.set(request.marketConditionId, Date.now());
-    this.activeMarketTradeFetchCount += 1;
 
     const task = this.fetchRecentTradesForMarket(
       request.marketConditionId,
@@ -1590,7 +1590,6 @@ export class PolymarketSignalService {
       })
       .finally(() => {
         this.marketTradeFetchInFlight.delete(request.marketConditionId);
-        this.activeMarketTradeFetchCount = Math.max(0, this.activeMarketTradeFetchCount - 1);
         this.scheduleMarketTradeFetchDrain();
       });
 
@@ -1623,21 +1622,12 @@ export class PolymarketSignalService {
   }
 
   private drainMarketTradeFetchQueue(): void {
-    if (this.activeMarketTradeFetchCount >= config.marketTradeFetchConcurrency) {
-      this.scheduleMarketTradeFetchDrain();
-      return;
-    }
-
     const now = Date.now();
     const queuedRequests = Array.from(this.queuedMarketTradeFetches.values()).sort(
       (left, right) => right.timestampSec - left.timestampSec,
     );
 
     for (const request of queuedRequests) {
-      if (this.activeMarketTradeFetchCount >= config.marketTradeFetchConcurrency) {
-        break;
-      }
-
       if (this.marketTradeFetchInFlight.has(request.marketConditionId)) {
         continue;
       }
@@ -3013,6 +3003,7 @@ export class PolymarketSignalService {
       success: 0,
       failure: 0,
       recentTimestamps: [],
+      recentFailureTimestamps: [],
     };
 
     metric.total += 1;
@@ -3020,9 +3011,13 @@ export class PolymarketSignalService {
       metric.success += 1;
     } else {
       metric.failure += 1;
+      metric.recentFailureTimestamps.push(now);
     }
     metric.recentTimestamps.push(now);
     metric.recentTimestamps = metric.recentTimestamps.filter(
+      (timestamp) => now - timestamp <= REQUEST_STATS_WINDOW_MS,
+    );
+    metric.recentFailureTimestamps = metric.recentFailureTimestamps.filter(
       (timestamp) => now - timestamp <= REQUEST_STATS_WINDOW_MS,
     );
 
@@ -3031,24 +3026,32 @@ export class PolymarketSignalService {
 
   private getRequestStats(): AppSnapshot["status"]["requestStats"] {
     const now = Date.now();
+    let recentFailures = 0;
     const endpoints = Array.from(this.requestMetrics.entries())
       .map(([endpoint, metric]) => {
         const recent = metric.recentTimestamps.filter(
           (timestamp) => now - timestamp <= REQUEST_STATS_WINDOW_MS,
         );
+        const recentFailureTimestamps = metric.recentFailureTimestamps.filter(
+          (timestamp) => now - timestamp <= REQUEST_STATS_WINDOW_MS,
+        );
         metric.recentTimestamps = recent;
+        metric.recentFailureTimestamps = recentFailureTimestamps;
+        recentFailures += recentFailureTimestamps.length;
         return {
           endpoint,
           total: metric.total,
           success: metric.success,
           failure: metric.failure,
           recent: recent.length,
+          recentFailures: recentFailureTimestamps.length,
         };
       })
       .sort((left, right) => right.recent - left.recent || right.total - left.total);
 
     return {
       windowMinutes: REQUEST_STATS_WINDOW_MS / 60_000,
+      recentFailures,
       endpoints,
     };
   }

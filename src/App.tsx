@@ -47,6 +47,21 @@ type Snapshot = {
     websocketAssetsSeenCount: number;
     websocketAssetsSeenRecentlyCount: number;
     lastWebsocketMessageAt: number | null;
+    trackedTraderCount: number;
+    trackedTraderPollInFlight: number;
+    recentErrorsLast10Minutes: number;
+    requestStats: {
+      windowMinutes: number;
+      recentFailures: number;
+      endpoints: Array<{
+        endpoint: string;
+        total: number;
+        success: number;
+        failure: number;
+        recent: number;
+        recentFailures: number;
+      }>;
+    };
   };
 };
 
@@ -302,6 +317,7 @@ const copy = {
     active: "active",
     lastMarketSync: "Last market sync",
     lastTradeSeen: "Last trade seen",
+    errorsLast10Minutes: "Errors (10m)",
     pending: "Pending",
     settings: "Settings",
     backToMonitor: "Back to monitor",
@@ -481,6 +497,7 @@ const copy = {
     active: "פעילים",
     lastMarketSync: "סנכרון שווקים אחרון",
     lastTradeSeen: "טרייד אחרון",
+    errorsLast10Minutes: "שגיאות (10 דק׳)",
     pending: "ממתין",
     settings: "הגדרות",
     backToMonitor: "חזרה למוניטור",
@@ -657,6 +674,14 @@ function App() {
       websocketAssetsSeenCount: 0,
       websocketAssetsSeenRecentlyCount: 0,
       lastWebsocketMessageAt: null,
+      trackedTraderCount: 0,
+      trackedTraderPollInFlight: 0,
+      recentErrorsLast10Minutes: 0,
+      requestStats: {
+        windowMinutes: 10,
+        recentFailures: 0,
+        endpoints: [],
+      },
     },
   });
   const [feedConnected, setFeedConnected] = useState(false);
@@ -1402,6 +1427,11 @@ function App() {
               label={t.lastTradeSeen}
               value={formatTimestamp(snapshot.status.lastTradeAt, t.pending)}
               tone="neutral"
+            />
+            <StatusRow
+              label={t.errorsLast10Minutes}
+              value={snapshot.status.recentErrorsLast10Minutes.toString()}
+              tone={snapshot.status.recentErrorsLast10Minutes > 0 ? "blue" : "green"}
             />
           </div>
         </section>

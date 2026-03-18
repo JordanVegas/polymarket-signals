@@ -103,7 +103,6 @@ export const config = {
   maxSignals: parseNumber(process.env.MAX_SIGNALS, 75),
   marketRefreshMs: parseNumber(process.env.MARKET_REFRESH_MS, 10 * 60_000),
   tradePollMs: parseNumber(process.env.TRADE_POLL_MS, 2_500),
-  marketTradeFetchConcurrency: parseNumber(process.env.MARKET_TRADE_FETCH_CONCURRENCY, 4),
   trackedTraderPollConcurrency: parseNumber(process.env.TRACKED_TRADER_POLL_CONCURRENCY, 3),
   fetchConnectTimeoutMs: parseNumber(process.env.FETCH_CONNECT_TIMEOUT_MS, 30_000),
   apiProxyUrls: parseProxyUrls(),
