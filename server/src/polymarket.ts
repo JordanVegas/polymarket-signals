@@ -283,16 +283,21 @@ export class PolymarketSignalService {
           new ProxyAgent({
             uri: proxyUrl,
             requestTls: {
+              family: 4,
               rejectUnauthorized: true,
             },
             proxyTls: {
+              family: 4,
               rejectUnauthorized: true,
             },
           }),
       )
     : [
         new Agent({
-          connectTimeout: config.fetchConnectTimeoutMs,
+          connect: {
+            family: 4,
+            timeout: config.fetchConnectTimeoutMs,
+          },
         }),
       ];
   private readonly pendingUnknownAssetTrades = new Map<string, TradeRecord[]>();
