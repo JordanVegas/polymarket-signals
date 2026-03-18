@@ -962,7 +962,7 @@ export class PolymarketSignalService {
     const tradeMessage = message as MarketTradeMessage;
     const price = Number(tradeMessage.price);
     const size = Number(tradeMessage.size);
-    if (!Number.isFinite(price) || !Number.isFinite(size) || price * size < 100) {
+    if (!Number.isFinite(price) || !Number.isFinite(size) || price * size < 10) {
       return;
     }
 
