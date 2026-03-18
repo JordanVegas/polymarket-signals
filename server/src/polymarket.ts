@@ -2697,10 +2697,11 @@ export class PolymarketSignalService {
   }
 
   private async safeFetch(input: string | URL, context: string): Promise<Response | null> {
-    const endpoint = this.getRequestMetricKey(input);
+    const target = this.withCacheBust(input);
+    const endpoint = this.getRequestMetricKey(target);
     try {
       const dispatcher = this.getNextFetchDispatcher();
-      const response = await fetch(input, {
+      const response = await fetch(target, {
         dispatcher: dispatcher as unknown as NonNullable<RequestInit["dispatcher"]>,
       });
       this.recordRequestMetric(endpoint, response.ok);
@@ -2718,6 +2719,27 @@ export class PolymarketSignalService {
       ?? this.fetchDispatchers[0];
     this.nextFetchDispatcherIndex = (this.nextFetchDispatcherIndex + 1) % this.fetchDispatchers.length;
     return dispatcher;
+  }
+
+  private withCacheBust(input: string | URL): string | URL {
+    const raw = typeof input === "string" ? input : input.toString();
+
+    try {
+      const url = new URL(raw);
+      const isDynamicPolymarketEndpoint =
+        url.hostname.includes("data-api.polymarket.com") ||
+        url.hostname.includes("gamma-api.polymarket.com") ||
+        (url.hostname.includes("clob.polymarket.com") && url.pathname === "/book");
+
+      if (!isDynamicPolymarketEndpoint) {
+        return input;
+      }
+
+      url.searchParams.set("_ts", String(Date.now()));
+      return url;
+    } catch {
+      return input;
+    }
   }
 
   private getRequestMetricKey(input: string | URL): string {
