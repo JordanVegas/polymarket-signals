@@ -183,6 +183,7 @@ export type UserProfileResponse = {
   tradingSignatureType: "EOA" | "POLY_PROXY";
   hasTradingCredentials: boolean;
   liveTradingReady: boolean;
+  liveTradingError: string | null;
   watches: Array<{
     marketSlug: string;
     outcome: string;
@@ -255,4 +256,5 @@ export type StrategyDashboardResponse = {
 export type LiveStrategyDashboardResponse = StrategyDashboardResponse & {
   enabled: boolean;
   ready: boolean;
+  error: string | null;
 };

@@ -99,6 +99,7 @@ type UserProfileResponse = {
   tradingSignatureType: "EOA" | "POLY_PROXY";
   hasTradingCredentials: boolean;
   liveTradingReady: boolean;
+  liveTradingError: string | null;
   watches: Array<{
     marketSlug: string;
     outcome: string;
@@ -168,6 +169,7 @@ type StrategyDashboardResponse = {
 type LiveStrategyDashboardResponse = StrategyDashboardResponse & {
   enabled: boolean;
   ready: boolean;
+  error: string | null;
 };
 
 type GapOpportunity = {
@@ -969,9 +971,6 @@ function App() {
         setProfileFormTradingWalletAddress(payload.tradingWalletAddress);
         setProfileFormTradingSignatureType(payload.tradingSignatureType);
         setProfileFormPrivateKey("");
-        setProfileFormApiKey("");
-        setProfileFormApiSecret("");
-        setProfileFormApiPassphrase("");
         setProfileFormClearTradingCredentials(false);
       }
     };
@@ -1093,10 +1092,10 @@ function App() {
           tradingWalletAddress: profileFormTradingWalletAddress,
           tradingSignatureType: profileFormTradingSignatureType,
           privateKey: profileFormPrivateKey,
-          apiKey: profileFormApiKey,
-          apiSecret: profileFormApiSecret,
-          apiPassphrase: profileFormApiPassphrase,
-          clearTradingCredentials: profileFormClearTradingCredentials,
+           apiKey: "",
+           apiSecret: "",
+           apiPassphrase: "",
+           clearTradingCredentials: profileFormClearTradingCredentials,
         }),
       });
       const payload = (await response.json()) as UserProfileResponse & { error?: string };
@@ -1114,9 +1113,6 @@ function App() {
       setProfileFormTradingWalletAddress(payload.tradingWalletAddress);
       setProfileFormTradingSignatureType(payload.tradingSignatureType);
       setProfileFormPrivateKey("");
-      setProfileFormApiKey("");
-      setProfileFormApiSecret("");
-      setProfileFormApiPassphrase("");
       setProfileFormClearTradingCredentials(false);
       setProfileMessage(
         payload.hasTradingCredentials ? `${t.discordWebhookSaved}. ${t.credentialsSaved}.` : t.discordWebhookSaved,
@@ -1407,7 +1403,7 @@ function App() {
               </label>
 
               <p className="profile-helper">
-                {profile?.liveTradingReady ? t.liveTradingReady : t.liveTradingNotReady}
+                {profile?.liveTradingError ?? (profile?.liveTradingReady ? t.liveTradingReady : t.liveTradingNotReady)}
               </p>
 
               <label className="profile-field">
@@ -1687,9 +1683,7 @@ function App() {
             </div>
             <p className="profile-helper">
               {liveStrategyDashboard.enabled
-                ? liveStrategyDashboard.ready
-                  ? t.liveTradingReady
-                  : t.liveTradingNotReady
+                ? (liveStrategyDashboard.error ?? (liveStrategyDashboard.ready ? t.liveTradingReady : t.liveTradingNotReady))
                 : t.liveTrading}
             </p>
             {liveStrategyDashboard.positions.length ? (

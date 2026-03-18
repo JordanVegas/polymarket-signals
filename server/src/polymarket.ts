@@ -312,6 +312,7 @@ export class PolymarketSignalService {
   private readonly bestAskByAssetId = new Map<string, { price: number; size: number | null; updatedAt: number }>();
   private readonly gapCandidatesById = new Map<string, GapCandidate>();
   private readonly gapCandidateIdsByAssetId = new Map<string, Set<string>>();
+  private readonly liveTradingIssues = new Map<string, { message: string; blockedUntil: number }>();
   private marketTradeFetchDrainTimer: NodeJS.Timeout | null = null;
   private trackedTraderPollDrainTimer: NodeJS.Timeout | null = null;
   private activeMarketTradeFetchCount = 0;
@@ -566,6 +567,7 @@ export class PolymarketSignalService {
           settings.encryptedApiSecret &&
           settings.encryptedApiPassphrase,
       ),
+      liveTradingError: this.getLiveTradingIssue(normalizedUsername),
       watches: watchedMarkets.map((watch) => {
         const market = activeMarketsBySlug.get(watch.marketSlug);
         return {
@@ -606,17 +608,23 @@ export class PolymarketSignalService {
         settings.encryptedApiPassphrase,
     );
     let cashBalanceUsd = 0;
-    if (ready) {
+    let error: string | null = this.getLiveTradingIssue(username);
+    if (ready && !error) {
       try {
         cashBalanceUsd = await this.getLiveCollateralBalance(this.createLiveTradingClient(settings));
-      } catch {
+        this.clearLiveTradingIssue(username);
+        error = null;
+      } catch (caughtError) {
+        this.recordLiveTradingIssue(username, caughtError);
         cashBalanceUsd = 0;
+        error = this.getLiveTradingIssue(username);
       }
     }
 
     return {
       enabled: settings.liveTradeEnabled ?? false,
-      ready,
+      ready: ready && !error,
+      error,
       ...buildStoredStrategyDashboard(positions, trades, cashBalanceUsd),
     };
   }
@@ -671,17 +679,27 @@ export class PolymarketSignalService {
       throw new Error("Risk percent must be between 0 and 100");
     }
 
-    const signatureType = updates.tradingSignatureType === "POLY_PROXY" ? "POLY_PROXY" : "EOA";
-    const hasNewTradingSecrets = Boolean(
-      normalizedPrivateKey || normalizedApiKey || normalizedApiSecret || normalizedApiPassphrase,
-    );
+      const signatureType: "EOA" | "POLY_PROXY" =
+        updates.tradingSignatureType === "POLY_PROXY" ? "POLY_PROXY" : "EOA";
+      const hasNewPrivateKey = Boolean(normalizedPrivateKey);
+      const hasNewTradingSecrets = Boolean(
+        normalizedPrivateKey || normalizedApiKey || normalizedApiSecret || normalizedApiPassphrase,
+      );
+      const shouldGenerateApiCreds =
+        Boolean(normalizedTradingWalletAddress) &&
+        (hasNewPrivateKey ||
+          (!normalizedApiKey &&
+            !normalizedApiSecret &&
+            !normalizedApiPassphrase &&
+            (updates.liveTradingEnabled || updates.clearTradingCredentials)));
 
-    if (
-      hasNewTradingSecrets &&
-      (!normalizedPrivateKey || !normalizedApiKey || !normalizedApiSecret || !normalizedApiPassphrase)
-    ) {
-      throw new Error("Private key, API key, API secret, and API passphrase are all required together");
-    }
+      if (
+        hasNewTradingSecrets &&
+        !shouldGenerateApiCreds &&
+        (!normalizedPrivateKey || !normalizedApiKey || !normalizedApiSecret || !normalizedApiPassphrase)
+      ) {
+        throw new Error("Private key, API key, API secret, and API passphrase are all required together");
+      }
 
     if (normalizedPrivateKey && !isLikelyPrivateKey(normalizedPrivateKey)) {
       throw new Error("Please enter a valid private key");
@@ -689,20 +707,80 @@ export class PolymarketSignalService {
 
     const existingSettings = await this.storage.getUserSettings(normalizedUsername);
 
-    if (
-      updates.liveTradingEnabled &&
-      !(
-        normalizedTradingWalletAddress &&
-        (hasNewTradingSecrets ||
-          (existingSettings.encryptedPrivateKey &&
-            existingSettings.encryptedApiKey &&
-            existingSettings.encryptedApiSecret &&
-            existingSettings.encryptedApiPassphrase))
-      )
-    ) {
-      throw new Error("Live trading requires a trading wallet and saved trading credentials");
-    }
-    await this.storage.updateUserSettings(normalizedUsername, {
+      if (
+        updates.liveTradingEnabled &&
+        !(
+          normalizedTradingWalletAddress &&
+          (hasNewPrivateKey ||
+            hasNewTradingSecrets ||
+            (existingSettings.encryptedPrivateKey &&
+              ((existingSettings.encryptedApiKey &&
+                existingSettings.encryptedApiSecret &&
+                existingSettings.encryptedApiPassphrase) ||
+                shouldGenerateApiCreds)))
+        )
+      ) {
+        throw new Error("Live trading requires a trading wallet and saved trading credentials");
+      }
+
+      const effectiveEncryptedPrivateKey = hasNewPrivateKey
+        ? encryptSecret(normalizedPrivateKey, config.tradingEncryptionSecret)
+        : updates.clearTradingCredentials
+          ? existingSettings.encryptedPrivateKey
+          : existingSettings.encryptedPrivateKey;
+
+      let effectiveApiKey = normalizedApiKey;
+      let effectiveApiSecret = normalizedApiSecret;
+      let effectiveApiPassphrase = normalizedApiPassphrase;
+
+      if (shouldGenerateApiCreds) {
+        const privateKeyForGeneration = hasNewPrivateKey
+          ? normalizedPrivateKey
+          : existingSettings.encryptedPrivateKey
+            ? decryptSecret(existingSettings.encryptedPrivateKey, config.tradingEncryptionSecret)
+            : "";
+        if (!privateKeyForGeneration) {
+          throw new Error("Live trading requires a private key");
+        }
+
+        const generatedCreds = await this.generateLiveTradingApiCreds(
+          privateKeyForGeneration,
+          signatureType,
+          normalizedTradingWalletAddress,
+        );
+        effectiveApiKey = generatedCreds.key;
+        effectiveApiSecret = generatedCreds.secret;
+        effectiveApiPassphrase = generatedCreds.passphrase;
+      }
+
+      if (updates.liveTradingEnabled && normalizedTradingWalletAddress) {
+        const validationSettings = {
+          ...existingSettings,
+          liveTradeEnabled: true,
+          tradingWalletAddress: normalizedTradingWalletAddress,
+          tradingSignatureType: signatureType,
+          encryptedPrivateKey: effectiveEncryptedPrivateKey,
+          encryptedApiKey: effectiveApiKey
+            ? encryptSecret(effectiveApiKey, config.tradingEncryptionSecret)
+            : existingSettings.encryptedApiKey,
+          encryptedApiSecret: effectiveApiSecret
+            ? encryptSecret(effectiveApiSecret, config.tradingEncryptionSecret)
+            : existingSettings.encryptedApiSecret,
+          encryptedApiPassphrase: effectiveApiPassphrase
+            ? encryptSecret(effectiveApiPassphrase, config.tradingEncryptionSecret)
+            : existingSettings.encryptedApiPassphrase,
+        };
+
+        try {
+          await this.getLiveCollateralBalance(this.createLiveTradingClient(validationSettings));
+          this.clearLiveTradingIssue(normalizedUsername);
+        } catch (caughtError) {
+          this.recordLiveTradingIssue(normalizedUsername, caughtError);
+          throw new Error(this.extractLiveTradingErrorMessage(caughtError));
+        }
+      }
+
+      await this.storage.updateUserSettings(normalizedUsername, {
       webhookUrl: normalizedWebhookUrl,
       monitoredWallet: normalizedMonitoredWallet,
       autoTradeEnabled: updates.paperTradingEnabled,
@@ -713,21 +791,24 @@ export class PolymarketSignalService {
           ? updates.startingBalanceUsd
           : Math.max(0, existingSettings.currentBalanceUsd),
       riskPercent: updates.riskPercent,
-      tradingWalletAddress: normalizedTradingWalletAddress,
-      tradingSignatureType: signatureType,
-      ...(hasNewTradingSecrets
-        ? {
-            encryptedPrivateKey: encryptSecret(normalizedPrivateKey, config.tradingEncryptionSecret),
-            encryptedApiKey: encryptSecret(normalizedApiKey, config.tradingEncryptionSecret),
-            encryptedApiSecret: encryptSecret(normalizedApiSecret, config.tradingEncryptionSecret),
-            encryptedApiPassphrase: encryptSecret(
-              normalizedApiPassphrase,
-              config.tradingEncryptionSecret,
-            ),
-          }
-        : {}),
-      clearTradingCredentials: updates.clearTradingCredentials,
-    });
+        tradingWalletAddress: normalizedTradingWalletAddress,
+        tradingSignatureType: signatureType,
+        ...(effectiveEncryptedPrivateKey
+          ? {
+              encryptedPrivateKey: effectiveEncryptedPrivateKey,
+              ...(effectiveApiKey
+                ? { encryptedApiKey: encryptSecret(effectiveApiKey, config.tradingEncryptionSecret) }
+                : {}),
+              ...(effectiveApiSecret
+                ? { encryptedApiSecret: encryptSecret(effectiveApiSecret, config.tradingEncryptionSecret) }
+                : {}),
+              ...(effectiveApiPassphrase
+                ? { encryptedApiPassphrase: encryptSecret(effectiveApiPassphrase, config.tradingEncryptionSecret) }
+                : {}),
+            }
+          : {}),
+        clearTradingCredentials: updates.clearTradingCredentials,
+      });
     await this.syncTrackedWalletWatchesForUser(normalizedUsername, normalizedMonitoredWallet);
     return this.getUserProfile(normalizedUsername);
   }
@@ -2285,6 +2366,9 @@ export class PolymarketSignalService {
     if (!settings.liveTradeEnabled) {
       return;
     }
+    if (this.isLiveTradingBlocked(username)) {
+      return;
+    }
 
     const tradingWalletAddress = settings.tradingWalletAddress?.trim() ?? "";
     if (
@@ -2851,9 +2935,76 @@ export class PolymarketSignalService {
     );
   }
 
+  private async generateLiveTradingApiCreds(
+    privateKey: string,
+    signatureType: "EOA" | "POLY_PROXY",
+    tradingWalletAddress: string,
+  ): Promise<ApiKeyCreds> {
+    const signer = new Wallet(privateKey);
+    const client = new ClobClient(
+      CLOB_API_URL,
+      137,
+      signer,
+      undefined,
+      signatureType === "POLY_PROXY" ? SignatureType.POLY_PROXY : SignatureType.EOA,
+      tradingWalletAddress || undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+    return client.createOrDeriveApiKey();
+  }
+
   private async getLiveCollateralBalance(client: ClobClient): Promise<number> {
     const response = await client.getBalanceAllowance({ asset_type: AssetType.COLLATERAL });
     return Number(response.balance ?? 0);
+  }
+
+  private isLiveTradingBlocked(username: string): boolean {
+    const issue = this.liveTradingIssues.get(username.trim());
+    return Boolean(issue && issue.blockedUntil > Date.now());
+  }
+
+  private getLiveTradingIssue(username: string): string | null {
+    const issue = this.liveTradingIssues.get(username.trim());
+    if (!issue) {
+      return null;
+    }
+    if (issue.blockedUntil <= Date.now()) {
+      this.liveTradingIssues.delete(username.trim());
+      return null;
+    }
+    return issue.message;
+  }
+
+  private clearLiveTradingIssue(username: string): void {
+    this.liveTradingIssues.delete(username.trim());
+  }
+
+  private recordLiveTradingIssue(username: string, error: unknown): void {
+    const normalizedUsername = username.trim();
+    if (!normalizedUsername) {
+      return;
+    }
+    this.liveTradingIssues.set(normalizedUsername, {
+      message: this.extractLiveTradingErrorMessage(error),
+      blockedUntil: Date.now() + 5 * 60_000,
+    });
+  }
+
+  private extractLiveTradingErrorMessage(error: unknown): string {
+    const message =
+      typeof error === "object" && error && "message" in error && typeof error.message === "string"
+        ? error.message
+        : "";
+    if (message.includes("Unauthorized/Invalid api key") || message.includes("401")) {
+      return "Invalid Polymarket API credentials";
+    }
+    return message || "Live trading is temporarily unavailable";
   }
 
   private async ensureLiveAllowance(
