@@ -1,5 +1,6 @@
 import { config } from "./config.js";
 import { decryptSecret, encryptSecret } from "./secrets.js";
+import { randomUUID } from "node:crypto";
 import { Wallet } from "@ethersproject/wallet";
 import {
   AssetType,
@@ -2403,7 +2404,7 @@ export class PolymarketSignalService {
         return;
       }
       const nextPosition: StrategyPosition = {
-        id: `${username}:${marketSlug}:${edgeOutcome}:${strategyKey}`,
+        id: createStrategyPositionId(username, marketSlug, edgeOutcome, strategyKey),
         strategyKey,
         username,
         marketSlug,
@@ -2661,10 +2662,10 @@ export class PolymarketSignalService {
 
       const openedAt = Date.now();
       const remainingShares = entryNotionalUsd / safeEntryPrice;
-      const nextPosition: StrategyPosition = {
-        id: `${username}:${marketSlug}:${edgeOutcome}:${strategyKey}:live`,
-        strategyKey,
-        username,
+    const nextPosition: StrategyPosition = {
+      id: createStrategyPositionId(username, marketSlug, edgeOutcome, strategyKey, "live"),
+      strategyKey,
+      username,
         marketSlug,
         marketQuestion: aggregate.marketQuestion,
         marketUrl: aggregate.marketUrl,
@@ -4420,6 +4421,15 @@ const qualifiesEdgeSwingMarket = (aggregate: MarketAggregate): boolean => {
 
 const doesMarketQualifyForStrategy = (aggregate: MarketAggregate, strategyKey: StrategyKey): boolean =>
   strategyKey === "edge_swing" ? qualifiesEdgeSwingMarket(aggregate) : isBestTradeMarket(aggregate);
+
+const createStrategyPositionId = (
+  username: string,
+  marketSlug: string,
+  outcome: string,
+  strategyKey: StrategyKey,
+  mode: "paper" | "live" = "paper",
+): string =>
+  `${username}:${marketSlug}:${outcome}:${strategyKey}:${mode}:${randomUUID()}`;
 
 const buildStrategyTrades = (position: StrategyPosition): StrategyTrade[] => {
   const trades: StrategyTrade[] = [];
