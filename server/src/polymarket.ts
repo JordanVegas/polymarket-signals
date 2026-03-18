@@ -334,8 +334,7 @@ export class PolymarketSignalService {
   async start(): Promise<void> {
     await this.storage.connect();
     await this.restoreActiveClusters();
-    await this.syncMarkets();
-    this.captureInitialActiveMarkets();
+    this.runBackgroundTask("initial market sync", this.syncMarkets());
     this.runBackgroundTask("market aggregate refresh", this.refreshMarketAggregates());
     this.runBackgroundTask("best trade resolution sync", this.syncResolvedBestTradeCandidates());
     this.startTradePolling();
@@ -883,6 +882,7 @@ export class PolymarketSignalService {
 
     this.lastMarketSyncAt = Date.now();
     this.rebuildMarketSockets();
+    this.captureInitialActiveMarkets();
     await this.refreshGapCandidates();
   }
 
