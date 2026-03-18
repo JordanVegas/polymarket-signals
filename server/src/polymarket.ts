@@ -2941,13 +2941,13 @@ export class PolymarketSignalService {
     tradingWalletAddress: string,
   ): Promise<ApiKeyCreds> {
     const signer = new Wallet(privateKey);
-    const client = new ClobClient(
+    const authClient = new ClobClient(
       CLOB_API_URL,
       137,
       signer,
       undefined,
-      signatureType === "POLY_PROXY" ? SignatureType.POLY_PROXY : SignatureType.EOA,
-      tradingWalletAddress || undefined,
+      undefined,
+      undefined,
       undefined,
       undefined,
       undefined,
@@ -2956,7 +2956,12 @@ export class PolymarketSignalService {
       undefined,
       true,
     );
-    return client.createOrDeriveApiKey();
+
+    try {
+      return await authClient.createApiKey();
+    } catch {
+      return authClient.deriveApiKey();
+    }
   }
 
   private async getLiveCollateralBalance(client: ClobClient): Promise<number> {
