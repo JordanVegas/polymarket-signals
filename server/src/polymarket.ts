@@ -271,6 +271,7 @@ const TRADER_MEMORY_CACHE_TTL_MS = 5 * 60_000;
 const TRADER_DB_CACHE_TTL_MS = 7 * 24 * 60 * 60_000;
 const REQUEST_STATS_WINDOW_MS = 10 * 60_000;
 const MARKET_TRADE_FETCH_COOLDOWN_MS = 1_000;
+const MIN_STRATEGY_ENTRY_USD = 1;
 
 type IngestResult = "ingested" | "queued";
 
@@ -2395,7 +2396,7 @@ export class PolymarketSignalService {
         0,
         Math.min(currentBalanceUsd, currentBalanceUsd * (Math.max(0, riskPercent) / 100)),
       );
-      if (entryNotionalUsd <= 0 || currentPrice <= 0) {
+      if (entryNotionalUsd < MIN_STRATEGY_ENTRY_USD || currentPrice <= 0) {
         return;
       }
 
@@ -2607,9 +2608,9 @@ export class PolymarketSignalService {
       });
       const riskPercent = this.getStrategyRiskPercent(settings, strategyKey);
       const entryNotionalUsd = Math.max(0, Math.min(collateral, collateral * (Math.max(0, riskPercent) / 100)));
-      if (entryNotionalUsd <= 0) {
-        return;
-      }
+    if (entryNotionalUsd < MIN_STRATEGY_ENTRY_USD) {
+      return;
+    }
 
       const options = await this.getLiveOrderOptions(client, tokenID).catch((error) => {
         this.recordLiveTradingIssue(username, error);

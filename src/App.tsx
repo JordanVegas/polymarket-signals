@@ -267,6 +267,13 @@ const currencyFormatter = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 0,
 });
 
+const preciseCurrencyFormatter = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
 const MARKET_PAGE_SIZE = 24;
 
 function getPageRoute(pathname: string): PageRoute {
@@ -1833,11 +1840,11 @@ function App() {
                         <span>{`${trade.side} ${trade.outcome}`}</span>
                         <span>{`${t.activityTime}: ${formatRelativeTime(trade.timestamp, t)} - ${formatTimestamp(trade.timestamp, t.pending)}`}</span>
                         <span>{`${trade.reason} - ${formatRelativeTime(trade.timestamp, t)}`}</span>
-                        <span>{`${t.activityDetails}: ${trade.shares.toFixed(2)} shares - ${currencyFormatter.format(trade.usd)} @ ${trade.price.toFixed(3)}`}</span>
+                        <span>{`${t.activityDetails}: ${trade.shares.toFixed(2)} shares - ${preciseCurrencyFormatter.format(trade.usd)} @ ${trade.price.toFixed(3)}`}</span>
                       </div>
                       <div className="profile-watch-actions">
                         <span className="strategy-trade-amount">
-                          {currencyFormatter.format(trade.usd)} @ {trade.price.toFixed(3)}
+                          {preciseCurrencyFormatter.format(trade.usd)} @ {trade.price.toFixed(3)}
                         </span>
                         <a href={normalizeSecureUrl(trade.marketUrl) ?? trade.marketUrl} target="_blank" rel="noreferrer">
                           {t.openMarket}
@@ -1939,11 +1946,11 @@ function App() {
                       <span>{`${trade.side} ${trade.outcome}`}</span>
                       <span>{`${t.activityTime}: ${formatRelativeTime(trade.timestamp, t)} - ${formatTimestamp(trade.timestamp, t.pending)}`}</span>
                       <span>{`${trade.reason}${trade.orderId ? ` - ${trade.orderId}` : ""}`}</span>
-                      <span>{`${t.activityDetails}: ${trade.shares.toFixed(2)} shares - ${currencyFormatter.format(trade.usd)} @ ${trade.price.toFixed(3)}`}</span>
+                        <span>{`${t.activityDetails}: ${trade.shares.toFixed(2)} shares - ${preciseCurrencyFormatter.format(trade.usd)} @ ${trade.price.toFixed(3)}`}</span>
                     </div>
                     <div className="profile-watch-actions">
                       <span className="strategy-trade-amount">
-                        {currencyFormatter.format(trade.usd)} @ {trade.price.toFixed(3)}
+                          {preciseCurrencyFormatter.format(trade.usd)} @ {trade.price.toFixed(3)}
                       </span>
                       <a href={normalizeSecureUrl(trade.marketUrl) ?? trade.marketUrl} target="_blank" rel="noreferrer">
                         {t.openMarket}
