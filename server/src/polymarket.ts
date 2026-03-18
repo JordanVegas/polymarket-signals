@@ -2347,7 +2347,10 @@ export class PolymarketSignalService {
     const previous = this.liveStrategyUserQueues.get(normalizedUsername) ?? Promise.resolve();
     const next = previous
       .catch(() => undefined)
-      .then(() => this.reconcileLiveStrategyPosition(marketSlug, normalizedUsername));
+      .then(() => this.reconcileLiveStrategyPosition(marketSlug, normalizedUsername))
+      .catch((error) => {
+        logFetchFailure(`live strategy ${normalizedUsername} ${marketSlug}`, error);
+      });
     this.liveStrategyUserQueues.set(normalizedUsername, next.finally(() => {
       if (this.liveStrategyUserQueues.get(normalizedUsername) === next) {
         this.liveStrategyUserQueues.delete(normalizedUsername);
@@ -2417,32 +2420,67 @@ export class PolymarketSignalService {
         return;
       }
 
-      const collateral = await this.getLiveCollateralBalance(client);
+      const collateral = await this.getLiveCollateralBalance(client).catch((error) => {
+        this.recordLiveTradingIssue(username, error);
+        return 0;
+      });
       const riskPercent = settings.riskPercent ?? 5;
       const entryNotionalUsd = Math.max(0, Math.min(collateral, collateral * (Math.max(0, riskPercent) / 100)));
       if (entryNotionalUsd <= 0) {
         return;
       }
 
-      const options = await this.getLiveOrderOptions(client, tokenID);
-      await this.ensureLiveAllowance(client, AssetType.COLLATERAL, entryNotionalUsd);
-      const entryPrice = await client.calculateMarketPrice(tokenID, ClobSide.BUY, entryNotionalUsd, OrderType.FOK);
-      if (!Number.isFinite(entryPrice) || entryPrice <= 0) {
+      const options = await this.getLiveOrderOptions(client, tokenID).catch((error) => {
+        this.recordLiveTradingIssue(username, error);
+        return null;
+      });
+      if (!options) {
+        return;
+      }
+      const allowanceReady = await this.ensureLiveAllowance(client, AssetType.COLLATERAL, entryNotionalUsd).then(
+        () => true,
+        (error) => {
+          this.recordLiveTradingIssue(username, error);
+          return false;
+        },
+      );
+      if (!allowanceReady) {
+        return;
+      }
+      const entryPrice = await client
+        .calculateMarketPrice(tokenID, ClobSide.BUY, entryNotionalUsd, OrderType.FOK)
+        .catch((error) => {
+          if (error instanceof Error && error.message.includes("no match")) {
+            return null;
+          }
+          this.recordLiveTradingIssue(username, error);
+          return null;
+        });
+      if (entryPrice == null || !Number.isFinite(entryPrice) || entryPrice <= 0) {
+        return;
+      }
+      const safeEntryPrice = entryPrice;
+
+      const response = await client
+        .createAndPostMarketOrder(
+          {
+            tokenID,
+            amount: entryNotionalUsd,
+            side: ClobSide.BUY,
+          },
+          options,
+          OrderType.FOK,
+        )
+        .catch((error) => {
+          this.recordLiveTradingIssue(username, error);
+          return null;
+        });
+      if (!response) {
         return;
       }
 
-      const response = await client.createAndPostMarketOrder(
-        {
-          tokenID,
-          amount: entryNotionalUsd,
-          side: ClobSide.BUY,
-        },
-        options,
-        OrderType.FOK,
-      );
-
       const openedAt = Date.now();
-      const remainingShares = entryNotionalUsd / entryPrice;
+      const remainingShares = entryNotionalUsd / safeEntryPrice;
       const nextPosition: StrategyPosition = {
         id: `${username}:${marketSlug}:${edgeOutcome}:live`,
         username,
@@ -2454,7 +2492,7 @@ export class PolymarketSignalService {
         status: "open",
         openedAt,
         updatedAt: openedAt,
-        entryPrice,
+        entryPrice: safeEntryPrice,
         lastPrice: currentPrice,
         entryNotionalUsd,
         remainingShares,
@@ -2467,6 +2505,7 @@ export class PolymarketSignalService {
         originalParticipants,
       };
       await this.storage.saveLiveStrategyPosition(nextPosition);
+      this.clearLiveTradingIssue(username);
       await this.storage.saveLiveStrategyTrade(
         username,
         this.buildLiveStrategyTrade(nextPosition, {
@@ -2474,7 +2513,7 @@ export class PolymarketSignalService {
           side: "BUY",
           reason: "Entry",
           timestamp: openedAt,
-          price: entryPrice,
+            price: safeEntryPrice,
           shares: remainingShares,
           usd: entryNotionalUsd,
           response,
@@ -2506,7 +2545,13 @@ export class PolymarketSignalService {
       setupQuality,
     };
 
-    const options = await this.getLiveOrderOptions(client, tokenID);
+    const options = await this.getLiveOrderOptions(client, tokenID).catch((error) => {
+      this.recordLiveTradingIssue(username, error);
+      return null;
+    });
+    if (!options) {
+      return;
+    }
 
     if (!nextPosition.trim96Hit && currentPrice >= 0.96) {
       nextPosition = await this.executeLiveTrim(username, nextPosition, tokenID, options, 0.5, 0.96, "Trim 0.96");
@@ -3059,23 +3104,49 @@ export class PolymarketSignalService {
       return position;
     }
 
-    await this.ensureLiveAllowance(client, AssetType.CONDITIONAL, sharesToSell, tokenID);
-    const sellPrice = await client.calculateMarketPrice(tokenID, ClobSide.SELL, sharesToSell, OrderType.FOK);
-    if (!Number.isFinite(sellPrice) || sellPrice <= 0) {
+    const allowanceReady = await this.ensureLiveAllowance(client, AssetType.CONDITIONAL, sharesToSell, tokenID).then(
+      () => true,
+      (error) => {
+        this.recordLiveTradingIssue(username, error);
+        return false;
+      },
+    );
+    if (!allowanceReady) {
+      return position;
+    }
+    const sellPrice = await client.calculateMarketPrice(tokenID, ClobSide.SELL, sharesToSell, OrderType.FOK).catch(
+      (error) => {
+        if (error instanceof Error && error.message.includes("no match")) {
+          return null;
+        }
+        this.recordLiveTradingIssue(username, error);
+        return null;
+      },
+    );
+    if (sellPrice == null || !Number.isFinite(sellPrice) || sellPrice <= 0) {
+      return position;
+    }
+    const safeSellPrice = sellPrice;
+
+    const response = await client
+      .createAndPostMarketOrder(
+        {
+          tokenID,
+          amount: sharesToSell,
+          side: ClobSide.SELL,
+        },
+        options,
+        OrderType.FOK,
+      )
+      .catch((error) => {
+        this.recordLiveTradingIssue(username, error);
+        return null;
+      });
+    if (!response) {
       return position;
     }
 
-    const response = await client.createAndPostMarketOrder(
-      {
-        tokenID,
-        amount: sharesToSell,
-        side: ClobSide.SELL,
-      },
-      options,
-      OrderType.FOK,
-    );
-
-    const realizedUsd = sharesToSell * sellPrice;
+    const realizedUsd = sharesToSell * safeSellPrice;
     const nextPosition: StrategyPosition = {
       ...position,
       updatedAt: Date.now(),
@@ -3092,12 +3163,14 @@ export class PolymarketSignalService {
         side: "SELL",
         reason,
         timestamp: Date.now(),
-        price: sellPrice,
+          price: safeSellPrice,
         shares: sharesToSell,
         usd: realizedUsd,
-        response,
-      }),
-    );
+      response,
+        }),
+      );
+
+    this.clearLiveTradingIssue(username);
 
     return nextPosition;
   }
@@ -3120,32 +3193,61 @@ export class PolymarketSignalService {
       };
     }
 
-    await this.ensureLiveAllowance(client, AssetType.CONDITIONAL, position.remainingShares, tokenID);
+    const allowanceReady = await this.ensureLiveAllowance(
+      client,
+      AssetType.CONDITIONAL,
+      position.remainingShares,
+      tokenID,
+    ).then(
+      () => true,
+      (error) => {
+        this.recordLiveTradingIssue(username, error);
+        return false;
+      },
+    );
+    if (!allowanceReady) {
+      return position;
+    }
     const sellPrice = await client.calculateMarketPrice(
       tokenID,
       ClobSide.SELL,
       position.remainingShares,
       OrderType.FOK,
-    );
-    if (!Number.isFinite(sellPrice) || sellPrice <= 0) {
+    ).catch((error) => {
+      if (error instanceof Error && error.message.includes("no match")) {
+        return null;
+      }
+      this.recordLiveTradingIssue(username, error);
+      return null;
+    });
+    if (sellPrice == null || !Number.isFinite(sellPrice) || sellPrice <= 0) {
+      return position;
+    }
+    const safeSellPrice = sellPrice;
+
+    const response = await client
+      .createAndPostMarketOrder(
+        {
+          tokenID,
+          amount: position.remainingShares,
+          side: ClobSide.SELL,
+        },
+        options,
+        OrderType.FOK,
+      )
+      .catch((error) => {
+        this.recordLiveTradingIssue(username, error);
+        return null;
+      });
+    if (!response) {
       return position;
     }
 
-    const response = await client.createAndPostMarketOrder(
-      {
-        tokenID,
-        amount: position.remainingShares,
-        side: ClobSide.SELL,
-      },
-      options,
-      OrderType.FOK,
-    );
-
-    const realizedUsd = position.remainingShares * sellPrice;
+    const realizedUsd = position.remainingShares * safeSellPrice;
     const nextPosition: StrategyPosition = {
       ...position,
       updatedAt: Date.now(),
-      lastPrice: sellPrice,
+        lastPrice: safeSellPrice,
       remainingShares: 0,
       realizedUsd: position.realizedUsd + realizedUsd,
       soldPercent: 100,
@@ -3159,12 +3261,14 @@ export class PolymarketSignalService {
         side: "SELL",
         reason: exitReason,
         timestamp: Date.now(),
-        price: sellPrice,
+          price: safeSellPrice,
         shares: position.remainingShares,
         usd: realizedUsd,
-        response,
-      }),
-    );
+      response,
+        }),
+      );
+
+    this.clearLiveTradingIssue(username);
 
     return nextPosition;
   }
