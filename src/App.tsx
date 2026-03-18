@@ -127,8 +127,7 @@ type StrategyPosition = {
   originalSmartMoneyWeight: number;
   remainingSmartMoneyWeight: number;
   soldPercent: number;
-  trim90Hit: boolean;
-  trim93Hit: boolean;
+  trim96Hit: boolean;
   setupQuality: number;
   exitReason?: string;
   originalParticipants: Array<{
@@ -364,8 +363,7 @@ const copy = {
     activityTime: "Time",
     activityDetails: "Details",
     entryTrade: "Entry",
-    trim90: "Trim 0.90",
-    trim93: "Trim 0.93",
+    trim96: "Trim 0.96",
     finalExit: "Final exit",
     statusOpen: "Open",
     statusClosed: "Closed",
@@ -530,8 +528,7 @@ const copy = {
     activityTime: "זמן",
     activityDetails: "פרטים",
     entryTrade: "כניסה",
-    trim90: "מימוש 0.90",
-    trim93: "מימוש 0.93",
+    trim96: "מימוש 0.96",
     finalExit: "יציאה סופית",
     statusOpen: "פתוח",
     statusClosed: "סגור",

@@ -211,8 +211,7 @@ export type StrategyPosition = {
   originalSmartMoneyWeight: number;
   remainingSmartMoneyWeight: number;
   soldPercent: number;
-  trim90Hit: boolean;
-  trim93Hit: boolean;
+  trim96Hit: boolean;
   setupQuality: number;
   exitReason?: string;
   originalParticipants: Array<{

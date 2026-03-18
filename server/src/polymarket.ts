@@ -2182,8 +2182,7 @@ export class PolymarketSignalService {
         originalSmartMoneyWeight,
         remainingSmartMoneyWeight: originalSmartMoneyWeight,
         soldPercent: 0,
-        trim90Hit: false,
-        trim93Hit: false,
+        trim96Hit: false,
         setupQuality,
         originalParticipants,
       };
@@ -2202,7 +2201,8 @@ export class PolymarketSignalService {
     const qualifiesIgnoringPriceCap = !edgeFlipped && isBestTradeMarket(aggregate, {
       ignorePriceCap: true,
       ignorePriceDeviation: true,
-      minOutcomeShare: 0.55,
+      minTotalWeight: 40,
+      minOutcomeShare: 0.5,
     });
 
     let nextPosition: StrategyPosition = {
@@ -2213,27 +2213,15 @@ export class PolymarketSignalService {
       setupQuality,
     };
 
-    if (!nextPosition.trim90Hit && currentPrice >= 0.9) {
-      const sharesToSell = Math.min(nextPosition.remainingShares, (position.entryNotionalUsd / position.entryPrice) * 0.25);
-      const realizedUsd = sharesToSell * currentPrice;
-      nextPosition = {
-        ...nextPosition,
-        remainingShares: Math.max(0, nextPosition.remainingShares - sharesToSell),
-        realizedUsd: nextPosition.realizedUsd + realizedUsd,
-        soldPercent: Math.max(nextPosition.soldPercent, 25),
-        trim90Hit: true,
-      };
-    }
-
-    if (!nextPosition.trim93Hit && currentPrice >= 0.93) {
-      const sharesToSell = Math.min(nextPosition.remainingShares, (position.entryNotionalUsd / position.entryPrice) * 0.25);
+    if (!nextPosition.trim96Hit && currentPrice >= 0.96) {
+      const sharesToSell = Math.min(nextPosition.remainingShares, (position.entryNotionalUsd / position.entryPrice) * 0.5);
       const realizedUsd = sharesToSell * currentPrice;
       nextPosition = {
         ...nextPosition,
         remainingShares: Math.max(0, nextPosition.remainingShares - sharesToSell),
         realizedUsd: nextPosition.realizedUsd + realizedUsd,
         soldPercent: Math.max(nextPosition.soldPercent, 50),
-        trim93Hit: true,
+        trim96Hit: true,
       };
     }
 
@@ -2244,13 +2232,14 @@ export class PolymarketSignalService {
         : getBestTradeFailureReasons(aggregate, {
         ignorePriceCap: true,
         ignorePriceDeviation: true,
-        minOutcomeShare: 0.55,
+        minTotalWeight: 40,
+        minOutcomeShare: 0.5,
       });
       exitReason = `Thesis break: ${thesisBreakReasons.join(", ")}`;
     } else if (currentPrice >= 0.995) {
       exitReason = "Take profit 0.995";
-    } else if (exitedRatio >= 0.5) {
-      exitReason = "50% smart-money weight exited";
+    } else if (exitedRatio >= 0.65) {
+      exitReason = "65% smart-money weight exited";
     }
 
     if (exitReason) {
@@ -2389,8 +2378,7 @@ export class PolymarketSignalService {
         originalSmartMoneyWeight,
         remainingSmartMoneyWeight: originalSmartMoneyWeight,
         soldPercent: 0,
-        trim90Hit: false,
-        trim93Hit: false,
+        trim96Hit: false,
         setupQuality,
         originalParticipants,
       };
@@ -2422,7 +2410,8 @@ export class PolymarketSignalService {
     const qualifiesIgnoringPriceCap = !edgeFlipped && isBestTradeMarket(aggregate, {
       ignorePriceCap: true,
       ignorePriceDeviation: true,
-      minOutcomeShare: 0.55,
+      minTotalWeight: 40,
+      minOutcomeShare: 0.5,
     });
 
     let nextPosition: StrategyPosition = {
@@ -2435,12 +2424,8 @@ export class PolymarketSignalService {
 
     const options = await this.getLiveOrderOptions(client, tokenID);
 
-    if (!nextPosition.trim90Hit && currentPrice >= 0.9) {
-      nextPosition = await this.executeLiveTrim(username, nextPosition, tokenID, options, 0.25, 0.9, "Trim 0.90");
-    }
-
-    if (!nextPosition.trim93Hit && currentPrice >= 0.93) {
-      nextPosition = await this.executeLiveTrim(username, nextPosition, tokenID, options, 0.25, 0.93, "Trim 0.93");
+    if (!nextPosition.trim96Hit && currentPrice >= 0.96) {
+      nextPosition = await this.executeLiveTrim(username, nextPosition, tokenID, options, 0.5, 0.96, "Trim 0.96");
     }
 
     let exitReason: string | undefined;
@@ -2450,13 +2435,14 @@ export class PolymarketSignalService {
         : getBestTradeFailureReasons(aggregate, {
         ignorePriceCap: true,
         ignorePriceDeviation: true,
-        minOutcomeShare: 0.55,
+        minTotalWeight: 40,
+        minOutcomeShare: 0.5,
       });
       exitReason = `Thesis break: ${thesisBreakReasons.join(", ")}`;
     } else if (currentPrice >= 0.995) {
       exitReason = "Take profit 0.995";
-    } else if (exitedRatio >= 0.5) {
-      exitReason = "50% smart-money weight exited";
+    } else if (exitedRatio >= 0.65) {
+      exitReason = "65% smart-money weight exited";
     }
 
     if (exitReason && nextPosition.remainingShares > 0) {
@@ -2940,9 +2926,8 @@ export class PolymarketSignalService {
       lastPrice: Math.max(position.lastPrice, thresholdPrice),
       remainingShares: Math.max(0, position.remainingShares - sharesToSell),
       realizedUsd: position.realizedUsd + realizedUsd,
-      soldPercent: Math.max(position.soldPercent, thresholdPrice >= 0.93 ? 50 : 25),
-      trim90Hit: position.trim90Hit || thresholdPrice >= 0.9,
-      trim93Hit: position.trim93Hit || thresholdPrice >= 0.93,
+      soldPercent: Math.max(position.soldPercent, 50),
+      trim96Hit: position.trim96Hit || thresholdPrice >= 0.96,
     };
     await this.storage.saveLiveStrategyTrade(
       username,
@@ -3362,20 +3347,31 @@ const applyViewFilter = (
 
 const isBestTradeMarket = (
   market: MarketAggregate,
-  options?: { ignorePriceCap?: boolean; ignorePriceDeviation?: boolean; minOutcomeShare?: number },
+  options?: {
+    ignorePriceCap?: boolean;
+    ignorePriceDeviation?: boolean;
+    minOutcomeShare?: number;
+    minTotalWeight?: number;
+  },
 ): boolean => {
   return getBestTradeFailureReasons(market, options).length === 0;
 };
 
 const getBestTradeFailureReasons = (
   market: MarketAggregate,
-  options?: { ignorePriceCap?: boolean; ignorePriceDeviation?: boolean; minOutcomeShare?: number },
+  options?: {
+    ignorePriceCap?: boolean;
+    ignorePriceDeviation?: boolean;
+    minOutcomeShare?: number;
+    minTotalWeight?: number;
+  },
 ): string[] => {
   const reasons: string[] = [];
   const leadingOutcomeWeight = market.outcomeWeights[0]?.weight ?? 0;
   const minOutcomeShare = options?.minOutcomeShare ?? 0.7;
-  if (market.weightedScore < 70) {
-    reasons.push(`market weight ${market.weightedScore.toFixed(0)} < 70`);
+  const minTotalWeight = options?.minTotalWeight ?? 70;
+  if (market.weightedScore < minTotalWeight) {
+    reasons.push(`market weight ${market.weightedScore.toFixed(0)} < ${minTotalWeight}`);
   }
 
   if (leadingOutcomeWeight < market.weightedScore * minOutcomeShare) {
@@ -3859,7 +3855,7 @@ const formatGapObjectiveLabel = (objective: string): string => {
 const buildStrategyTrades = (position: StrategyPosition): StrategyTrade[] => {
   const trades: StrategyTrade[] = [];
   const initialShares = position.entryPrice > 0 ? position.entryNotionalUsd / position.entryPrice : 0;
-  const quarterShares = initialShares * 0.25;
+  const halfShares = initialShares * 0.5;
 
   trades.push({
     id: `${position.id}:entry`,
@@ -3876,36 +3872,19 @@ const buildStrategyTrades = (position: StrategyPosition): StrategyTrade[] => {
       mode: "paper",
     });
 
-  if (position.trim90Hit) {
+  if (position.trim96Hit) {
     trades.push({
-      id: `${position.id}:trim90`,
+      id: `${position.id}:trim96`,
       marketSlug: position.marketSlug,
       marketQuestion: position.marketQuestion,
       marketUrl: position.marketUrl,
       outcome: position.outcome,
       side: "SELL",
-      reason: "Trim 0.90",
+      reason: "Trim 0.96",
       timestamp: position.updatedAt,
-      price: 0.9,
-      shares: quarterShares,
-      usd: quarterShares * 0.9,
-      mode: "paper",
-    });
-  }
-
-  if (position.trim93Hit) {
-    trades.push({
-      id: `${position.id}:trim93`,
-      marketSlug: position.marketSlug,
-      marketQuestion: position.marketQuestion,
-      marketUrl: position.marketUrl,
-      outcome: position.outcome,
-      side: "SELL",
-      reason: "Trim 0.93",
-      timestamp: position.updatedAt,
-      price: 0.93,
-      shares: quarterShares,
-      usd: quarterShares * 0.93,
+      price: 0.96,
+      shares: halfShares,
+      usd: halfShares * 0.96,
       mode: "paper",
     });
   }
