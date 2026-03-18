@@ -179,6 +179,11 @@ export type UserProfileResponse = {
   startingBalanceUsd: number;
   currentBalanceUsd: number;
   riskPercent: number;
+  edgeSwingPaperTradingEnabled: boolean;
+  edgeSwingLiveTradingEnabled: boolean;
+  edgeSwingStartingBalanceUsd: number;
+  edgeSwingCurrentBalanceUsd: number;
+  edgeSwingRiskPercent: number;
   tradingWalletAddress: string;
   tradingSignatureType: "EOA" | "POLY_PROXY";
   hasTradingCredentials: boolean;
@@ -193,8 +198,11 @@ export type UserProfileResponse = {
   }>;
 };
 
+export type StrategyKey = "best_trades" | "edge_swing";
+
 export type StrategyPosition = {
   id: string;
+  strategyKey?: StrategyKey;
   username: string;
   marketSlug: string;
   marketQuestion: string;
@@ -214,6 +222,7 @@ export type StrategyPosition = {
   soldPercent: number;
   trim96Hit: boolean;
   setupQuality: number;
+  peakEdgePoints?: number;
   exitReason?: string;
   originalParticipants: Array<{
     wallet: string;
@@ -224,6 +233,7 @@ export type StrategyPosition = {
 
 export type StrategyTrade = {
   id: string;
+  strategyKey?: StrategyKey;
   marketSlug: string;
   marketQuestion: string;
   marketUrl: string;

@@ -95,6 +95,11 @@ type UserProfileResponse = {
   startingBalanceUsd: number;
   currentBalanceUsd: number;
   riskPercent: number;
+  edgeSwingPaperTradingEnabled: boolean;
+  edgeSwingLiveTradingEnabled: boolean;
+  edgeSwingStartingBalanceUsd: number;
+  edgeSwingCurrentBalanceUsd: number;
+  edgeSwingRiskPercent: number;
   tradingWalletAddress: string;
   tradingSignatureType: "EOA" | "POLY_PROXY";
   hasTradingCredentials: boolean;
@@ -140,6 +145,7 @@ type StrategyPosition = {
 
 type StrategyTrade = {
   id: string;
+  strategyKey?: "best_trades" | "edge_swing";
   marketSlug: string;
   marketQuestion: string;
   marketUrl: string;
@@ -211,7 +217,15 @@ type GapPageResponse = {
 };
 
 type Language = "en" | "he";
-type PageRoute = "/" | "/best-trades" | "/paper-auto-trade" | "/live-auto-trade" | "/gaps" | "/profile";
+type PageRoute =
+  | "/"
+  | "/best-trades"
+  | "/paper-auto-best-trades"
+  | "/live-auto-best-trades"
+  | "/paper-auto-edge-swing"
+  | "/live-auto-edge-swing"
+  | "/gaps"
+  | "/profile";
 
 const positiveOutcomeKeywords = ["yes", "up", "above", "over", "higher", "more", "long"];
 const negativeOutcomeKeywords = ["no", "down", "below", "under", "lower", "less", "short"];
@@ -244,11 +258,21 @@ function getPageRoute(pathname: string): PageRoute {
   if (
     pathname === "/profile" ||
     pathname === "/best-trades" ||
-    pathname === "/paper-auto-trade" ||
-    pathname === "/live-auto-trade" ||
+    pathname === "/paper-auto-best-trades" ||
+    pathname === "/live-auto-best-trades" ||
+    pathname === "/paper-auto-edge-swing" ||
+    pathname === "/live-auto-edge-swing" ||
     pathname === "/gaps"
   ) {
     return pathname;
+  }
+
+  if (pathname === "/paper-auto-trade") {
+    return "/paper-auto-best-trades";
+  }
+
+  if (pathname === "/live-auto-trade") {
+    return "/live-auto-best-trades";
   }
 
   return "/";
@@ -259,8 +283,10 @@ const copy = {
     profile: "Profile",
     monitor: "Monitor",
     bestTrades: "Best trades",
-    paperAutoTrade: "Paper auto trading",
-    liveAutoTrade: "Live auto trading",
+    paperAutoBestTrades: "Paper auto best trades",
+    liveAutoBestTrades: "Live auto best trades",
+    paperAutoEdgeSwing: "Paper auto edge swing",
+    liveAutoEdgeSwing: "Live auto edge swing",
     gaps: "Gaps",
     menu: "Menu",
     closeMenu: "Close menu",
@@ -283,6 +309,7 @@ const copy = {
     paperTrading: "Paper trading",
     liveTrading: "Live trading",
     liveTradingEnabled: "Live trading armed",
+    liveTradingCredentials: "Live trading credentials",
     liveTradingReady: "Live trading ready",
     liveTradingNotReady: "Missing wallet or credentials",
     liveActivity: "Live activity",
@@ -300,10 +327,17 @@ const copy = {
       "These encrypted credentials power real Polymarket orders. Live trading only runs when armed.",
     discordWebhookUrl: "Discord webhook URL",
     monitoredWallet: "Tracked Polymarket wallet",
-    paperTradingEnabled: "Paper trading armed",
+    paperTradingEnabled: "Paper auto best trades armed",
+    edgeSwingPaperTradingEnabled: "Paper auto edge swing armed",
+    bestTradesLiveTradingEnabled: "Live auto best trades armed",
+    edgeSwingLiveTradingEnabled: "Live auto edge swing armed",
     startingBalance: "Starting balance",
     currentBalance: "Current balance",
     riskPercent: "Risk per trade %",
+    autoBestTradesSettings: "Auto best trades",
+    autoBestTradesBody: "The original strategy only enters the highest-conviction best-trade setups.",
+    autoEdgeSwingSettings: "Auto edge swing",
+    autoEdgeSwingBody: "This broader strategy enters when the edge is at least 50 points and exits after a 50% drop from the peak edge.",
     tradingWalletAddress: "Trading wallet address",
     tradingSignatureType: "Signature type",
     tradingSignatureTypeEoa: "EOA",
@@ -336,10 +370,14 @@ const copy = {
     bestTradesLosses: "Losses",
     bestTradesTracked: "Tracked",
     bestTradesWinRatePending: "Pending",
-    autoTradeTitle: "Paper auto trading",
+    autoTradeTitle: "Paper auto best trades",
     autoTradeSubtitle: "Paper positions based on the best-trade entry and thesis-break exit logic.",
-    liveAutoTradeTitle: "Live auto trading",
+    liveAutoTradeTitle: "Live auto best trades",
     liveAutoTradeSubtitle: "Real Polymarket orders driven by the same best-trade strategy.",
+    edgeSwingTitle: "Paper auto edge swing",
+    edgeSwingSubtitle: "Paper positions on broader edge setups with a 50-point entry edge and 50% peak-edge trailing exit.",
+    liveEdgeSwingTitle: "Live auto edge swing",
+    liveEdgeSwingSubtitle: "Real Polymarket orders driven by the broader edge-swing strategy.",
     gapsTitle: "Gaps",
     gapsSubtitle: "Sports no/no pairs where the executable asks add up to less than 1.",
     gapPairType: "Pair type",
@@ -424,8 +462,10 @@ const copy = {
     profile: "פרופיל",
     monitor: "מוניטור",
     bestTrades: "העסקאות הטובות ביותר",
-    paperAutoTrade: "מסחר אוטומטי בדמו",
-    liveAutoTrade: "מסחר אוטומטי אמיתי",
+    paperAutoBestTrades: "Paper auto best trades",
+    liveAutoBestTrades: "Live auto best trades",
+    paperAutoEdgeSwing: "Paper auto edge swing",
+    liveAutoEdgeSwing: "Live auto edge swing",
     gaps: "פערים",
     menu: "תפריט",
     closeMenu: "סגור תפריט",
@@ -448,6 +488,7 @@ const copy = {
     paperTrading: "מסחר דמו",
     liveTrading: "מסחר אמיתי",
     liveTradingEnabled: "מסחר אמיתי פעיל",
+    liveTradingCredentials: "פרטי מסחר אמיתי",
     liveTradingReady: "מסחר אמיתי מוכן",
     liveTradingNotReady: "חסרים ארנק או פרטי גישה",
     liveActivity: "פעילות אמיתית",
@@ -465,10 +506,17 @@ const copy = {
       "פרטי המסחר המוצפנים האלה מפעילים פקודות אמיתיות בפולימרקט. מסחר אמיתי רץ רק כשהוא מופעל.",
     discordWebhookUrl: "כתובת וובהוק של דיסקורד",
     monitoredWallet: "ארנק פולימרקט למעקב",
-    paperTradingEnabled: "מסחר דמו פעיל",
+    paperTradingEnabled: "Paper auto best trades armed",
+    edgeSwingPaperTradingEnabled: "Paper auto edge swing armed",
+    bestTradesLiveTradingEnabled: "Live auto best trades armed",
+    edgeSwingLiveTradingEnabled: "Live auto edge swing armed",
     startingBalance: "בנק רול התחלתי",
     currentBalance: "יתרה נוכחית",
     riskPercent: "סיכון לעסקה %",
+    autoBestTradesSettings: "Auto best trades",
+    autoBestTradesBody: "The original strategy only enters the highest-conviction best-trade setups.",
+    autoEdgeSwingSettings: "Auto edge swing",
+    autoEdgeSwingBody: "This broader strategy enters when the edge is at least 50 points and exits after a 50% drop from the peak edge.",
     tradingWalletAddress: "כתובת ארנק למסחר",
     tradingSignatureType: "סוג חתימה",
     tradingSignatureTypeEoa: "EOA",
@@ -501,10 +549,14 @@ const copy = {
     bestTradesLosses: "הפסדים",
     bestTradesTracked: "במעקב",
     bestTradesWinRatePending: "ממתין",
-    autoTradeTitle: "מסחר אוטומטי בדמו",
-    autoTradeSubtitle: "פוזיציות נייר שמבוססות על כניסת Best trade ויציאה לפי שבירת התזה.",
-    liveAutoTradeTitle: "מסחר אוטומטי אמיתי",
-    liveAutoTradeSubtitle: "פקודות אמיתיות בפולימרקט שמבוססות על אותה אסטרטגיית Best trade.",
+    autoTradeTitle: "Paper auto best trades",
+    autoTradeSubtitle: "Paper positions based on the best-trade entry and thesis-break exit logic.",
+    liveAutoTradeTitle: "Live auto best trades",
+    liveAutoTradeSubtitle: "Real Polymarket orders driven by the same best-trade strategy.",
+    edgeSwingTitle: "Paper auto edge swing",
+    edgeSwingSubtitle: "Paper positions on broader edge setups with a 50-point entry edge and 50% peak-edge trailing exit.",
+    liveEdgeSwingTitle: "Live auto edge swing",
+    liveEdgeSwingSubtitle: "Real Polymarket orders driven by the broader edge-swing strategy.",
     gapsTitle: "פערים",
     gapsSubtitle: "זוגות ספורט No/No שבהם סכום האסקים קטן מ-1.",
     gapPairType: "סוג זוג",
@@ -637,6 +689,10 @@ function App() {
   const [profileFormLiveTradingEnabled, setProfileFormLiveTradingEnabled] = useState(false);
   const [profileFormStartingBalanceUsd, setProfileFormStartingBalanceUsd] = useState("1000");
   const [profileFormRiskPercent, setProfileFormRiskPercent] = useState("5");
+  const [profileFormEdgeSwingPaperTradingEnabled, setProfileFormEdgeSwingPaperTradingEnabled] = useState(false);
+  const [profileFormEdgeSwingLiveTradingEnabled, setProfileFormEdgeSwingLiveTradingEnabled] = useState(false);
+  const [profileFormEdgeSwingStartingBalanceUsd, setProfileFormEdgeSwingStartingBalanceUsd] = useState("1000");
+  const [profileFormEdgeSwingRiskPercent, setProfileFormEdgeSwingRiskPercent] = useState("5");
   const [profileFormTradingWalletAddress, setProfileFormTradingWalletAddress] = useState("");
   const [profileFormTradingSignatureType, setProfileFormTradingSignatureType] =
     useState<"EOA" | "POLY_PROXY">("EOA");
@@ -682,6 +738,21 @@ function App() {
   const deferredSearchQuery = useDeferredValue(debouncedSearchQuery);
   const deferredRefreshVersion = useDeferredValue(refreshVersion);
   const t = copy[language];
+  const strategyRoute =
+    currentPath === "/paper-auto-edge-swing" || currentPath === "/live-auto-edge-swing"
+      ? "edge_swing"
+      : "best_trades";
+  const isPaperStrategyPage =
+    currentPath === "/paper-auto-best-trades" || currentPath === "/paper-auto-edge-swing";
+  const isLiveStrategyPage =
+    currentPath === "/live-auto-best-trades" || currentPath === "/live-auto-edge-swing";
+  const strategyPaperMenuLabel = strategyRoute === "edge_swing" ? t.paperAutoEdgeSwing : t.paperAutoBestTrades;
+  const strategyLiveMenuLabel = strategyRoute === "edge_swing" ? t.liveAutoEdgeSwing : t.liveAutoBestTrades;
+  const strategyPaperTitle = strategyRoute === "edge_swing" ? t.edgeSwingTitle : t.autoTradeTitle;
+  const strategyPaperSubtitle = strategyRoute === "edge_swing" ? t.edgeSwingSubtitle : t.autoTradeSubtitle;
+  const strategyLiveTitle = strategyRoute === "edge_swing" ? t.liveEdgeSwingTitle : t.liveAutoTradeTitle;
+  const strategyLiveSubtitle =
+    strategyRoute === "edge_swing" ? t.liveEdgeSwingSubtitle : t.liveAutoTradeSubtitle;
 
   useEffect(() => {
     document.documentElement.lang = language;
@@ -795,7 +866,13 @@ function App() {
   }, [marketSort, deferredSearchQuery, currentPath]);
 
   useEffect(() => {
-    if (currentPath === "/profile" || currentPath === "/paper-auto-trade" || currentPath === "/live-auto-trade") {
+    if (
+      currentPath === "/profile" ||
+      currentPath === "/paper-auto-best-trades" ||
+      currentPath === "/live-auto-best-trades" ||
+      currentPath === "/paper-auto-edge-swing" ||
+      currentPath === "/live-auto-edge-swing"
+    ) {
       return;
     }
 
@@ -904,7 +981,7 @@ function App() {
   }, [currentPath, marketSort, deferredSearchQuery, pageCount, deferredRefreshVersion]);
 
   useEffect(() => {
-    if (currentPath !== "/paper-auto-trade" && currentPath !== "/live-auto-trade") {
+    if (!isPaperStrategyPage && !isLiveStrategyPage) {
       return;
     }
 
@@ -914,8 +991,8 @@ function App() {
       setIsLoadingStrategyPositions(true);
       try {
         const [paperResponse, liveResponse] = await Promise.all([
-          fetch("/api/strategy-positions"),
-          fetch("/api/live-strategy-positions"),
+          fetch(`/api/strategy-positions?strategy=${strategyRoute}`),
+          fetch(`/api/live-strategy-positions?strategy=${strategyRoute}`),
         ]);
         const [paperPayload, livePayload] = (await Promise.all([
           paperResponse.json(),
@@ -944,7 +1021,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [currentPath, deferredRefreshVersion]);
+  }, [deferredRefreshVersion, isLiveStrategyPage, isPaperStrategyPage, strategyRoute]);
 
   useEffect(() => {
     if (currentPath !== "/profile") {
@@ -968,6 +1045,10 @@ function App() {
         setProfileFormLiveTradingEnabled(payload.liveTradingEnabled);
         setProfileFormStartingBalanceUsd(String(payload.startingBalanceUsd));
         setProfileFormRiskPercent(String(payload.riskPercent));
+        setProfileFormEdgeSwingPaperTradingEnabled(payload.edgeSwingPaperTradingEnabled);
+        setProfileFormEdgeSwingLiveTradingEnabled(payload.edgeSwingLiveTradingEnabled);
+        setProfileFormEdgeSwingStartingBalanceUsd(String(payload.edgeSwingStartingBalanceUsd));
+        setProfileFormEdgeSwingRiskPercent(String(payload.edgeSwingRiskPercent));
         setProfileFormTradingWalletAddress(payload.tradingWalletAddress);
         setProfileFormTradingSignatureType(payload.tradingSignatureType);
         setProfileFormPrivateKey("");
@@ -1089,6 +1170,10 @@ function App() {
           liveTradingEnabled: profileFormLiveTradingEnabled,
           startingBalanceUsd: Number(profileFormStartingBalanceUsd || 0),
           riskPercent: Number(profileFormRiskPercent || 0),
+          edgeSwingPaperTradingEnabled: profileFormEdgeSwingPaperTradingEnabled,
+          edgeSwingLiveTradingEnabled: profileFormEdgeSwingLiveTradingEnabled,
+          edgeSwingStartingBalanceUsd: Number(profileFormEdgeSwingStartingBalanceUsd || 0),
+          edgeSwingRiskPercent: Number(profileFormEdgeSwingRiskPercent || 0),
           tradingWalletAddress: profileFormTradingWalletAddress,
           tradingSignatureType: profileFormTradingSignatureType,
           privateKey: profileFormPrivateKey,
@@ -1110,6 +1195,10 @@ function App() {
       setProfileFormLiveTradingEnabled(payload.liveTradingEnabled);
       setProfileFormStartingBalanceUsd(String(payload.startingBalanceUsd));
       setProfileFormRiskPercent(String(payload.riskPercent));
+      setProfileFormEdgeSwingPaperTradingEnabled(payload.edgeSwingPaperTradingEnabled);
+      setProfileFormEdgeSwingLiveTradingEnabled(payload.edgeSwingLiveTradingEnabled);
+      setProfileFormEdgeSwingStartingBalanceUsd(String(payload.edgeSwingStartingBalanceUsd));
+      setProfileFormEdgeSwingRiskPercent(String(payload.edgeSwingRiskPercent));
       setProfileFormTradingWalletAddress(payload.tradingWalletAddress);
       setProfileFormTradingSignatureType(payload.tradingSignatureType);
       setProfileFormPrivateKey("");
@@ -1235,17 +1324,31 @@ function App() {
             </button>
             <button
               type="button"
-              className={`side-menu-link ${currentPath === "/paper-auto-trade" ? "side-menu-link-active" : ""}`}
-              onClick={() => navigateTo("/paper-auto-trade")}
+              className={`side-menu-link ${currentPath === "/paper-auto-best-trades" ? "side-menu-link-active" : ""}`}
+              onClick={() => navigateTo("/paper-auto-best-trades")}
             >
-              {t.paperAutoTrade}
+              {t.paperAutoBestTrades}
             </button>
             <button
               type="button"
-              className={`side-menu-link ${currentPath === "/live-auto-trade" ? "side-menu-link-active" : ""}`}
-              onClick={() => navigateTo("/live-auto-trade")}
+              className={`side-menu-link ${currentPath === "/live-auto-best-trades" ? "side-menu-link-active" : ""}`}
+              onClick={() => navigateTo("/live-auto-best-trades")}
             >
-              {t.liveAutoTrade}
+              {t.liveAutoBestTrades}
+            </button>
+            <button
+              type="button"
+              className={`side-menu-link ${currentPath === "/paper-auto-edge-swing" ? "side-menu-link-active" : ""}`}
+              onClick={() => navigateTo("/paper-auto-edge-swing")}
+            >
+              {t.paperAutoEdgeSwing}
+            </button>
+            <button
+              type="button"
+              className={`side-menu-link ${currentPath === "/live-auto-edge-swing" ? "side-menu-link-active" : ""}`}
+              onClick={() => navigateTo("/live-auto-edge-swing")}
+            >
+              {t.liveAutoEdgeSwing}
             </button>
             <button
               type="button"
@@ -1346,7 +1449,8 @@ function App() {
 
               <div className="profile-copy">
                 <p className="section-kicker">{t.paperTrading}</p>
-                <p>{t.paperTradingBody}</p>
+                <h3>{t.autoBestTradesSettings}</h3>
+                <p>{t.autoBestTradesBody}</p>
               </div>
 
               <label className="profile-toggle">
@@ -1356,6 +1460,15 @@ function App() {
                   onChange={(event) => setProfileFormPaperTradingEnabled(event.target.checked)}
                 />
                 <span>{t.paperTradingEnabled}</span>
+              </label>
+
+              <label className="profile-toggle">
+                <input
+                  type="checkbox"
+                  checked={profileFormLiveTradingEnabled}
+                  onChange={(event) => setProfileFormLiveTradingEnabled(event.target.checked)}
+                />
+                <span>{t.bestTradesLiveTradingEnabled}</span>
               </label>
 
               <div className="profile-field-grid">
@@ -1389,18 +1502,64 @@ function App() {
               </div>
 
               <div className="profile-copy">
-                <p className="section-kicker">{t.liveTrading}</p>
-                <p>{t.liveTradingBody}</p>
+                <p className="section-kicker">{t.paperTrading}</p>
+                <h3>{t.autoEdgeSwingSettings}</h3>
+                <p>{t.autoEdgeSwingBody}</p>
               </div>
 
               <label className="profile-toggle">
                 <input
                   type="checkbox"
-                  checked={profileFormLiveTradingEnabled}
-                  onChange={(event) => setProfileFormLiveTradingEnabled(event.target.checked)}
+                  checked={profileFormEdgeSwingPaperTradingEnabled}
+                  onChange={(event) => setProfileFormEdgeSwingPaperTradingEnabled(event.target.checked)}
                 />
-                <span>{t.liveTradingEnabled}</span>
+                <span>{t.edgeSwingPaperTradingEnabled}</span>
               </label>
+
+              <label className="profile-toggle">
+                <input
+                  type="checkbox"
+                  checked={profileFormEdgeSwingLiveTradingEnabled}
+                  onChange={(event) => setProfileFormEdgeSwingLiveTradingEnabled(event.target.checked)}
+                />
+                <span>{t.edgeSwingLiveTradingEnabled}</span>
+              </label>
+
+              <div className="profile-field-grid">
+                <label className="profile-field">
+                  <span>{t.startingBalance}</span>
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={profileFormEdgeSwingStartingBalanceUsd}
+                    onChange={(event) => setProfileFormEdgeSwingStartingBalanceUsd(event.target.value)}
+                  />
+                </label>
+
+                <label className="profile-field">
+                  <span>{t.currentBalance}</span>
+                  <input type="text" value={currencyFormatter.format(profile?.edgeSwingCurrentBalanceUsd ?? 0)} disabled />
+                </label>
+
+                <label className="profile-field">
+                  <span>{t.riskPercent}</span>
+                  <input
+                    type="number"
+                    min="0.1"
+                    max="100"
+                    step="0.1"
+                    value={profileFormEdgeSwingRiskPercent}
+                    onChange={(event) => setProfileFormEdgeSwingRiskPercent(event.target.value)}
+                  />
+                </label>
+              </div>
+
+              <div className="profile-copy">
+                <p className="section-kicker">{t.liveTrading}</p>
+                <h3>{t.liveTradingCredentials}</h3>
+                <p>{t.liveTradingBody}</p>
+              </div>
 
               <p className="profile-helper">
                 {profile?.liveTradingError ?? (profile?.liveTradingReady ? t.liveTradingReady : t.liveTradingNotReady)}
@@ -1540,13 +1699,13 @@ function App() {
               </div>
             </div>
           </section>
-        ) : currentPath === "/paper-auto-trade" ? (
+        ) : isPaperStrategyPage ? (
           <section className="feed-section">
             <div className="feed-header">
               <div>
-                <p className="section-kicker">{t.paperAutoTrade}</p>
-                <h2>{t.autoTradeTitle}</h2>
-                <p className="feed-subtitle">{t.autoTradeSubtitle}</p>
+                <p className="section-kicker">{strategyPaperMenuLabel}</p>
+                <h2>{strategyPaperTitle}</h2>
+                <p className="feed-subtitle">{strategyPaperSubtitle}</p>
               </div>
             </div>
 
@@ -1562,7 +1721,7 @@ function App() {
             {strategyDashboard.positions.length === 0 && !isLoadingStrategyPositions ? (
               <div className="empty-state">
                 <div className="empty-pulse" />
-                <h3>{t.autoTradeTitle}</h3>
+                <h3>{strategyPaperTitle}</h3>
                 <p>{t.noStrategyPositions}</p>
               </div>
             ) : (
@@ -1663,13 +1822,13 @@ function App() {
             </div>
 
           </section>
-        ) : currentPath === "/live-auto-trade" ? (
+        ) : isLiveStrategyPage ? (
           <section className="feed-section">
             <div className="feed-header">
               <div>
-                <p className="section-kicker">{t.liveAutoTrade}</p>
-                <h2>{t.liveAutoTradeTitle}</h2>
-                <p className="feed-subtitle">{t.liveAutoTradeSubtitle}</p>
+                <p className="section-kicker">{strategyLiveMenuLabel}</p>
+                <h2>{strategyLiveTitle}</h2>
+                <p className="feed-subtitle">{strategyLiveSubtitle}</p>
               </div>
             </div>
 

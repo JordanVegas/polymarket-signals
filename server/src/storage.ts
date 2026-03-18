@@ -3,6 +3,7 @@ import { config } from "./config.js";
 import type {
   GapOpportunity,
   MarketAggregate,
+  StrategyKey,
   StrategyPosition,
   StrategyTrade,
   TradeRecord,
@@ -81,6 +82,11 @@ export type PersistedUserWebhookSetting = {
   startingBalanceUsd?: number;
   currentBalanceUsd?: number;
   riskPercent?: number;
+  edgeSwingPaperTradingEnabled?: boolean;
+  edgeSwingLiveTradingEnabled?: boolean;
+  edgeSwingStartingBalanceUsd?: number;
+  edgeSwingCurrentBalanceUsd?: number;
+  edgeSwingRiskPercent?: number;
   tradingWalletAddress?: string;
   tradingSignatureType?: "EOA" | "POLY_PROXY";
   encryptedPrivateKey?: string;
@@ -156,6 +162,9 @@ export type PersistedLiveStrategyTrade = StrategyTrade & {
   username: string;
   updatedAtDate: Date;
 };
+
+const strategyKeyFilter = (strategyKey: StrategyKey) =>
+  strategyKey === "best_trades" ? { $ne: "edge_swing" as StrategyKey } : strategyKey;
 
 export class SignalStorage {
   private client: MongoClient | null = null;
@@ -409,23 +418,32 @@ export class SignalStorage {
     };
   }
 
-  async loadStrategyPositions(username: string, limit = 100): Promise<StrategyPosition[]> {
+  async loadStrategyPositions(
+    username: string,
+    strategyKey: StrategyKey = "best_trades",
+    limit = 100,
+  ): Promise<StrategyPosition[]> {
     const rows = await this.strategyPositionCollection()
-      .find({ username }, { sort: { updatedAt: -1 }, limit })
+      .find({ username, strategyKey: strategyKeyFilter(strategyKey) }, { sort: { updatedAt: -1 }, limit })
       .toArray();
 
-    return rows.map(({ _id: _ignored, updatedAtDate: _updatedAtDate, ...position }) => position);
+    return rows.map(({ _id: _ignored, updatedAtDate: _updatedAtDate, ...position }) => ({
+      ...position,
+      strategyKey: position.strategyKey ?? "best_trades",
+    }));
   }
 
   async loadOpenStrategyPosition(
     username: string,
     marketSlug: string,
     outcome: string,
+    strategyKey: StrategyKey = "best_trades",
   ): Promise<StrategyPosition | null> {
     const row = await this.strategyPositionCollection().findOne({
       username,
       marketSlug,
       outcome,
+      strategyKey: strategyKeyFilter(strategyKey),
       status: "open",
     });
 
@@ -434,16 +452,18 @@ export class SignalStorage {
     }
 
     const { _id: _ignored, updatedAtDate: _updatedAtDate, ...position } = row;
-    return position;
+    return { ...position, strategyKey: position.strategyKey ?? "best_trades" };
   }
 
   async loadOpenStrategyPositionForMarket(
     username: string,
     marketSlug: string,
+    strategyKey: StrategyKey = "best_trades",
   ): Promise<StrategyPosition | null> {
     const row = await this.strategyPositionCollection().findOne({
       username,
       marketSlug,
+      strategyKey: strategyKeyFilter(strategyKey),
       status: "open",
     });
 
@@ -452,12 +472,13 @@ export class SignalStorage {
     }
 
     const { _id: _ignored, updatedAtDate: _updatedAtDate, ...position } = row;
-    return position;
+    return { ...position, strategyKey: position.strategyKey ?? "best_trades" };
   }
 
   async saveStrategyPosition(position: StrategyPosition): Promise<void> {
     const payload: PersistedStrategyPosition = {
       ...position,
+      strategyKey: position.strategyKey ?? "best_trades",
       updatedAtDate: new Date(),
     };
 
@@ -468,23 +489,32 @@ export class SignalStorage {
     );
   }
 
-  async loadLiveStrategyPositions(username: string, limit = 100): Promise<StrategyPosition[]> {
+  async loadLiveStrategyPositions(
+    username: string,
+    strategyKey: StrategyKey = "best_trades",
+    limit = 100,
+  ): Promise<StrategyPosition[]> {
     const rows = await this.liveStrategyPositionCollection()
-      .find({ username }, { sort: { updatedAt: -1 }, limit })
+      .find({ username, strategyKey: strategyKeyFilter(strategyKey) }, { sort: { updatedAt: -1 }, limit })
       .toArray();
 
-    return rows.map(({ _id: _ignored, updatedAtDate: _updatedAtDate, ...position }) => position);
+    return rows.map(({ _id: _ignored, updatedAtDate: _updatedAtDate, ...position }) => ({
+      ...position,
+      strategyKey: position.strategyKey ?? "best_trades",
+    }));
   }
 
   async loadOpenLiveStrategyPosition(
     username: string,
     marketSlug: string,
     outcome: string,
+    strategyKey: StrategyKey = "best_trades",
   ): Promise<StrategyPosition | null> {
     const row = await this.liveStrategyPositionCollection().findOne({
       username,
       marketSlug,
       outcome,
+      strategyKey: strategyKeyFilter(strategyKey),
       status: "open",
     });
 
@@ -493,16 +523,18 @@ export class SignalStorage {
     }
 
     const { _id: _ignored, updatedAtDate: _updatedAtDate, ...position } = row;
-    return position;
+    return { ...position, strategyKey: position.strategyKey ?? "best_trades" };
   }
 
   async loadOpenLiveStrategyPositionForMarket(
     username: string,
     marketSlug: string,
+    strategyKey: StrategyKey = "best_trades",
   ): Promise<StrategyPosition | null> {
     const row = await this.liveStrategyPositionCollection().findOne({
       username,
       marketSlug,
+      strategyKey: strategyKeyFilter(strategyKey),
       status: "open",
     });
 
@@ -511,12 +543,13 @@ export class SignalStorage {
     }
 
     const { _id: _ignored, updatedAtDate: _updatedAtDate, ...position } = row;
-    return position;
+    return { ...position, strategyKey: position.strategyKey ?? "best_trades" };
   }
 
   async saveLiveStrategyPosition(position: StrategyPosition): Promise<void> {
     const payload: PersistedLiveStrategyPosition = {
       ...position,
+      strategyKey: position.strategyKey ?? "best_trades",
       updatedAtDate: new Date(),
     };
 
@@ -527,17 +560,25 @@ export class SignalStorage {
     );
   }
 
-  async loadLiveStrategyTrades(username: string, limit = 200): Promise<StrategyTrade[]> {
+  async loadLiveStrategyTrades(
+    username: string,
+    strategyKey: StrategyKey = "best_trades",
+    limit = 200,
+  ): Promise<StrategyTrade[]> {
     const rows = await this.liveStrategyTradeCollection()
-      .find({ username }, { sort: { timestamp: -1 }, limit })
+      .find({ username, strategyKey: strategyKeyFilter(strategyKey) }, { sort: { timestamp: -1 }, limit })
       .toArray();
 
-    return rows.map(({ _id: _ignored, username: _username, updatedAtDate: _updatedAtDate, ...trade }) => trade);
+    return rows.map(({ _id: _ignored, username: _username, updatedAtDate: _updatedAtDate, ...trade }) => ({
+      ...trade,
+      strategyKey: trade.strategyKey ?? "best_trades",
+    }));
   }
 
   async saveLiveStrategyTrade(username: string, trade: StrategyTrade): Promise<void> {
     const payload: PersistedLiveStrategyTrade = {
       ...trade,
+      strategyKey: trade.strategyKey ?? "best_trades",
       username,
       updatedAtDate: new Date(),
     };
@@ -663,6 +704,11 @@ export class SignalStorage {
       startingBalanceUsd?: number;
       currentBalanceUsd?: number;
       riskPercent?: number;
+      edgeSwingPaperTradingEnabled?: boolean;
+      edgeSwingLiveTradingEnabled?: boolean;
+      edgeSwingStartingBalanceUsd?: number;
+      edgeSwingCurrentBalanceUsd?: number;
+      edgeSwingRiskPercent?: number;
       tradingWalletAddress?: string;
       tradingSignatureType?: "EOA" | "POLY_PROXY";
       encryptedPrivateKey?: string;
@@ -705,6 +751,11 @@ export class SignalStorage {
     startingBalanceUsd: number | null;
     currentBalanceUsd: number | null;
     riskPercent: number | null;
+    edgeSwingPaperTradingEnabled: boolean;
+    edgeSwingLiveTradingEnabled: boolean;
+    edgeSwingStartingBalanceUsd: number | null;
+    edgeSwingCurrentBalanceUsd: number | null;
+    edgeSwingRiskPercent: number | null;
     tradingWalletAddress: string | null;
     tradingSignatureType: "EOA" | "POLY_PROXY";
     encryptedPrivateKey: string | null;
@@ -721,6 +772,11 @@ export class SignalStorage {
       startingBalanceUsd: row?.startingBalanceUsd ?? null,
       currentBalanceUsd: row?.currentBalanceUsd ?? null,
       riskPercent: row?.riskPercent ?? null,
+      edgeSwingPaperTradingEnabled: row?.edgeSwingPaperTradingEnabled ?? false,
+      edgeSwingLiveTradingEnabled: row?.edgeSwingLiveTradingEnabled ?? false,
+      edgeSwingStartingBalanceUsd: row?.edgeSwingStartingBalanceUsd ?? null,
+      edgeSwingCurrentBalanceUsd: row?.edgeSwingCurrentBalanceUsd ?? null,
+      edgeSwingRiskPercent: row?.edgeSwingRiskPercent ?? null,
       tradingWalletAddress: row?.tradingWalletAddress ?? null,
       tradingSignatureType: row?.tradingSignatureType ?? "EOA",
       encryptedPrivateKey: row?.encryptedPrivateKey ?? null,
@@ -921,10 +977,12 @@ export class SignalStorage {
       .filter((row) => Boolean(row.username && row.monitoredWallet));
   }
 
-  async loadAutoTradeUsers(): Promise<Array<{ username: string }>> {
+  async loadAutoTradeUsers(strategyKey: StrategyKey = "best_trades"): Promise<Array<{ username: string }>> {
+    const enabledField =
+      strategyKey === "edge_swing" ? "edgeSwingPaperTradingEnabled" : "autoTradeEnabled";
     const rows = await this.userWebhookCollection()
       .find(
-        { autoTradeEnabled: true },
+        { [enabledField]: true },
         { projection: { _id: 0, username: 1 } },
       )
       .toArray();
@@ -936,11 +994,13 @@ export class SignalStorage {
       .filter((row) => Boolean(row.username));
   }
 
-  async loadLiveTradeUsers(): Promise<Array<{ username: string }>> {
+  async loadLiveTradeUsers(strategyKey: StrategyKey = "best_trades"): Promise<Array<{ username: string }>> {
+    const enabledField =
+      strategyKey === "edge_swing" ? "edgeSwingLiveTradingEnabled" : "liveTradeEnabled";
     const rows = await this.userWebhookCollection()
       .find(
         {
-          liveTradeEnabled: true,
+          [enabledField]: true,
           tradingWalletAddress: { $exists: true, $ne: "" },
           encryptedPrivateKey: { $exists: true, $ne: "" },
           encryptedApiKey: { $exists: true, $ne: "" },

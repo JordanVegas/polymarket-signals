@@ -85,6 +85,10 @@ app.put("/api/profile", async (request, response) => {
     const liveTradingEnabled = Boolean(request.body.liveTradingEnabled);
     const startingBalanceUsd = Number(request.body.startingBalanceUsd ?? 1000);
     const riskPercent = Number(request.body.riskPercent ?? 5);
+    const edgeSwingPaperTradingEnabled = Boolean(request.body.edgeSwingPaperTradingEnabled);
+    const edgeSwingLiveTradingEnabled = Boolean(request.body.edgeSwingLiveTradingEnabled);
+    const edgeSwingStartingBalanceUsd = Number(request.body.edgeSwingStartingBalanceUsd ?? 1000);
+    const edgeSwingRiskPercent = Number(request.body.edgeSwingRiskPercent ?? 5);
     const tradingWalletAddress = String(request.body.tradingWalletAddress ?? "");
     const tradingSignatureType =
       String(request.body.tradingSignatureType ?? "EOA") === "POLY_PROXY" ? "POLY_PROXY" : "EOA";
@@ -101,6 +105,10 @@ app.put("/api/profile", async (request, response) => {
         liveTradingEnabled,
         startingBalanceUsd,
         riskPercent,
+        edgeSwingPaperTradingEnabled,
+        edgeSwingLiveTradingEnabled,
+        edgeSwingStartingBalanceUsd,
+        edgeSwingRiskPercent,
         tradingWalletAddress,
         tradingSignatureType,
         privateKey,
@@ -143,7 +151,8 @@ app.get("/api/strategy-positions", async (request, response) => {
     return;
   }
 
-  response.json(await service.getStrategyPositions(request.sessionUser.username));
+  const strategyKey = String(request.query.strategy ?? "best_trades") === "edge_swing" ? "edge_swing" : "best_trades";
+  response.json(await service.getStrategyPositions(request.sessionUser.username, strategyKey));
 });
 
 app.get("/api/live-strategy-positions", async (request, response) => {
@@ -152,7 +161,8 @@ app.get("/api/live-strategy-positions", async (request, response) => {
     return;
   }
 
-  response.json(await service.getLiveStrategyPositions(request.sessionUser.username));
+  const strategyKey = String(request.query.strategy ?? "best_trades") === "edge_swing" ? "edge_swing" : "best_trades";
+  response.json(await service.getLiveStrategyPositions(request.sessionUser.username, strategyKey));
 });
 
 app.post("/api/market-alerts/watch", async (request, response) => {
