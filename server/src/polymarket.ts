@@ -36,6 +36,7 @@ const GAMMA_MARKETS_URL = "https://gamma-api.polymarket.com/markets";
 const DATA_API_URL = "https://data-api.polymarket.com";
 const CLOB_API_URL = "https://clob.polymarket.com";
 const CLOB_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
+const USDC_BASE_UNITS = 1_000_000;
 
 type RawMarket = {
   id: string;
@@ -3056,7 +3057,7 @@ export class PolymarketSignalService {
 
   private async getLiveCollateralBalance(client: ClobClient): Promise<number> {
     const response = await client.getBalanceAllowance({ asset_type: AssetType.COLLATERAL });
-    return Number(response.balance ?? 0);
+    return Number(response.balance ?? 0) / USDC_BASE_UNITS;
   }
 
   private isLiveTradingBlocked(username: string): boolean {
@@ -3111,7 +3112,10 @@ export class PolymarketSignalService {
     const response = await client.getBalanceAllowance(
       assetType === AssetType.CONDITIONAL ? { asset_type: assetType, token_id: tokenID } : { asset_type: assetType },
     );
-    const allowance = Number(response.allowance ?? 0);
+    const allowance =
+      assetType === AssetType.COLLATERAL
+        ? Number(response.allowance ?? 0) / USDC_BASE_UNITS
+        : Number(response.allowance ?? 0);
     if (allowance >= minimumAmount) {
       return;
     }
