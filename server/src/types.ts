@@ -265,6 +265,7 @@ export type StrategyDashboardResponse = {
     closedPositionCount: number;
     totalPositionCount: number;
     openExposureUsd: number;
+    realizedUsd: number;
     unrealizedUsd: number;
     totalEquityUsd: number;
   };

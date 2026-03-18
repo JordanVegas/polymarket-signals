@@ -186,6 +186,7 @@ type StrategyDashboardResponse = {
     closedPositionCount: number;
     totalPositionCount: number;
     openExposureUsd: number;
+    realizedUsd: number;
     unrealizedUsd: number;
     totalEquityUsd: number;
   };
@@ -421,7 +422,8 @@ const copy = {
     cashBalance: "Cash balance",
     openExposure: "Open exposure",
     totalEquity: "Total equity",
-    realizedPnl: "Unrealized",
+    realizedPnl: "Realized",
+    unrealizedPnl: "Unrealized",
     openPositions: "Open positions",
     closedPositions: "Closed positions",
     entrySize: "Entry size",
@@ -601,7 +603,8 @@ const copy = {
     cashBalance: "מזומן",
     openExposure: "חשיפה פתוחה",
     totalEquity: "שווי כולל",
-    realizedPnl: "לא ממומש",
+    realizedPnl: "ממומש",
+    unrealizedPnl: "לא ממומש",
     openPositions: "פוזיציות פתוחות",
     closedPositions: "פוזיציות סגורות",
     entrySize: "גודל כניסה",
@@ -1426,16 +1429,11 @@ function App() {
               value={marketPage.total.toString()}
               tone="neutral"
             />
-            <StatusRow
-              label={t.wsCoverage}
-              value={`${snapshot.status.websocketAssetsSeenRecentlyCount}/${snapshot.status.websocketSubscribedAssetCount} ${t.active}`}
-              tone="neutral"
-            />
-            <StatusRow
-              label={t.lastMarketSync}
-              value={formatTimestamp(snapshot.status.lastMarketSyncAt, t.pending)}
-              tone="neutral"
-            />
+              <StatusRow
+                label={t.wsCoverage}
+                value={`${snapshot.status.websocketAssetsSeenRecentlyCount}/${snapshot.status.websocketSubscribedAssetCount} ${t.active}`}
+                tone="neutral"
+              />
             <StatusRow
               label={t.lastTradeSeen}
               value={formatTimestamp(snapshot.status.lastTradeAt, t.pending)}
@@ -1756,9 +1754,10 @@ function App() {
               <StatusRow label={t.cashBalance} value={currencyFormatter.format(strategyDashboard.summary.cashBalanceUsd)} tone="neutral" />
               <StatusRow label={t.openExposure} value={currencyFormatter.format(strategyDashboard.summary.openExposureUsd)} tone="neutral" />
               <StatusRow label={t.totalEquity} value={currencyFormatter.format(strategyDashboard.summary.totalEquityUsd)} tone="green" />
-              <StatusRow label={t.realizedPnl} value={currencyFormatter.format(strategyDashboard.summary.unrealizedUsd)} tone={strategyDashboard.summary.unrealizedUsd >= 0 ? "green" : "blue"} />
+              <StatusRow label={t.realizedPnl} value={currencyFormatter.format(strategyDashboard.summary.realizedUsd)} tone={strategyDashboard.summary.realizedUsd >= 0 ? "green" : "blue"} />
               <StatusRow label={t.openPositions} value={strategyDashboard.summary.openPositionCount.toString()} tone="neutral" />
               <StatusRow label={t.closedPositions} value={strategyDashboard.summary.closedPositionCount.toString()} tone="neutral" />
+              <StatusRow label={t.unrealizedPnl} value={currencyFormatter.format(strategyDashboard.summary.unrealizedUsd)} tone={strategyDashboard.summary.unrealizedUsd >= 0 ? "green" : "blue"} />
             </div>
 
             {strategyDashboard.positions.length === 0 && !isLoadingStrategyPositions ? (
@@ -1879,9 +1878,10 @@ function App() {
               <StatusRow label={t.cashBalance} value={currencyFormatter.format(liveStrategyDashboard.summary.cashBalanceUsd)} tone="neutral" />
               <StatusRow label={t.openExposure} value={currencyFormatter.format(liveStrategyDashboard.summary.openExposureUsd)} tone="neutral" />
               <StatusRow label={t.totalEquity} value={currencyFormatter.format(liveStrategyDashboard.summary.totalEquityUsd)} tone="green" />
-              <StatusRow label={t.realizedPnl} value={currencyFormatter.format(liveStrategyDashboard.summary.unrealizedUsd)} tone={liveStrategyDashboard.summary.unrealizedUsd >= 0 ? "green" : "blue"} />
+              <StatusRow label={t.realizedPnl} value={currencyFormatter.format(liveStrategyDashboard.summary.realizedUsd)} tone={liveStrategyDashboard.summary.realizedUsd >= 0 ? "green" : "blue"} />
               <StatusRow label={t.openPositions} value={liveStrategyDashboard.summary.openPositionCount.toString()} tone="neutral" />
               <StatusRow label={t.closedPositions} value={liveStrategyDashboard.summary.closedPositionCount.toString()} tone="neutral" />
+              <StatusRow label={t.unrealizedPnl} value={currencyFormatter.format(liveStrategyDashboard.summary.unrealizedUsd)} tone={liveStrategyDashboard.summary.unrealizedUsd >= 0 ? "green" : "blue"} />
             </div>
             <p className="profile-helper">
               {liveStrategyDashboard.enabled

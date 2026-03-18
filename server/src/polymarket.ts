@@ -4074,6 +4074,7 @@ const buildStrategyDashboard = (
 ): StrategyDashboardResponse => {
   const openPositions = positions.filter((position) => position.status === "open");
   const closedPositions = positions.filter((position) => position.status === "closed");
+  const realizedUsd = positions.reduce((sum, position) => sum + position.realizedUsd, 0);
   const openExposureUsd = openPositions.reduce(
     (sum, position) => sum + position.remainingShares * position.lastPrice,
     0,
@@ -4093,6 +4094,7 @@ const buildStrategyDashboard = (
       closedPositionCount: closedPositions.length,
       totalPositionCount: positions.length,
       openExposureUsd,
+      realizedUsd,
       unrealizedUsd,
       totalEquityUsd: cashBalanceUsd + openExposureUsd,
     },
@@ -4108,6 +4110,7 @@ const buildStoredStrategyDashboard = (
 ): StrategyDashboardResponse => {
   const openPositions = positions.filter((position) => position.status === "open");
   const closedPositions = positions.filter((position) => position.status === "closed");
+  const realizedUsd = positions.reduce((sum, position) => sum + position.realizedUsd, 0);
   const openExposureUsd = openPositions.reduce(
     (sum, position) => sum + position.remainingShares * position.lastPrice,
     0,
@@ -4124,6 +4127,7 @@ const buildStoredStrategyDashboard = (
       closedPositionCount: closedPositions.length,
       totalPositionCount: positions.length,
       openExposureUsd,
+      realizedUsd,
       unrealizedUsd,
       totalEquityUsd: cashBalanceUsd + openExposureUsd,
     },
