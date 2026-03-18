@@ -100,6 +100,7 @@ export type MarketAggregate = {
   marketQuestion: string;
   marketUrl: string;
   marketImage: string;
+  marketEndDate?: string;
   latestTimestamp: number;
   totalUsd: number;
   totalFillCount: number;

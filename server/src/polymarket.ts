@@ -47,6 +47,7 @@ type RawMarket = {
   slug: string;
   image?: string;
   endDate?: string;
+  umaEndDate?: string;
   liquidityNum?: number;
   volume24hr?: number;
   clobTokenIds?: string;
@@ -215,6 +216,19 @@ const dedupeTrades = (trades: TradeRecord[]): TradeRecord[] => {
 
 const getTradeId = (trade: TradeRecord) =>
   `${trade.transactionHash}:${trade.proxyWallet}:${trade.asset}:${trade.side}:${trade.size}:${trade.price}`;
+
+const getMarketEndDateForSlug = (
+  marketsByAssetId: Map<string, MarketRecord>,
+  marketSlug: string,
+): string | undefined => {
+  for (const market of marketsByAssetId.values()) {
+    if (market.slug === marketSlug && market.endDate) {
+      return market.endDate;
+    }
+  }
+
+  return undefined;
+};
 
 const classifyTrader = (
   totalPnl: number,
@@ -937,7 +951,7 @@ export class PolymarketSignalService {
           question: market.question,
           slug: market.slug,
           image: market.image ?? "",
-          endDate: market.endDate ?? "",
+        endDate: market.endDate ?? market.umaEndDate ?? "",
           liquidity: Number(market.liquidityNum ?? 0),
           volume24hr: Number(market.volume24hr ?? 0),
           outcomeByAssetId,
@@ -1975,6 +1989,7 @@ export class PolymarketSignalService {
     for (const marketSlug of activeMarketSlugs) {
       const aggregate = aggregateBySlug.get(marketSlug);
       if (aggregate) {
+        aggregate.marketEndDate = getMarketEndDateForSlug(this.marketsByAssetId, marketSlug);
         await this.storage.saveMarketAggregate(aggregate);
       } else {
         await this.storage.deleteMarketAggregate(marketSlug);
@@ -1991,6 +2006,7 @@ export class PolymarketSignalService {
     const aggregate = aggregateMarkets(activeSignals)[0];
 
     if (aggregate) {
+      aggregate.marketEndDate = getMarketEndDateForSlug(this.marketsByAssetId, marketSlug);
       await this.storage.saveMarketAggregate(aggregate);
       await this.syncBestTradeCandidates([aggregate]);
       return;
@@ -4464,6 +4480,17 @@ const getMarketPriceForOutcome = (aggregate: MarketAggregate, outcome: string): 
 const qualifiesEdgeSwingMarket = (aggregate: MarketAggregate): boolean => {
   const leadOutcome = aggregate.outcomeWeights[0]?.outcome;
   if (!leadOutcome) {
+    return false;
+  }
+
+  const endDate = aggregate.marketEndDate ? Date.parse(aggregate.marketEndDate) : Number.NaN;
+  if (!Number.isFinite(endDate)) {
+    return false;
+  }
+
+  const now = Date.now();
+  const timeUntilEnd = endDate - now;
+  if (timeUntilEnd < 0 || timeUntilEnd > 2 * 24 * 60 * 60_000) {
     return false;
   }
 
