@@ -2701,8 +2701,10 @@ export class PolymarketSignalService {
     const endpoint = this.getRequestMetricKey(target);
     try {
       const dispatcher = this.getNextFetchDispatcher();
+      const signal = AbortSignal.timeout(config.fetchConnectTimeoutMs);
       const response = await fetch(target, {
         dispatcher: dispatcher as unknown as NonNullable<RequestInit["dispatcher"]>,
+        signal,
       });
       this.recordRequestMetric(endpoint, response.ok);
       return response;
