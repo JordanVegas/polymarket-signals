@@ -44,7 +44,7 @@ const normalizeProxyUrl = (value: string): string => {
     return "";
   }
 
-  if (/^https?:\/\//i.test(trimmed)) {
+  if (/^(https?|socks5?):\/\//i.test(trimmed)) {
     return trimmed;
   }
 
