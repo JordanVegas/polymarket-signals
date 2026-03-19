@@ -2513,7 +2513,7 @@ export class PolymarketSignalService {
       exitReason = "65% smart-money weight exited";
     } else if (strategyKey === "edge_swing" && edgeFlipped) {
       exitReason = `Edge flipped to ${edgeOutcome}`;
-    } else if (strategyKey === "edge_swing" && peakEdgePoints > 0 && currentEdgePoints <= peakEdgePoints * 0.5) {
+    } else if (strategyKey === "edge_swing" && peakEdgePoints > 0 && currentEdgePoints <= peakEdgePoints * 0.35) {
       exitReason = `Edge dropped to ${currentEdgePoints.toFixed(1)} from ${peakEdgePoints.toFixed(1)}`;
     }
 
@@ -2796,7 +2796,7 @@ export class PolymarketSignalService {
     } else if (
       strategyKey === "edge_swing" &&
       (nextPosition.peakEdgePoints ?? currentEdgePoints) > 0 &&
-      currentEdgePoints <= (nextPosition.peakEdgePoints ?? currentEdgePoints) * 0.5
+      currentEdgePoints <= (nextPosition.peakEdgePoints ?? currentEdgePoints) * 0.35
     ) {
       exitReason = `Edge dropped to ${currentEdgePoints.toFixed(1)} from ${(nextPosition.peakEdgePoints ?? currentEdgePoints).toFixed(1)}`;
     }
