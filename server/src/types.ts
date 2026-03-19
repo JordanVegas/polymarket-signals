@@ -232,6 +232,7 @@ export type StrategyPosition = {
   trim96Hit: boolean;
   setupQuality: number;
   peakEdgePoints?: number;
+  peakOutcomeWeight?: number;
   exitReason?: string;
   originalParticipants: Array<{
     wallet: string;

@@ -2447,6 +2447,7 @@ export class PolymarketSignalService {
         trim96Hit: false,
         setupQuality,
         peakEdgePoints: getEdgePointsForOutcome(aggregate, edgeOutcome),
+        peakOutcomeWeight: getOutcomeWeightForMarket(aggregate, edgeOutcome),
         originalParticipants,
       };
       await this.storage.saveStrategyPosition(nextPosition);
@@ -2472,7 +2473,9 @@ export class PolymarketSignalService {
       return;
     }
     const currentEdgePoints = getEdgePointsForOutcome(aggregate, trackedOutcome);
+    const currentOutcomeWeight = getOutcomeWeightForMarket(aggregate, trackedOutcome);
     const peakEdgePoints = Math.max(position.peakEdgePoints ?? currentEdgePoints, currentEdgePoints);
+    const peakOutcomeWeight = Math.max(position.peakOutcomeWeight ?? currentOutcomeWeight, currentOutcomeWeight);
 
     let nextPosition: StrategyPosition = {
       ...position,
@@ -2482,6 +2485,7 @@ export class PolymarketSignalService {
       remainingSmartMoneyWeight,
       setupQuality,
       peakEdgePoints,
+      peakOutcomeWeight,
     };
 
     if (strategyKey === "best_trades" && !nextPosition.trim96Hit && currentPrice >= 0.96) {
@@ -2515,6 +2519,12 @@ export class PolymarketSignalService {
       exitReason = `Edge flipped to ${edgeOutcome}`;
     } else if (strategyKey === "edge_swing" && peakEdgePoints > 0 && currentEdgePoints <= peakEdgePoints * 0.35) {
       exitReason = `Edge dropped to ${currentEdgePoints.toFixed(1)} from ${peakEdgePoints.toFixed(1)}`;
+    } else if (
+      strategyKey === "edge_swing" &&
+      peakOutcomeWeight > 0 &&
+      currentOutcomeWeight <= peakOutcomeWeight * 0.6
+    ) {
+      exitReason = `Outcome weight dropped to ${currentOutcomeWeight.toFixed(1)} from ${peakOutcomeWeight.toFixed(1)}`;
     }
 
     if (exitReason) {
@@ -2714,6 +2724,7 @@ export class PolymarketSignalService {
         trim96Hit: false,
         setupQuality,
         peakEdgePoints: getEdgePointsForOutcome(aggregate, edgeOutcome),
+        peakOutcomeWeight: getOutcomeWeightForMarket(aggregate, edgeOutcome),
         originalParticipants,
       };
       await this.storage.saveLiveStrategyPosition(nextPosition);
@@ -2752,6 +2763,7 @@ export class PolymarketSignalService {
     if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
       return;
     }
+    const currentOutcomeWeight = getOutcomeWeightForMarket(aggregate, trackedOutcome);
 
     let nextPosition: StrategyPosition = {
       ...position,
@@ -2761,6 +2773,7 @@ export class PolymarketSignalService {
       remainingSmartMoneyWeight,
       setupQuality,
       peakEdgePoints: Math.max(position.peakEdgePoints ?? getEdgePointsForOutcome(aggregate, trackedOutcome), getEdgePointsForOutcome(aggregate, trackedOutcome)),
+      peakOutcomeWeight: Math.max(position.peakOutcomeWeight ?? currentOutcomeWeight, currentOutcomeWeight),
     };
     const currentEdgePoints = getEdgePointsForOutcome(aggregate, trackedOutcome);
 
@@ -2799,6 +2812,12 @@ export class PolymarketSignalService {
       currentEdgePoints <= (nextPosition.peakEdgePoints ?? currentEdgePoints) * 0.35
     ) {
       exitReason = `Edge dropped to ${currentEdgePoints.toFixed(1)} from ${(nextPosition.peakEdgePoints ?? currentEdgePoints).toFixed(1)}`;
+    } else if (
+      strategyKey === "edge_swing" &&
+      (nextPosition.peakOutcomeWeight ?? currentOutcomeWeight) > 0 &&
+      currentOutcomeWeight <= (nextPosition.peakOutcomeWeight ?? currentOutcomeWeight) * 0.6
+    ) {
+      exitReason = `Outcome weight dropped to ${currentOutcomeWeight.toFixed(1)} from ${(nextPosition.peakOutcomeWeight ?? currentOutcomeWeight).toFixed(1)}`;
     }
 
     if (exitReason && nextPosition.remainingShares > 0) {
@@ -4466,6 +4485,13 @@ const getEdgePointsForOutcome = (aggregate: MarketAggregate, outcome: string): n
       .map((entry) => entry.weight),
   );
   return trackedWeight - opposingWeight;
+};
+
+const getOutcomeWeightForMarket = (aggregate: MarketAggregate, outcome: string): number => {
+  const normalizedOutcome = normalizeOutcomeName(outcome);
+  return (
+    aggregate.outcomeWeights.find((entry) => normalizeOutcomeName(entry.outcome) === normalizedOutcome)?.weight ?? 0
+  );
 };
 
 const getMarketPriceForOutcome = (aggregate: MarketAggregate, outcome: string): number => {
