@@ -4487,6 +4487,10 @@ const qualifiesEdgeSwingMarket = (aggregate: MarketAggregate): boolean => {
     return false;
   }
 
+  if (getSetupQualityScore(aggregate) < 60) {
+    return false;
+  }
+
   const endDate = aggregate.marketEndDate ? Date.parse(aggregate.marketEndDate) : Number.NaN;
   if (!Number.isFinite(endDate)) {
     return false;
