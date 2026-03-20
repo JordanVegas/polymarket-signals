@@ -27,6 +27,7 @@ jobs:
           target: /tmp/polysignals-inspect-equity-gap
 
       - name: Run inspect script on droplet
+        id: inspect
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.DROPLET_HOST }}
@@ -42,27 +43,14 @@ jobs:
             set -a
             . "$APP_DIR/.env"
             set +a
-            node "$APP_DIR/.inspect-live-equity-gap.mjs" --username tuf > /tmp/inspect-live-equity-gap-report.json
+            node "$APP_DIR/.inspect-live-equity-gap.mjs" --username tuf
             rm -f "$APP_DIR/.inspect-live-equity-gap.mjs"
-
-      - name: Copy report back from droplet
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.DROPLET_HOST }}
-          username: ${{ secrets.DROPLET_USER }}
-          port: ${{ secrets.DROPLET_PORT }}
-          key: ${{ secrets.DROPLET_SSH_KEY }}
-          passphrase: ${{ secrets.DROPLET_SSH_PASSPHRASE }}
-          source: /tmp/inspect-live-equity-gap-report.json
-          target: /tmp/polysignals-inspect-equity-gap-result
 
       - name: Publish report as commit comment
         uses: actions/github-script@v7
         with:
           script: |
-            const fs = require("fs");
-            const reportPath = "/tmp/polysignals-inspect-equity-gap-result/tmp/inspect-live-equity-gap-report.json";
-            const report = fs.readFileSync(reportPath, "utf8");
+            const report = `${{ steps.inspect.outputs.stdout }}`.trim();
             await github.rest.repos.createCommitComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
