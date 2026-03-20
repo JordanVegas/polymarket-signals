@@ -294,8 +294,15 @@ const LIVE_ENTRY_CONFIRM_RETRIES = 5;
 const LIVE_ENTRY_CONFIRM_DELAY_MS = 1_500;
 const LIVE_EXIT_CONFIRM_RETRIES = 5;
 const LIVE_EXIT_CONFIRM_DELAY_MS = 1_500;
+const EDGE_SWING_AUTO_TAKE_PROFIT_PRICE = 0.999;
 
 type IngestResult = "ingested" | "queued";
+type LiveTradingErrorContext = {
+  operation?: string;
+  request?: string;
+  params?: Record<string, unknown>;
+  response?: unknown;
+};
 
 export class PolymarketSignalService {
   private readonly marketsByAssetId = new Map<string, MarketRecord>();
@@ -2527,6 +2534,8 @@ export class PolymarketSignalService {
       exitReason = "Take profit 0.995";
     } else if (strategyKey === "best_trades" && exitedRatio >= 0.65) {
       exitReason = "65% smart-money weight exited";
+    } else if (strategyKey === "edge_swing" && currentPrice >= EDGE_SWING_AUTO_TAKE_PROFIT_PRICE) {
+      exitReason = "Take profit 0.999";
     } else if (strategyKey === "edge_swing" && edgeFlipped) {
       exitReason = `Edge flipped to ${edgeOutcome}`;
     } else if (strategyKey === "edge_swing" && peakEdgePoints > 0 && currentEdgePoints <= peakEdgePoints * 0.35) {
@@ -2540,10 +2549,15 @@ export class PolymarketSignalService {
     }
 
     if (exitReason) {
-      const realizedUsd = nextPosition.remainingShares * currentPrice;
+      const exitPrice =
+        strategyKey === "edge_swing" && exitReason === "Take profit 0.999"
+          ? EDGE_SWING_AUTO_TAKE_PROFIT_PRICE
+          : currentPrice;
+      const realizedUsd = nextPosition.remainingShares * exitPrice;
       nextPosition = {
         ...nextPosition,
         status: "closed",
+        lastPrice: exitPrice,
         remainingShares: 0,
         realizedUsd: nextPosition.realizedUsd + realizedUsd,
         soldPercent: 100,
@@ -2653,7 +2667,11 @@ export class PolymarketSignalService {
       }
 
       const collateral = await this.getLiveCollateralBalance(client).catch((error) => {
-        this.recordLiveTradingIssue(username, error);
+        this.recordLiveTradingIssue(username, error, {
+          operation: "live_entry",
+          request: "getBalanceAllowance",
+          params: { asset_type: AssetType.COLLATERAL },
+        });
         return 0;
       });
       const riskPercent = this.getStrategyRiskPercent(settings, strategyKey);
@@ -2663,7 +2681,11 @@ export class PolymarketSignalService {
       }
 
       const options = await this.getLiveOrderOptions(client, tokenID).catch((error) => {
-        this.recordLiveTradingIssue(username, error);
+        this.recordLiveTradingIssue(username, error, {
+          operation: "live_entry",
+          request: "getOrderBook",
+          params: { tokenID },
+        });
         return null;
       });
       if (!options) {
@@ -2672,7 +2694,14 @@ export class PolymarketSignalService {
       const allowanceReady = await this.ensureLiveAllowance(client, AssetType.COLLATERAL, entryNotionalUsd).then(
         () => true,
         (error) => {
-          this.recordLiveTradingIssue(username, error);
+          this.recordLiveTradingIssue(username, error, {
+            operation: "live_entry",
+            request: "ensureLiveAllowance",
+            params: {
+              assetType: AssetType.COLLATERAL,
+              minimumAmount: entryNotionalUsd,
+            },
+          });
           return false;
         },
       );
@@ -2685,7 +2714,16 @@ export class PolymarketSignalService {
           if (error instanceof Error && error.message.includes("no match")) {
             return null;
           }
-          this.recordLiveTradingIssue(username, error);
+          this.recordLiveTradingIssue(username, error, {
+            operation: "live_entry",
+            request: "calculateMarketPrice",
+            params: {
+              tokenID,
+              side: ClobSide.BUY,
+              amount: entryNotionalUsd,
+              orderType: OrderType.FOK,
+            },
+          });
           return null;
         });
       if (entryPrice == null || !Number.isFinite(entryPrice) || entryPrice <= 0) {
@@ -2710,13 +2748,39 @@ export class PolymarketSignalService {
           OrderType.FOK,
         )
         .catch((error) => {
-          this.recordLiveTradingIssue(username, error);
+          this.recordLiveTradingIssue(username, error, {
+            operation: "live_entry",
+            request: "createAndPostMarketOrder",
+            params: {
+              order: {
+                tokenID,
+                amount: entryNotionalUsd,
+                side: ClobSide.BUY,
+              },
+              options,
+              orderType: OrderType.FOK,
+            },
+          });
           return null;
         });
       if (!response || !isSuccessfulLiveOrderResponse(response)) {
         this.recordLiveTradingIssue(
           username,
           new Error(`Live entry order was not accepted${describeLiveOrderResponse(response)}`),
+          {
+            operation: "live_entry",
+            request: "createAndPostMarketOrder",
+            params: {
+              order: {
+                tokenID,
+                amount: entryNotionalUsd,
+                side: ClobSide.BUY,
+              },
+              options,
+              orderType: OrderType.FOK,
+            },
+            response,
+          },
         );
         return;
       }
@@ -2734,6 +2798,20 @@ export class PolymarketSignalService {
           new Error(
             `Live entry order was accepted but no wallet position appeared${describeLiveOrderResponse(response)}`,
           ),
+          {
+            operation: "live_entry_confirmation",
+            request: "positions",
+            params: {
+              wallet: tradingWalletAddress,
+              tokenID,
+              marketSlug,
+              outcome: edgeOutcome,
+              previousShares: walletSharesBeforeEntry,
+              retries: LIVE_ENTRY_CONFIRM_RETRIES,
+              retryDelayMs: LIVE_ENTRY_CONFIRM_DELAY_MS,
+            },
+            response,
+          },
         );
         return;
       }
@@ -2845,6 +2923,8 @@ export class PolymarketSignalService {
       exitReason = "Take profit 0.995";
     } else if (strategyKey === "best_trades" && exitedRatio >= 0.65) {
       exitReason = "65% smart-money weight exited";
+    } else if (strategyKey === "edge_swing" && currentPrice >= EDGE_SWING_AUTO_TAKE_PROFIT_PRICE) {
+      exitReason = "Take profit 0.999";
     } else if (strategyKey === "edge_swing" && edgeFlipped) {
       exitReason = `Edge flipped to ${edgeOutcome}`;
     } else if (
@@ -2862,7 +2942,16 @@ export class PolymarketSignalService {
     }
 
     if (exitReason && nextPosition.remainingShares > 0) {
-      nextPosition = await this.executeLiveClose(username, nextPosition, tokenID, options, exitReason);
+      nextPosition = await this.executeLiveClose(
+        username,
+        nextPosition,
+        tokenID,
+        options,
+        exitReason,
+        strategyKey === "edge_swing" && exitReason === "Take profit 0.999"
+          ? EDGE_SWING_AUTO_TAKE_PROFIT_PRICE
+          : undefined,
+      );
     }
 
     await this.storage.saveLiveStrategyPosition(nextPosition);
@@ -3509,7 +3598,11 @@ export class PolymarketSignalService {
     this.liveTradingIssues.delete(username.trim());
   }
 
-  private recordLiveTradingIssue(username: string, error: unknown): void {
+  private recordLiveTradingIssue(
+    username: string,
+    error: unknown,
+    context?: LiveTradingErrorContext,
+  ): void {
     const normalizedUsername = username.trim();
     if (!normalizedUsername) {
       return;
@@ -3518,10 +3611,14 @@ export class PolymarketSignalService {
       message: this.extractLiveTradingErrorMessage(error),
       blockedUntil: Date.now() + 5 * 60_000,
     });
-    void this.appendLiveExecutionErrorLog(normalizedUsername, error);
+    void this.appendLiveExecutionErrorLog(normalizedUsername, error, context);
   }
 
-  private async appendLiveExecutionErrorLog(username: string, error: unknown): Promise<void> {
+  private async appendLiveExecutionErrorLog(
+    username: string,
+    error: unknown,
+    context?: LiveTradingErrorContext,
+  ): Promise<void> {
     try {
       const logPath = config.liveExecutionErrorLogPath;
       await mkdir(path.dirname(logPath), { recursive: true });
@@ -3540,6 +3637,7 @@ export class PolymarketSignalService {
         username,
         message: this.extractLiveTradingErrorMessage(error),
         error: errorRecord,
+        context: context ? sanitizeForLogging(context) : undefined,
       };
       await appendFile(logPath, `${JSON.stringify(payload)}\n`, "utf8");
     } catch (logError) {
@@ -3618,7 +3716,15 @@ export class PolymarketSignalService {
     const allowanceReady = await this.ensureLiveAllowance(client, AssetType.CONDITIONAL, sharesToSell, tokenID).then(
       () => true,
       (error) => {
-        this.recordLiveTradingIssue(username, error);
+        this.recordLiveTradingIssue(username, error, {
+          operation: "live_trim",
+          request: "ensureLiveAllowance",
+          params: {
+            assetType: AssetType.CONDITIONAL,
+            minimumAmount: sharesToSell,
+            tokenID,
+          },
+        });
         return false;
       },
     );
@@ -3630,7 +3736,16 @@ export class PolymarketSignalService {
         if (error instanceof Error && error.message.includes("no match")) {
           return null;
         }
-        this.recordLiveTradingIssue(username, error);
+        this.recordLiveTradingIssue(username, error, {
+          operation: "live_trim",
+          request: "calculateMarketPrice",
+          params: {
+            tokenID,
+            side: ClobSide.SELL,
+            amount: sharesToSell,
+            orderType: OrderType.FOK,
+          },
+        });
         return null;
       },
     );
@@ -3650,13 +3765,39 @@ export class PolymarketSignalService {
         OrderType.FOK,
       )
       .catch((error) => {
-        this.recordLiveTradingIssue(username, error);
+        this.recordLiveTradingIssue(username, error, {
+          operation: "live_trim",
+          request: "createAndPostMarketOrder",
+          params: {
+            order: {
+              tokenID,
+              amount: sharesToSell,
+              side: ClobSide.SELL,
+            },
+            options,
+            orderType: OrderType.FOK,
+          },
+        });
         return null;
       });
     if (!response || !isSuccessfulLiveOrderResponse(response)) {
       this.recordLiveTradingIssue(
         username,
         new Error(`Live trim order was not accepted${describeLiveOrderResponse(response)}`),
+        {
+          operation: "live_trim",
+          request: "createAndPostMarketOrder",
+          params: {
+            order: {
+              tokenID,
+              amount: sharesToSell,
+              side: ClobSide.SELL,
+            },
+            options,
+            orderType: OrderType.FOK,
+          },
+          response,
+        },
       );
       return position;
     }
@@ -3669,12 +3810,26 @@ export class PolymarketSignalService {
       walletSharesBeforeTrim,
     );
     if (confirmedWalletShares == null) {
-      this.recordLiveTradingIssue(
-        username,
-        new Error(
-          `Live trim order was accepted but wallet shares did not decrease${describeLiveOrderResponse(response)}`,
-        ),
-      );
+        this.recordLiveTradingIssue(
+          username,
+          new Error(
+            `Live trim order was accepted but wallet shares did not decrease${describeLiveOrderResponse(response)}`,
+          ),
+          {
+            operation: "live_trim_confirmation",
+            request: "positions",
+            params: {
+              wallet: tradingWalletAddress,
+              tokenID,
+              marketSlug: position.marketSlug,
+              outcome: position.outcome,
+              previousShares: walletSharesBeforeTrim,
+              retries: LIVE_EXIT_CONFIRM_RETRIES,
+              retryDelayMs: LIVE_EXIT_CONFIRM_DELAY_MS,
+            },
+            response,
+          },
+        );
       return position;
     }
 
@@ -3714,6 +3869,7 @@ export class PolymarketSignalService {
     tokenID: string,
     options: { tickSize: "0.1" | "0.01" | "0.001" | "0.0001"; negRisk?: boolean },
     exitReason: string,
+    targetPrice?: number,
   ): Promise<StrategyPosition> {
     const settings = await this.storage.getUserSettings(username);
     const client = this.createLiveTradingClient(settings);
@@ -3741,32 +3897,86 @@ export class PolymarketSignalService {
     ).then(
       () => true,
       (error) => {
-        this.recordLiveTradingIssue(username, error);
+        this.recordLiveTradingIssue(username, error, {
+          operation: "live_close",
+          request: "ensureLiveAllowance",
+          params: {
+            assetType: AssetType.CONDITIONAL,
+            minimumAmount: position.remainingShares,
+            tokenID,
+          },
+        });
         return false;
       },
     );
     if (!allowanceReady) {
       return position;
     }
-    const sellPrice = await client.calculateMarketPrice(
-      tokenID,
-      ClobSide.SELL,
-      position.remainingShares,
-      OrderType.FOK,
-    ).catch((error) => {
-      if (error instanceof Error && error.message.includes("no match")) {
+    const sellPrice =
+      targetPrice ??
+      (await client.calculateMarketPrice(
+        tokenID,
+        ClobSide.SELL,
+        position.remainingShares,
+        OrderType.FOK,
+      ).catch((error) => {
+        if (error instanceof Error && error.message.includes("no match")) {
+          return null;
+        }
+        this.recordLiveTradingIssue(username, error, {
+          operation: "live_close",
+          request: "calculateMarketPrice",
+          params: {
+            tokenID,
+            side: ClobSide.SELL,
+            amount: position.remainingShares,
+            orderType: OrderType.FOK,
+          },
+        });
         return null;
-      }
-      this.recordLiveTradingIssue(username, error);
-      return null;
-    });
+      }));
     if (sellPrice == null || !Number.isFinite(sellPrice) || sellPrice <= 0) {
       return position;
     }
     const safeSellPrice = sellPrice;
 
-    const response = await client
-      .createAndPostMarketOrder(
+    const requestName = targetPrice != null ? "createAndPostOrder" : "createAndPostMarketOrder";
+    const requestParams =
+      targetPrice != null
+        ? {
+            order: {
+              tokenID,
+              price: targetPrice,
+              size: position.remainingShares,
+              side: ClobSide.SELL,
+            },
+            options,
+            orderType: OrderType.FOK,
+          }
+        : {
+            order: {
+              tokenID,
+              amount: position.remainingShares,
+              side: ClobSide.SELL,
+            },
+            options,
+            orderType: OrderType.FOK,
+          };
+    const response = await (async () => {
+      if (targetPrice != null) {
+        const order = await client.createOrder(
+          {
+            tokenID,
+            price: targetPrice,
+            size: position.remainingShares,
+            side: ClobSide.SELL,
+          },
+          options,
+        );
+        return client.postOrder(order, OrderType.FOK);
+      }
+
+      return client.createAndPostMarketOrder(
         {
           tokenID,
           amount: position.remainingShares,
@@ -3774,15 +3984,25 @@ export class PolymarketSignalService {
         },
         options,
         OrderType.FOK,
-      )
-      .catch((error) => {
-        this.recordLiveTradingIssue(username, error);
-        return null;
+      );
+    })().catch((error) => {
+      this.recordLiveTradingIssue(username, error, {
+        operation: "live_close",
+        request: requestName,
+        params: requestParams,
       });
+      return null;
+    });
     if (!response || !isSuccessfulLiveOrderResponse(response)) {
       this.recordLiveTradingIssue(
         username,
         new Error(`Live close order was not accepted${describeLiveOrderResponse(response)}`),
+        {
+          operation: "live_close",
+          request: requestName,
+          params: requestParams,
+          response,
+        },
       );
       return position;
     }
@@ -3795,21 +4015,47 @@ export class PolymarketSignalService {
       walletSharesBeforeClose,
     );
     if (confirmedWalletShares == null) {
-      this.recordLiveTradingIssue(
-        username,
-        new Error(
-          `Live close order was accepted but wallet shares did not decrease${describeLiveOrderResponse(response)}`,
-        ),
-      );
+        this.recordLiveTradingIssue(
+          username,
+          new Error(
+            `Live close order was accepted but wallet shares did not decrease${describeLiveOrderResponse(response)}`,
+          ),
+          {
+            operation: "live_close_confirmation",
+            request: "positions",
+            params: {
+              wallet: tradingWalletAddress,
+              tokenID,
+              marketSlug: position.marketSlug,
+              outcome: position.outcome,
+              previousShares: walletSharesBeforeClose,
+              retries: LIVE_EXIT_CONFIRM_RETRIES,
+              retryDelayMs: LIVE_EXIT_CONFIRM_DELAY_MS,
+            },
+            response,
+          },
+        );
       return position;
     }
     if (confirmedWalletShares > 0) {
-      this.recordLiveTradingIssue(
-        username,
-        new Error(
-          `Live close order was partially reflected in wallet (${confirmedWalletShares.toFixed(6)} shares remain)${describeLiveOrderResponse(response)}`,
-        ),
-      );
+        this.recordLiveTradingIssue(
+          username,
+          new Error(
+            `Live close order was partially reflected in wallet (${confirmedWalletShares.toFixed(6)} shares remain)${describeLiveOrderResponse(response)}`,
+          ),
+          {
+            operation: "live_close_confirmation",
+            request: "positions",
+            params: {
+              wallet: tradingWalletAddress,
+              tokenID,
+              marketSlug: position.marketSlug,
+              outcome: position.outcome,
+              remainingShares: confirmedWalletShares,
+            },
+            response,
+          },
+        );
       return position;
     }
 
@@ -4924,4 +5170,36 @@ const stringifyUnknownError = (error: unknown): string => {
   } catch {
     return String(error);
   }
+};
+
+const sanitizeForLogging = (value: unknown): unknown => {
+  if (value == null) {
+    return value;
+  }
+
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+
+  if (value instanceof Error) {
+    return {
+      name: value.name,
+      message: value.message,
+      stack: value.stack,
+    };
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeForLogging(item));
+  }
+
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>).map(([key, currentValue]) => [
+      key,
+      sanitizeForLogging(currentValue),
+    ]);
+    return Object.fromEntries(entries);
+  }
+
+  return String(value);
 };
