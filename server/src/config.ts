@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 
 const parseNumber = (value: string | undefined, fallback: number): number => {
   if (!value) {
@@ -125,4 +126,6 @@ export const config = {
     process.env.HISTORICAL_BACKFILL_LOOKBACK_HOURS,
     168,
   ),
+  liveExecutionErrorLogPath:
+    process.env.LIVE_EXECUTION_ERROR_LOG_PATH || path.resolve(process.cwd(), "logs", "live-execution-errors.log"),
 };

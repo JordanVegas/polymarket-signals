@@ -1,6 +1,8 @@
 import { config } from "./config.js";
 import { decryptSecret, encryptSecret } from "./secrets.js";
 import { randomUUID } from "node:crypto";
+import { appendFile, mkdir } from "node:fs/promises";
+import path from "node:path";
 import { Wallet } from "@ethersproject/wallet";
 import {
   AssetType,
@@ -288,6 +290,10 @@ const MARKET_TRADE_FETCH_COOLDOWN_MS = 1_000;
 const MIN_STRATEGY_ENTRY_USD = 1;
 const MIN_LIVE_TRADE_USD = 5;
 const MIN_LIVE_TRADE_CASH_PERCENT = 5;
+const LIVE_ENTRY_CONFIRM_RETRIES = 5;
+const LIVE_ENTRY_CONFIRM_DELAY_MS = 1_500;
+const LIVE_EXIT_CONFIRM_RETRIES = 5;
+const LIVE_EXIT_CONFIRM_DELAY_MS = 1_500;
 
 type IngestResult = "ingested" | "queued";
 
@@ -2686,6 +2692,12 @@ export class PolymarketSignalService {
         return;
       }
       const safeEntryPrice = entryPrice;
+      const walletSharesBeforeEntry = await this.getWalletPositionShares(
+        tradingWalletAddress,
+        tokenID,
+        marketSlug,
+        edgeOutcome,
+      ).catch(() => 0);
 
       const response = await client
         .createAndPostMarketOrder(
@@ -2709,8 +2721,27 @@ export class PolymarketSignalService {
         return;
       }
 
+      const confirmedWalletShares = await this.waitForLiveEntryPositionConfirmation(
+        tradingWalletAddress,
+        tokenID,
+        marketSlug,
+        edgeOutcome,
+        walletSharesBeforeEntry,
+      );
+      if (confirmedWalletShares == null) {
+        this.recordLiveTradingIssue(
+          username,
+          new Error(
+            `Live entry order was accepted but no wallet position appeared${describeLiveOrderResponse(response)}`,
+          ),
+        );
+        return;
+      }
+
       const openedAt = Date.now();
-      const remainingShares = entryNotionalUsd / safeEntryPrice;
+      const acquiredShares = Math.max(0, confirmedWalletShares - walletSharesBeforeEntry);
+      const remainingShares =
+        acquiredShares > 0 ? acquiredShares : entryNotionalUsd / safeEntryPrice;
     const nextPosition: StrategyPosition = {
       id: createStrategyPositionId(username, marketSlug, edgeOutcome, strategyKey, "live"),
       strategyKey,
@@ -3372,6 +3403,91 @@ export class PolymarketSignalService {
     return Number(response.balance ?? 0) / USDC_BASE_UNITS;
   }
 
+  private async getWalletPositionShares(
+    wallet: string,
+    tokenID: string,
+    marketSlug: string,
+    outcome: string,
+  ): Promise<number> {
+    const normalizedWallet = wallet.trim();
+    if (!normalizedWallet) {
+      return 0;
+    }
+
+    const response = await this.safeFetch(
+      `${DATA_API_URL}/positions?user=${normalizedWallet}&sizeThreshold=0`,
+      `positions ${normalizedWallet}`,
+    );
+    if (!response?.ok) {
+      return 0;
+    }
+
+    const rows = ((await response.json()) as RawPosition[]) ?? [];
+    const normalizedSlug = marketSlug.trim().toLowerCase();
+    const normalizedOutcome = outcome.trim().toLowerCase();
+
+    const exactAssetMatch = rows.find(
+      (row) => String(row.asset ?? "").trim() === tokenID && Number(row.size ?? 0) > 0,
+    );
+    if (exactAssetMatch) {
+      return Number(exactAssetMatch.size ?? 0);
+    }
+
+    const fallbackMatch = rows.find((row) => {
+      const rowSlug = String(row.slug ?? "").trim().toLowerCase();
+      const rowOutcome = String(row.outcome ?? "").trim().toLowerCase();
+      return rowSlug === normalizedSlug && rowOutcome === normalizedOutcome && Number(row.size ?? 0) > 0;
+    });
+
+    return fallbackMatch ? Number(fallbackMatch.size ?? 0) : 0;
+  }
+
+  private async waitForLiveEntryPositionConfirmation(
+    wallet: string,
+    tokenID: string,
+    marketSlug: string,
+    outcome: string,
+    previousShares: number,
+  ): Promise<number | null> {
+    for (let attempt = 0; attempt < LIVE_ENTRY_CONFIRM_RETRIES; attempt += 1) {
+      const currentShares = await this.getWalletPositionShares(wallet, tokenID, marketSlug, outcome).catch(
+        () => 0,
+      );
+      if (currentShares > previousShares) {
+        return currentShares;
+      }
+
+      if (attempt < LIVE_ENTRY_CONFIRM_RETRIES - 1) {
+        await delay(LIVE_ENTRY_CONFIRM_DELAY_MS);
+      }
+    }
+
+    return null;
+  }
+
+  private async waitForLiveExitPositionConfirmation(
+    wallet: string,
+    tokenID: string,
+    marketSlug: string,
+    outcome: string,
+    previousShares: number,
+  ): Promise<number | null> {
+    for (let attempt = 0; attempt < LIVE_EXIT_CONFIRM_RETRIES; attempt += 1) {
+      const currentShares = await this.getWalletPositionShares(wallet, tokenID, marketSlug, outcome).catch(
+        () => previousShares,
+      );
+      if (currentShares < previousShares) {
+        return currentShares;
+      }
+
+      if (attempt < LIVE_EXIT_CONFIRM_RETRIES - 1) {
+        await delay(LIVE_EXIT_CONFIRM_DELAY_MS);
+      }
+    }
+
+    return null;
+  }
+
   private isLiveTradingBlocked(username: string): boolean {
     const issue = this.liveTradingIssues.get(username.trim());
     return Boolean(issue && issue.blockedUntil > Date.now());
@@ -3402,6 +3518,33 @@ export class PolymarketSignalService {
       message: this.extractLiveTradingErrorMessage(error),
       blockedUntil: Date.now() + 5 * 60_000,
     });
+    void this.appendLiveExecutionErrorLog(normalizedUsername, error);
+  }
+
+  private async appendLiveExecutionErrorLog(username: string, error: unknown): Promise<void> {
+    try {
+      const logPath = config.liveExecutionErrorLogPath;
+      await mkdir(path.dirname(logPath), { recursive: true });
+      const errorRecord =
+        error instanceof Error
+          ? {
+              name: error.name,
+              message: error.message,
+              stack: error.stack,
+            }
+          : {
+              value: stringifyUnknownError(error),
+            };
+      const payload = {
+        timestamp: new Date().toISOString(),
+        username,
+        message: this.extractLiveTradingErrorMessage(error),
+        error: errorRecord,
+      };
+      await appendFile(logPath, `${JSON.stringify(payload)}\n`, "utf8");
+    } catch (logError) {
+      console.error("[polysignals] failed to write live execution error log", logError);
+    }
   }
 
   private extractLiveTradingErrorMessage(error: unknown): string {
@@ -3459,11 +3602,18 @@ export class PolymarketSignalService {
   ): Promise<StrategyPosition> {
     const settings = await this.storage.getUserSettings(username);
     const client = this.createLiveTradingClient(settings);
+    const tradingWalletAddress = settings.tradingWalletAddress?.trim() ?? "";
     const initialShares = position.entryPrice > 0 ? position.entryNotionalUsd / position.entryPrice : 0;
     const sharesToSell = Math.min(position.remainingShares, initialShares * fractionOfInitialShares);
     if (sharesToSell <= 0) {
       return position;
     }
+    const walletSharesBeforeTrim = await this.getWalletPositionShares(
+      tradingWalletAddress,
+      tokenID,
+      position.marketSlug,
+      position.outcome,
+    ).catch(() => position.remainingShares);
 
     const allowanceReady = await this.ensureLiveAllowance(client, AssetType.CONDITIONAL, sharesToSell, tokenID).then(
       () => true,
@@ -3511,12 +3661,30 @@ export class PolymarketSignalService {
       return position;
     }
 
-    const realizedUsd = sharesToSell * safeSellPrice;
+    const confirmedWalletShares = await this.waitForLiveExitPositionConfirmation(
+      tradingWalletAddress,
+      tokenID,
+      position.marketSlug,
+      position.outcome,
+      walletSharesBeforeTrim,
+    );
+    if (confirmedWalletShares == null) {
+      this.recordLiveTradingIssue(
+        username,
+        new Error(
+          `Live trim order was accepted but wallet shares did not decrease${describeLiveOrderResponse(response)}`,
+        ),
+      );
+      return position;
+    }
+
+    const soldShares = Math.max(0, walletSharesBeforeTrim - confirmedWalletShares);
+    const realizedUsd = soldShares * safeSellPrice;
     const nextPosition: StrategyPosition = {
       ...position,
       updatedAt: Date.now(),
       lastPrice: Math.max(position.lastPrice, thresholdPrice),
-      remainingShares: Math.max(0, position.remainingShares - sharesToSell),
+      remainingShares: Math.max(0, confirmedWalletShares),
       realizedUsd: position.realizedUsd + realizedUsd,
       soldPercent: Math.max(position.soldPercent, 50),
       trim96Hit: position.trim96Hit || thresholdPrice >= 0.96,
@@ -3529,7 +3697,7 @@ export class PolymarketSignalService {
         reason,
         timestamp: Date.now(),
           price: safeSellPrice,
-        shares: sharesToSell,
+        shares: soldShares,
         usd: realizedUsd,
       response,
         }),
@@ -3549,6 +3717,7 @@ export class PolymarketSignalService {
   ): Promise<StrategyPosition> {
     const settings = await this.storage.getUserSettings(username);
     const client = this.createLiveTradingClient(settings);
+    const tradingWalletAddress = settings.tradingWalletAddress?.trim() ?? "";
     if (position.remainingShares <= 0) {
       return {
         ...position,
@@ -3557,6 +3726,12 @@ export class PolymarketSignalService {
         exitReason,
       };
     }
+    const walletSharesBeforeClose = await this.getWalletPositionShares(
+      tradingWalletAddress,
+      tokenID,
+      position.marketSlug,
+      position.outcome,
+    ).catch(() => position.remainingShares);
 
     const allowanceReady = await this.ensureLiveAllowance(
       client,
@@ -3612,12 +3787,39 @@ export class PolymarketSignalService {
       return position;
     }
 
-    const realizedUsd = position.remainingShares * safeSellPrice;
+    const confirmedWalletShares = await this.waitForLiveExitPositionConfirmation(
+      tradingWalletAddress,
+      tokenID,
+      position.marketSlug,
+      position.outcome,
+      walletSharesBeforeClose,
+    );
+    if (confirmedWalletShares == null) {
+      this.recordLiveTradingIssue(
+        username,
+        new Error(
+          `Live close order was accepted but wallet shares did not decrease${describeLiveOrderResponse(response)}`,
+        ),
+      );
+      return position;
+    }
+    if (confirmedWalletShares > 0) {
+      this.recordLiveTradingIssue(
+        username,
+        new Error(
+          `Live close order was partially reflected in wallet (${confirmedWalletShares.toFixed(6)} shares remain)${describeLiveOrderResponse(response)}`,
+        ),
+      );
+      return position;
+    }
+
+    const soldShares = Math.max(0, walletSharesBeforeClose - confirmedWalletShares);
+    const realizedUsd = soldShares * safeSellPrice;
     const nextPosition: StrategyPosition = {
       ...position,
       updatedAt: Date.now(),
         lastPrice: safeSellPrice,
-      remainingShares: 0,
+      remainingShares: confirmedWalletShares,
       realizedUsd: position.realizedUsd + realizedUsd,
       soldPercent: 100,
       status: "closed",
@@ -3631,7 +3833,7 @@ export class PolymarketSignalService {
         reason: exitReason,
         timestamp: Date.now(),
           price: safeSellPrice,
-        shares: position.remainingShares,
+        shares: soldShares,
         usd: realizedUsd,
       response,
         }),
@@ -4706,4 +4908,20 @@ const describeLiveOrderResponse = (response: unknown): string => {
 
   const details = [status ? `status=${status}` : null, error ? `error=${error}` : null].filter(Boolean);
   return details.length > 0 ? ` (${details.join(", ")})` : "";
+};
+
+const stringifyUnknownError = (error: unknown): string => {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (typeof error === "string") {
+    return error;
+  }
+
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
 };
