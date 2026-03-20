@@ -1,0 +1,27 @@
+name: Clear Prod Polysignals Logs
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/clear-prod-polysignals-logs.yml
+  workflow_dispatch:
+
+jobs:
+  clear-logs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clear polysignals journal logs on droplet
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DROPLET_HOST }}
+          username: ${{ secrets.DROPLET_USER }}
+          port: ${{ secrets.DROPLET_PORT }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          passphrase: ${{ secrets.DROPLET_SSH_PASSPHRASE }}
+          script: |
+            set -euo pipefail
+            journalctl --rotate
+            journalctl --vacuum-time=1s --unit=polysignals
+            journalctl --unit=polysignals --no-pager -n 20 || true
