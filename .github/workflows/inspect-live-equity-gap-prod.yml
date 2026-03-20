@@ -15,42 +15,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Prepare SSH key
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' '${{ secrets.DROPLET_SSH_KEY }}' > ~/.ssh/polysignals_key
+          chmod 600 ~/.ssh/polysignals_key
+
       - name: Upload inspect script to droplet
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.DROPLET_HOST }}
-          username: ${{ secrets.DROPLET_USER }}
-          port: ${{ secrets.DROPLET_PORT }}
-          key: ${{ secrets.DROPLET_SSH_KEY }}
-          passphrase: ${{ secrets.DROPLET_SSH_PASSPHRASE }}
-          source: scripts/inspect-live-equity-gap.mjs
-          target: /tmp/polysignals-inspect-equity-gap
+        run: |
+          scp \
+            -P '${{ secrets.DROPLET_PORT }}' \
+            -i ~/.ssh/polysignals_key \
+            -o StrictHostKeyChecking=no \
+            scripts/inspect-live-equity-gap.mjs \
+            '${{ secrets.DROPLET_USER }}@${{ secrets.DROPLET_HOST }}:/tmp/inspect-live-equity-gap.mjs'
 
       - name: Run inspect script on droplet
-        id: inspect
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.DROPLET_HOST }}
-          username: ${{ secrets.DROPLET_USER }}
-          port: ${{ secrets.DROPLET_PORT }}
-          key: ${{ secrets.DROPLET_SSH_KEY }}
-          passphrase: ${{ secrets.DROPLET_SSH_PASSPHRASE }}
-          script: |
-            set -euo pipefail
-            APP_DIR="${{ secrets.DROPLET_APP_DIR }}"
-            cd "$APP_DIR"
-            cp /tmp/polysignals-inspect-equity-gap/scripts/inspect-live-equity-gap.mjs "$APP_DIR/.inspect-live-equity-gap.mjs"
-            set -a
-            . "$APP_DIR/.env"
-            set +a
-            node "$APP_DIR/.inspect-live-equity-gap.mjs" --username tuf
-            rm -f "$APP_DIR/.inspect-live-equity-gap.mjs"
+        run: |
+          REPORT="$(ssh \
+            -p '${{ secrets.DROPLET_PORT }}' \
+            -i ~/.ssh/polysignals_key \
+            -o StrictHostKeyChecking=no \
+            '${{ secrets.DROPLET_USER }}@${{ secrets.DROPLET_HOST }}' \
+            \"set -euo pipefail; APP_DIR='${{ secrets.DROPLET_APP_DIR }}'; cd \\\"\\$APP_DIR\\\"; cp /tmp/inspect-live-equity-gap.mjs \\\"\\$APP_DIR/.inspect-live-equity-gap.mjs\\\"; set -a; . \\\"\\$APP_DIR/.env\\\"; set +a; node \\\"\\$APP_DIR/.inspect-live-equity-gap.mjs\\\" --username tuf; rm -f \\\"\\$APP_DIR/.inspect-live-equity-gap.mjs\\\"\")"
+          printf '%s\n' "$REPORT" > equity-gap-report.json
+          cat equity-gap-report.json
 
       - name: Publish report as commit comment
         uses: actions/github-script@v7
         with:
           script: |
-            const report = `${{ steps.inspect.outputs.stdout }}`.trim();
+            const fs = require("fs");
+            const report = fs.readFileSync("equity-gap-report.json", "utf8").trim();
             await github.rest.repos.createCommitComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
