@@ -286,6 +286,8 @@ const TRADER_DB_CACHE_TTL_MS = 7 * 24 * 60 * 60_000;
 const REQUEST_STATS_WINDOW_MS = 10 * 60_000;
 const MARKET_TRADE_FETCH_COOLDOWN_MS = 1_000;
 const MIN_STRATEGY_ENTRY_USD = 1;
+const MIN_LIVE_TRADE_USD = 5;
+const MIN_LIVE_TRADE_CASH_PERCENT = 5;
 
 type IngestResult = "ingested" | "queued";
 
@@ -1139,7 +1141,11 @@ export class PolymarketSignalService {
     const tradeMessage = message as MarketTradeMessage;
     const price = Number(tradeMessage.price);
     const size = Number(tradeMessage.size);
-    if (!Number.isFinite(price) || !Number.isFinite(size) || price * size < 10) {
+    if (
+      !Number.isFinite(price) ||
+      !Number.isFinite(size) ||
+      price * size < config.minWsTradeFetchUsd
+    ) {
       return;
     }
 
@@ -2645,10 +2651,10 @@ export class PolymarketSignalService {
         return 0;
       });
       const riskPercent = this.getStrategyRiskPercent(settings, strategyKey);
-      const entryNotionalUsd = Math.max(0, Math.min(collateral, collateral * (Math.max(0, riskPercent) / 100)));
-    if (entryNotionalUsd < MIN_STRATEGY_ENTRY_USD) {
-      return;
-    }
+      const entryNotionalUsd = this.getLiveEntryNotionalUsd(collateral, riskPercent);
+      if (entryNotionalUsd < MIN_STRATEGY_ENTRY_USD) {
+        return;
+      }
 
       const options = await this.getLiveOrderOptions(client, tokenID).catch((error) => {
         this.recordLiveTradingIssue(username, error);
@@ -3230,6 +3236,21 @@ export class PolymarketSignalService {
     return strategyKey === "edge_swing"
       ? settings.edgeSwingRiskPercent ?? 5
       : settings.riskPercent ?? 5;
+  }
+
+  private getLiveEntryNotionalUsd(collateral: number, riskPercent: number): number {
+    const availableCollateral = Math.max(0, collateral);
+    if (availableCollateral <= 0) {
+      return 0;
+    }
+
+    const configuredRiskUsd = availableCollateral * (Math.max(0, riskPercent) / 100);
+    const minimumTradeUsd = Math.max(
+      MIN_LIVE_TRADE_USD,
+      availableCollateral * (MIN_LIVE_TRADE_CASH_PERCENT / 100),
+    );
+
+    return Math.min(availableCollateral, Math.max(configuredRiskUsd, minimumTradeUsd));
   }
 
   private isPaperStrategyEnabled(
