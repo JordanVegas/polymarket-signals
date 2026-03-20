@@ -1,0 +1,44 @@
+name: Sync TUF Live Edge Swing Prod
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/sync-tuf-live-edge-swing-prod.yml
+      - scripts/sync-live-edge-swing-positions.mjs
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Upload sync script to droplet
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DROPLET_HOST }}
+          username: ${{ secrets.DROPLET_USER }}
+          port: ${{ secrets.DROPLET_PORT }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          passphrase: ${{ secrets.DROPLET_SSH_PASSPHRASE }}
+          source: scripts/sync-live-edge-swing-positions.mjs
+          target: /tmp/polysignals-sync
+
+      - name: Run sync on droplet
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DROPLET_HOST }}
+          username: ${{ secrets.DROPLET_USER }}
+          port: ${{ secrets.DROPLET_PORT }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          passphrase: ${{ secrets.DROPLET_SSH_PASSPHRASE }}
+          script: |
+            set -euo pipefail
+            APP_DIR="${{ secrets.DROPLET_APP_DIR }}"
+            cd "$APP_DIR"
+            set -a
+            . "$APP_DIR/.env"
+            set +a
+            node /tmp/polysignals-sync/scripts/sync-live-edge-swing-positions.mjs --username tuf --strategy edge_swing
