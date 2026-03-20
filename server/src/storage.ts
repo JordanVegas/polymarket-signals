@@ -475,6 +475,17 @@ export class SignalStorage {
     return { ...position, strategyKey: position.strategyKey ?? "best_trades" };
   }
 
+  async loadAllOpenStrategyPositions(limit = 500): Promise<StrategyPosition[]> {
+    const rows = await this.strategyPositionCollection()
+      .find({ status: "open" }, { sort: { updatedAt: -1 }, limit })
+      .toArray();
+
+    return rows.map(({ _id: _ignored, updatedAtDate: _updatedAtDate, ...position }) => ({
+      ...position,
+      strategyKey: position.strategyKey ?? "best_trades",
+    }));
+  }
+
   async saveStrategyPosition(position: StrategyPosition): Promise<void> {
     const payload: PersistedStrategyPosition = {
       ...position,
@@ -544,6 +555,17 @@ export class SignalStorage {
 
     const { _id: _ignored, updatedAtDate: _updatedAtDate, ...position } = row;
     return { ...position, strategyKey: position.strategyKey ?? "best_trades" };
+  }
+
+  async loadAllOpenLiveStrategyPositions(limit = 500): Promise<StrategyPosition[]> {
+    const rows = await this.liveStrategyPositionCollection()
+      .find({ status: "open" }, { sort: { updatedAt: -1 }, limit })
+      .toArray();
+
+    return rows.map(({ _id: _ignored, updatedAtDate: _updatedAtDate, ...position }) => ({
+      ...position,
+      strategyKey: position.strategyKey ?? "best_trades",
+    }));
   }
 
   async saveLiveStrategyPosition(position: StrategyPosition): Promise<void> {

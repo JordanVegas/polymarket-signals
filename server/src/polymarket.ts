@@ -294,6 +294,8 @@ const LIVE_ENTRY_CONFIRM_RETRIES = 5;
 const LIVE_ENTRY_CONFIRM_DELAY_MS = 1_500;
 const LIVE_EXIT_CONFIRM_RETRIES = 5;
 const LIVE_EXIT_CONFIRM_DELAY_MS = 1_500;
+const OPEN_POSITION_PRICE_REFRESH_MS = 30_000;
+const OPEN_POSITION_PRICE_QUOTE_MAX_AGE_MS = 25_000;
 const EDGE_SWING_AUTO_TAKE_PROFIT_TRIGGER_PRICE = 0.99;
 const EDGE_SWING_AUTO_TAKE_PROFIT_PRICE = 0.999;
 
@@ -360,6 +362,7 @@ export class PolymarketSignalService {
   private tradePollTimer: NodeJS.Timeout | null = null;
   private portfolioSyncTimer: NodeJS.Timeout | null = null;
   private bestTradeResolutionTimer: NodeJS.Timeout | null = null;
+  private openPositionPriceRefreshTimer: NodeJS.Timeout | null = null;
   private lastTradeTimestampSec = 0;
   private websocketConnected = false;
   private lastMarketSyncAt: number | null = null;
@@ -391,7 +394,11 @@ export class PolymarketSignalService {
     this.bestTradeResolutionTimer = setInterval(() => {
       this.runBackgroundTask("best trade resolution sync", this.syncResolvedBestTradeCandidates());
     }, 15 * 60_000);
+    this.openPositionPriceRefreshTimer = setInterval(() => {
+      this.runBackgroundTask("open position price refresh", this.refreshOpenPositionPrices());
+    }, OPEN_POSITION_PRICE_REFRESH_MS);
     this.runBackgroundTask("initial portfolio watch sync", this.syncTrackedWalletWatches());
+    this.runBackgroundTask("initial open position price refresh", this.refreshOpenPositionPrices());
     this.drainTrackedTraderPollQueue();
   }
 
@@ -414,6 +421,12 @@ export class PolymarketSignalService {
     }
     if (this.portfolioSyncTimer) {
       clearInterval(this.portfolioSyncTimer);
+    }
+    if (this.bestTradeResolutionTimer) {
+      clearInterval(this.bestTradeResolutionTimer);
+    }
+    if (this.openPositionPriceRefreshTimer) {
+      clearInterval(this.openPositionPriceRefreshTimer);
     }
     if (this.marketTradeFetchDrainTimer) {
       clearTimeout(this.marketTradeFetchDrainTimer);
@@ -2037,6 +2050,73 @@ export class PolymarketSignalService {
     await this.storage.deleteMarketAggregate(marketSlug);
   }
 
+  private async refreshOpenPositionPrices(): Promise<void> {
+    const [paperPositions, livePositions] = await Promise.all([
+      this.storage.loadAllOpenStrategyPositions(500),
+      this.storage.loadAllOpenLiveStrategyPositions(500),
+    ]);
+
+    const allPositions = [...paperPositions, ...livePositions];
+    if (allPositions.length === 0) {
+      return;
+    }
+
+    const quoteByKey = new Map<string, number>();
+    for (const position of allPositions) {
+      const key = `${position.marketSlug}:${position.outcome}`;
+      if (quoteByKey.has(key)) {
+        continue;
+      }
+
+      const assetId = this.findAssetIdForMarketOutcome(position.marketSlug, position.outcome);
+      if (!assetId) {
+        continue;
+      }
+
+      const quote = await this.getBestAskQuote(assetId, OPEN_POSITION_PRICE_QUOTE_MAX_AGE_MS).catch(() => null);
+      if (quote && Number.isFinite(quote.price) && quote.price > 0) {
+        quoteByKey.set(key, quote.price);
+      }
+    }
+
+    const now = Date.now();
+    for (const position of paperPositions) {
+      const nextPrice = quoteByKey.get(`${position.marketSlug}:${position.outcome}`);
+      if (nextPrice == null || !Number.isFinite(nextPrice) || nextPrice <= 0 || nextPrice === position.lastPrice) {
+        continue;
+      }
+
+      await this.storage.saveStrategyPosition({
+        ...position,
+        updatedAt: now,
+        lastPrice: nextPrice,
+      });
+      await this.queueStrategyReconcile(
+        position.marketSlug,
+        position.username,
+        position.strategyKey ?? "best_trades",
+      );
+    }
+
+    for (const position of livePositions) {
+      const nextPrice = quoteByKey.get(`${position.marketSlug}:${position.outcome}`);
+      if (nextPrice == null || !Number.isFinite(nextPrice) || nextPrice <= 0 || nextPrice === position.lastPrice) {
+        continue;
+      }
+
+      await this.storage.saveLiveStrategyPosition({
+        ...position,
+        updatedAt: now,
+        lastPrice: nextPrice,
+      });
+      await this.queueLiveStrategyReconcile(
+        position.marketSlug,
+        position.username,
+        position.strategyKey ?? "best_trades",
+      );
+    }
+  }
+
   private async queueCurrentBestTradeReconciles(): Promise<void> {
     const [bestTradeSlugs, paperTradeUsers, liveTradeUsers] = await Promise.all([
       this.storage.loadBestTradeMarketSlugs(),
@@ -2224,9 +2304,12 @@ export class PolymarketSignalService {
     await this.storage.saveGapOpportunity(gap);
   }
 
-  private async getBestAskQuote(assetId: string): Promise<{ price: number; size: number | null } | null> {
+  private async getBestAskQuote(
+    assetId: string,
+    maxAgeMs = 60_000,
+  ): Promise<{ price: number; size: number | null } | null> {
     const cached = this.bestAskByAssetId.get(assetId);
-    if (cached && Date.now() - cached.updatedAt < 60_000) {
+    if (cached && Date.now() - cached.updatedAt < maxAgeMs) {
       return { price: cached.price, size: cached.size };
     }
 
@@ -3921,11 +4004,22 @@ export class PolymarketSignalService {
       position.marketSlug,
       position.outcome,
     ).catch(() => position.remainingShares);
+    const closeShares = walletSharesBeforeClose > 0 ? walletSharesBeforeClose : position.remainingShares;
+    if (closeShares <= 0) {
+      return {
+        ...this.clearPendingCloseState(position),
+        updatedAt: Date.now(),
+        status: "closed",
+        remainingShares: 0,
+        soldPercent: 100,
+        exitReason,
+      };
+    }
 
     const allowanceReady = await this.ensureLiveAllowance(
       client,
       AssetType.CONDITIONAL,
-      position.remainingShares,
+      closeShares,
       tokenID,
     ).then(
       () => true,
@@ -3935,7 +4029,7 @@ export class PolymarketSignalService {
           request: "ensureLiveAllowance",
           params: {
             assetType: AssetType.CONDITIONAL,
-            minimumAmount: position.remainingShares,
+            minimumAmount: closeShares,
             tokenID,
           },
         });
@@ -3950,7 +4044,7 @@ export class PolymarketSignalService {
       (await client.calculateMarketPrice(
         tokenID,
         ClobSide.SELL,
-        position.remainingShares,
+        closeShares,
         OrderType.FOK,
       ).catch((error) => {
         if (error instanceof Error && error.message.includes("no match")) {
@@ -3962,7 +4056,7 @@ export class PolymarketSignalService {
           params: {
             tokenID,
             side: ClobSide.SELL,
-            amount: position.remainingShares,
+            amount: closeShares,
             orderType: OrderType.FOK,
           },
         });
@@ -3980,7 +4074,7 @@ export class PolymarketSignalService {
             order: {
               tokenID,
               price: targetPrice,
-              size: position.remainingShares,
+              size: closeShares,
               side: ClobSide.SELL,
             },
             options,
@@ -3989,7 +4083,7 @@ export class PolymarketSignalService {
         : {
             order: {
               tokenID,
-              amount: position.remainingShares,
+              amount: closeShares,
               side: ClobSide.SELL,
             },
             options,
@@ -4001,7 +4095,7 @@ export class PolymarketSignalService {
           {
             tokenID,
             price: targetPrice,
-            size: position.remainingShares,
+            size: closeShares,
             side: ClobSide.SELL,
           },
           options,
@@ -4012,7 +4106,7 @@ export class PolymarketSignalService {
       return client.createAndPostMarketOrder(
         {
           tokenID,
-          amount: position.remainingShares,
+          amount: closeShares,
           side: ClobSide.SELL,
         },
         options,
@@ -4045,6 +4139,7 @@ export class PolymarketSignalService {
         ...position,
         updatedAt: Date.now(),
         lastPrice: Math.max(position.lastPrice, targetPrice),
+        remainingShares: closeShares,
         pendingCloseOrderId: extractOrderId(response),
         pendingClosePrice: targetPrice,
         pendingCloseReason: exitReason,
