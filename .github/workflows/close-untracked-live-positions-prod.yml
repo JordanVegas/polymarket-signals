@@ -1,0 +1,46 @@
+name: Close Untracked Live Positions Prod
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/close-untracked-live-positions-prod.yml
+      - scripts/close-untracked-live-positions.mjs
+  workflow_dispatch:
+
+jobs:
+  close-untracked:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Upload close script to droplet
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DROPLET_HOST }}
+          username: ${{ secrets.DROPLET_USER }}
+          port: ${{ secrets.DROPLET_PORT }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          passphrase: ${{ secrets.DROPLET_SSH_PASSPHRASE }}
+          source: scripts/close-untracked-live-positions.mjs
+          target: /tmp/polysignals-close-untracked
+
+      - name: Run close script on droplet
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DROPLET_HOST }}
+          username: ${{ secrets.DROPLET_USER }}
+          port: ${{ secrets.DROPLET_PORT }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          passphrase: ${{ secrets.DROPLET_SSH_PASSPHRASE }}
+          script: |
+            set -euo pipefail
+            APP_DIR="${{ secrets.DROPLET_APP_DIR }}"
+            cd "$APP_DIR"
+            cp /tmp/polysignals-close-untracked/scripts/close-untracked-live-positions.mjs "$APP_DIR/.close-untracked-live-positions.mjs"
+            set -a
+            . "$APP_DIR/.env"
+            set +a
+            node "$APP_DIR/.close-untracked-live-positions.mjs" --username tuf
+            rm -f "$APP_DIR/.close-untracked-live-positions.mjs"
