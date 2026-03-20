@@ -37,7 +37,17 @@ jobs:
             -i ~/.ssh/polysignals_key \
             -o StrictHostKeyChecking=no \
             '${{ secrets.DROPLET_USER }}@${{ secrets.DROPLET_HOST }}' \
-            \"set -euo pipefail; APP_DIR='${{ secrets.DROPLET_APP_DIR }}'; cd \\\"\\$APP_DIR\\\"; cp /tmp/inspect-live-equity-gap.mjs \\\"\\$APP_DIR/.inspect-live-equity-gap.mjs\\\"; set -a; . \\\"\\$APP_DIR/.env\\\"; set +a; node \\\"\\$APP_DIR/.inspect-live-equity-gap.mjs\\\" --username tuf; rm -f \\\"\\$APP_DIR/.inspect-live-equity-gap.mjs\\\"\")"
+            "APP_DIR='${{ secrets.DROPLET_APP_DIR }}' bash -se" <<'EOF'
+          set -euo pipefail
+          cd "$APP_DIR"
+          cp /tmp/inspect-live-equity-gap.mjs "$APP_DIR/.inspect-live-equity-gap.mjs"
+          set -a
+          . "$APP_DIR/.env"
+          set +a
+          node "$APP_DIR/.inspect-live-equity-gap.mjs" --username tuf
+          rm -f "$APP_DIR/.inspect-live-equity-gap.mjs"
+          EOF
+          )"
           printf '%s\n' "$REPORT" > equity-gap-report.json
           cat equity-gap-report.json
 
