@@ -234,6 +234,11 @@ export type StrategyPosition = {
   peakEdgePoints?: number;
   peakOutcomeWeight?: number;
   exitReason?: string;
+  pendingCloseOrderId?: string;
+  pendingClosePrice?: number;
+  pendingCloseReason?: string;
+  pendingClosePlacedAt?: number;
+  pendingCloseStatus?: string;
   originalParticipants: Array<{
     wallet: string;
     weight: number;

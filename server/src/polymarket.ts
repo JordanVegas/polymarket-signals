@@ -2903,6 +2903,14 @@ export class PolymarketSignalService {
     };
     const currentEdgePoints = getEdgePointsForOutcome(aggregate, trackedOutcome);
 
+    if (nextPosition.pendingCloseOrderId) {
+      nextPosition = await this.reconcilePendingLiveCloseOrder(username, nextPosition, tokenID);
+      await this.storage.saveLiveStrategyPosition(nextPosition);
+      if (nextPosition.pendingCloseOrderId || nextPosition.status === "closed") {
+        return;
+      }
+    }
+
     const options = await this.getLiveOrderOptions(client, tokenID).catch((error) => {
       this.recordLiveTradingIssue(username, error);
       return null;
@@ -3980,7 +3988,7 @@ export class PolymarketSignalService {
           },
           options,
         );
-        return client.postOrder(order, OrderType.FOK);
+        return client.postOrder(order, OrderType.GTC);
       }
 
       return client.createAndPostMarketOrder(
@@ -4012,6 +4020,19 @@ export class PolymarketSignalService {
         },
       );
       return position;
+    }
+
+    if (targetPrice != null) {
+      return {
+        ...position,
+        updatedAt: Date.now(),
+        lastPrice: Math.max(position.lastPrice, targetPrice),
+        pendingCloseOrderId: extractOrderId(response),
+        pendingClosePrice: targetPrice,
+        pendingCloseReason: exitReason,
+        pendingClosePlacedAt: Date.now(),
+        pendingCloseStatus: extractOrderStatus(response) ?? "submitted",
+      };
     }
 
     const confirmedWalletShares = await this.waitForLiveExitPositionConfirmation(
@@ -4094,6 +4115,95 @@ export class PolymarketSignalService {
 
     this.clearLiveTradingIssue(username);
 
+    return nextPosition;
+  }
+
+  private async reconcilePendingLiveCloseOrder(
+    username: string,
+    position: StrategyPosition,
+    tokenID: string,
+  ): Promise<StrategyPosition> {
+    if (!position.pendingCloseOrderId) {
+      return position;
+    }
+
+    const settings = await this.storage.getUserSettings(username);
+    const tradingWalletAddress = settings.tradingWalletAddress?.trim() ?? "";
+    const client = this.createLiveTradingClient(settings);
+    const walletShares = await this.getWalletPositionShares(
+      tradingWalletAddress,
+      tokenID,
+      position.marketSlug,
+      position.outcome,
+    ).catch(() => position.remainingShares);
+
+    let nextPosition = { ...position };
+    if (walletShares < position.remainingShares) {
+      const closePrice = position.pendingClosePrice ?? position.lastPrice;
+      const soldShares = Math.max(0, position.remainingShares - walletShares);
+      nextPosition = {
+        ...nextPosition,
+        updatedAt: Date.now(),
+        lastPrice: closePrice,
+        remainingShares: Math.max(0, walletShares),
+        realizedUsd: position.realizedUsd + soldShares * closePrice,
+        soldPercent:
+          position.entryNotionalUsd > 0 && position.entryPrice > 0
+            ? Math.min(100, ((position.entryNotionalUsd / position.entryPrice - walletShares) / (position.entryNotionalUsd / position.entryPrice)) * 100)
+            : position.soldPercent,
+      };
+    }
+
+    if (nextPosition.remainingShares <= 0) {
+      return {
+        ...this.clearPendingCloseState(nextPosition),
+        status: "closed",
+        soldPercent: 100,
+        exitReason: position.pendingCloseReason ?? position.exitReason ?? "Pending close filled",
+      };
+    }
+
+    const order = await client.getOrder(position.pendingCloseOrderId).catch((error) => {
+      this.recordLiveTradingIssue(username, error, {
+        operation: "live_pending_close",
+        request: "getOrder",
+        params: {
+          orderId: position.pendingCloseOrderId,
+          marketSlug: position.marketSlug,
+          outcome: position.outcome,
+        },
+      });
+      return null;
+    });
+
+    const orderStatus = typeof order?.status === "string" ? order.status.trim().toLowerCase() : "";
+    if (!order) {
+      return {
+        ...nextPosition,
+        pendingCloseStatus: nextPosition.pendingCloseStatus ?? "submitted",
+      };
+    }
+
+    if (["canceled", "cancelled", "unmatched", "failed", "rejected"].includes(orderStatus)) {
+      return this.clearPendingCloseState({
+        ...nextPosition,
+        pendingCloseStatus: order.status,
+      });
+    }
+
+    return {
+      ...nextPosition,
+      pendingCloseStatus: order.status,
+    };
+  }
+
+  private clearPendingCloseState(position: StrategyPosition): StrategyPosition {
+    const nextPosition = { ...position };
+    delete nextPosition.pendingCloseOrderId;
+    delete nextPosition.pendingClosePrice;
+    delete nextPosition.pendingCloseReason;
+    delete nextPosition.pendingClosePlacedAt;
+    delete nextPosition.pendingCloseStatus;
     return nextPosition;
   }
 
