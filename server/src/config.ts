@@ -82,6 +82,11 @@ const parseProxyUrls = (): string[] => {
   return Array.from(urls);
 };
 
+const proxyEnabled = parseBoolean(
+  process.env.POLYMARKET_PROXY_ENABLED ?? process.env.API_PROXY_ENABLED,
+  true,
+);
+
 export const config = {
   port: parseNumber(process.env.PORT, 3001),
   mongoUri: defaultMongoUri,
@@ -104,7 +109,7 @@ export const config = {
   marketRefreshMs: parseNumber(process.env.MARKET_REFRESH_MS, 10 * 60_000),
   tradePollMs: parseNumber(process.env.TRADE_POLL_MS, 2_500),
   trackedTraderPollConcurrency: parseNumber(process.env.TRACKED_TRADER_POLL_CONCURRENCY, 3),
-  apiProxyUrls: parseProxyUrls(),
+  apiProxyUrls: proxyEnabled ? parseProxyUrls() : [],
   recentCatchupLookbackMinutes: parseNumber(process.env.RECENT_CATCHUP_LOOKBACK_MINUTES, 30),
   recentCatchupMaxOffset: parseNumber(process.env.RECENT_CATCHUP_MAX_OFFSET, 3_000),
   historicalFetchEnabled: parseBoolean(process.env.HISTORICAL_FETCH_ENABLED, false),
