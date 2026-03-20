@@ -41,15 +41,12 @@ jobs:
           printf '%s\n' "$REPORT" > equity-gap-report.json
           cat equity-gap-report.json
 
-      - name: Publish report as commit comment
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require("fs");
-            const report = fs.readFileSync("equity-gap-report.json", "utf8").trim();
-            await github.rest.repos.createCommitComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              commit_sha: context.sha,
-              body: `Live equity gap report\n\n\`\`\`json\n${report}\n\`\`\``,
-            });
+      - name: Publish report to job summary
+        run: |
+          {
+            echo '## Live equity gap report'
+            echo
+            echo '```json'
+            cat equity-gap-report.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
