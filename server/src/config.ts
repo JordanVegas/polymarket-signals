@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const parseNumber = (value: string | undefined, fallback: number): number => {
   if (!value) {
@@ -38,6 +39,9 @@ const withDatabaseName = (mongoUri: string, databaseName: string): string => {
 };
 
 const defaultMongoUri = process.env.MONGO_URI || "mongodb://127.0.0.1:27017";
+const configFilePath = fileURLToPath(import.meta.url);
+const configDir = path.dirname(configFilePath);
+const appRootDir = path.resolve(configDir, "..", "..");
 
 const normalizeProxyUrl = (value: string): string => {
   const trimmed = value.trim();
@@ -127,5 +131,7 @@ export const config = {
     168,
   ),
   liveExecutionErrorLogPath:
-    process.env.LIVE_EXECUTION_ERROR_LOG_PATH || path.resolve(process.cwd(), "logs", "live-execution-errors.log"),
+    process.env.LIVE_EXECUTION_ERROR_LOG_PATH
+      ? path.resolve(appRootDir, process.env.LIVE_EXECUTION_ERROR_LOG_PATH)
+      : path.resolve(appRootDir, "logs", "live-execution-errors.log"),
 };

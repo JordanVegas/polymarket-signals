@@ -294,6 +294,7 @@ const LIVE_ENTRY_CONFIRM_RETRIES = 5;
 const LIVE_ENTRY_CONFIRM_DELAY_MS = 1_500;
 const LIVE_EXIT_CONFIRM_RETRIES = 5;
 const LIVE_EXIT_CONFIRM_DELAY_MS = 1_500;
+const EDGE_SWING_AUTO_TAKE_PROFIT_TRIGGER_PRICE = 0.99;
 const EDGE_SWING_AUTO_TAKE_PROFIT_PRICE = 0.999;
 
 type IngestResult = "ingested" | "queued";
@@ -2495,6 +2496,9 @@ export class PolymarketSignalService {
     const currentOutcomeWeight = getOutcomeWeightForMarket(aggregate, trackedOutcome);
     const peakEdgePoints = Math.max(position.peakEdgePoints ?? currentEdgePoints, currentEdgePoints);
     const peakOutcomeWeight = Math.max(position.peakOutcomeWeight ?? currentOutcomeWeight, currentOutcomeWeight);
+    const edgeSwingTakeProfitTriggered =
+      strategyKey === "edge_swing" &&
+      Math.max(currentPrice, position.lastPrice ?? 0) >= EDGE_SWING_AUTO_TAKE_PROFIT_TRIGGER_PRICE;
 
     let nextPosition: StrategyPosition = {
       ...position,
@@ -2534,7 +2538,7 @@ export class PolymarketSignalService {
       exitReason = "Take profit 0.995";
     } else if (strategyKey === "best_trades" && exitedRatio >= 0.65) {
       exitReason = "65% smart-money weight exited";
-    } else if (strategyKey === "edge_swing" && currentPrice >= EDGE_SWING_AUTO_TAKE_PROFIT_PRICE) {
+    } else if (edgeSwingTakeProfitTriggered) {
       exitReason = "Take profit 0.999";
     } else if (strategyKey === "edge_swing" && edgeFlipped) {
       exitReason = `Edge flipped to ${edgeOutcome}`;
@@ -2883,6 +2887,9 @@ export class PolymarketSignalService {
       return;
     }
     const currentOutcomeWeight = getOutcomeWeightForMarket(aggregate, trackedOutcome);
+    const edgeSwingTakeProfitTriggered =
+      strategyKey === "edge_swing" &&
+      Math.max(currentPrice, position.lastPrice ?? 0) >= EDGE_SWING_AUTO_TAKE_PROFIT_TRIGGER_PRICE;
 
     let nextPosition: StrategyPosition = {
       ...position,
@@ -2923,7 +2930,7 @@ export class PolymarketSignalService {
       exitReason = "Take profit 0.995";
     } else if (strategyKey === "best_trades" && exitedRatio >= 0.65) {
       exitReason = "65% smart-money weight exited";
-    } else if (strategyKey === "edge_swing" && currentPrice >= EDGE_SWING_AUTO_TAKE_PROFIT_PRICE) {
+    } else if (edgeSwingTakeProfitTriggered) {
       exitReason = "Take profit 0.999";
     } else if (strategyKey === "edge_swing" && edgeFlipped) {
       exitReason = `Edge flipped to ${edgeOutcome}`;
