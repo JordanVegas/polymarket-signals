@@ -55,6 +55,7 @@ const decryptSecret = (payload, encryptionKey) => {
 const normalizeOutcome = (value) => String(value ?? "").trim().toLowerCase();
 const positionKey = (marketSlug, outcome) => `${String(marketSlug ?? "").trim().toLowerCase()}::${normalizeOutcome(outcome)}`;
 const roundUsd = (value) => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+const summarizeRows = (rows, limit = 15) => rows.slice(0, limit);
 
 const createLiveTradingClient = (settings) => {
   const privateKey = decryptSecret(settings.encryptedPrivateKey, process.env.TRADING_ENCRYPTION_SECRET || process.env.WEB_SESSION_SECRET || "change-me");
@@ -208,7 +209,7 @@ const main = async () => {
         walletCashPnl: roundUsd(Number(walletPosition?.cashPnl ?? 0)),
         walletRealizedPnl: roundUsd(Number(walletPosition?.realizedPnl ?? 0)),
       };
-    });
+    }).sort((left, right) => Math.abs(right.shareDelta) - Math.abs(left.shareDelta));
 
     const summary = {
       username,
@@ -224,14 +225,12 @@ const main = async () => {
       publicButUntrackedCount: publicButUntracked.length,
     };
 
-    console.log("LIVE_EQUITY_GAP_SUMMARY");
-    console.log(JSON.stringify(summary, null, 2));
-    console.log("MATCHED_POSITIONS");
-    console.log(JSON.stringify(matched, null, 2));
-    console.log("TRACKED_BUT_NOT_PUBLIC");
-    console.log(JSON.stringify(trackedButNotPublic, null, 2));
-    console.log("PUBLIC_BUT_UNTRACKED");
-    console.log(JSON.stringify(publicButUntracked, null, 2));
+    console.log(JSON.stringify({
+      summary,
+      matchedPositions: summarizeRows(matched),
+      trackedButNotPublic: summarizeRows(trackedButNotPublic),
+      publicButUntracked: summarizeRows(publicButUntracked),
+    }, null, 2));
   } finally {
     await client.close();
   }
