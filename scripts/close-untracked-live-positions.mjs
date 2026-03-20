@@ -213,7 +213,7 @@ const main = async () => {
     const trackedOpenPositions = await liveStrategyPositionsCollection
       .find(
         { username, status: "open" },
-        { projection: { _id: 0, marketSlug: 1, outcome: 1, strategyKey: 1 } },
+        { projection: { _id: 0, id: 1, marketSlug: 1, outcome: 1, strategyKey: 1, remainingShares: 1 } },
       )
       .toArray();
     const trackedKeys = new Set(
@@ -221,13 +221,18 @@ const main = async () => {
     );
 
     const walletPositions = await loadActiveWalletPositions(tradingWalletAddress);
+    const walletKeys = new Set(walletPositions.map((position) => toKey(position.slug, position.outcome)));
     const untrackedPositions = walletPositions.filter(
       (position) => !trackedKeys.has(toKey(position.slug, position.outcome)),
+    );
+    const staleTrackedPositions = trackedOpenPositions.filter(
+      (position) => !walletKeys.has(toKey(position.marketSlug, position.outcome)),
     );
 
     const tradingClient = createLiveTradingClient(settings, tradingEncryptionSecret);
     const closed = [];
     const failed = [];
+    const staleDbClosed = [];
 
     for (const position of untrackedPositions) {
       try {
@@ -243,6 +248,28 @@ const main = async () => {
       }
     }
 
+    const closedAt = Date.now();
+    for (const position of staleTrackedPositions) {
+      await liveStrategyPositionsCollection.updateOne(
+        { id: position.id },
+        {
+          $set: {
+            status: "closed",
+            updatedAt: closedAt,
+            remainingShares: 0,
+            soldPercent: 100,
+            exitReason: "DB cleanup: position not present in wallet",
+          },
+        },
+      );
+      staleDbClosed.push({
+        id: position.id,
+        marketSlug: position.marketSlug,
+        outcome: position.outcome,
+        strategyKey: position.strategyKey ?? null,
+      });
+    }
+
     const summary = {
       ok: failed.length === 0,
       username,
@@ -250,9 +277,12 @@ const main = async () => {
       trackedOpenPositionCount: trackedOpenPositions.length,
       walletActivePositionCount: walletPositions.length,
       untrackedPositionCount: untrackedPositions.length,
+      staleTrackedPositionCount: staleTrackedPositions.length,
       closedCount: closed.length,
+      staleDbClosedCount: staleDbClosed.length,
       failedCount: failed.length,
       closed,
+      staleDbClosed,
       failed,
     };
 
