@@ -353,6 +353,7 @@ export class PolymarketSignalService {
   private readonly gapCandidatesById = new Map<string, GapCandidate>();
   private readonly gapCandidateIdsByAssetId = new Map<string, Set<string>>();
   private readonly liveTradingIssues = new Map<string, { message: string; blockedUntil: number }>();
+  private readonly liveCollateralBalances = new Map<string, { balanceUsd: number; updatedAt: number }>();
   private marketTradeFetchDrainTimer: NodeJS.Timeout | null = null;
   private trackedTraderPollDrainTimer: NodeJS.Timeout | null = null;
   private marketSyncTimer: NodeJS.Timeout | null = null;
@@ -670,16 +671,17 @@ export class PolymarketSignalService {
         settings.encryptedApiSecret &&
         settings.encryptedApiPassphrase,
     );
-    let cashBalanceUsd = 0;
+    let cashBalanceUsd = this.getCachedLiveCollateralBalance(username);
     let error: string | null = this.getLiveTradingIssue(username);
     if (ready && !error) {
       try {
         cashBalanceUsd = await this.getLiveCollateralBalance(this.createLiveTradingClient(settings));
+        this.cacheLiveCollateralBalance(username, cashBalanceUsd);
         this.clearLiveTradingIssue(username);
         error = null;
       } catch (caughtError) {
         this.recordLiveTradingIssue(username, caughtError);
-        cashBalanceUsd = 0;
+        cashBalanceUsd = this.getCachedLiveCollateralBalance(username);
         error = this.getLiveTradingIssue(username);
       }
     }
@@ -3505,6 +3507,22 @@ export class PolymarketSignalService {
   private async getLiveCollateralBalance(client: ClobClient): Promise<number> {
     const response = await client.getBalanceAllowance({ asset_type: AssetType.COLLATERAL });
     return Number(response.balance ?? 0) / USDC_BASE_UNITS;
+  }
+
+  private getCachedLiveCollateralBalance(username: string): number {
+    return this.liveCollateralBalances.get(username.trim())?.balanceUsd ?? 0;
+  }
+
+  private cacheLiveCollateralBalance(username: string, balanceUsd: number): void {
+    const normalizedUsername = username.trim();
+    if (!normalizedUsername || !Number.isFinite(balanceUsd) || balanceUsd < 0) {
+      return;
+    }
+
+    this.liveCollateralBalances.set(normalizedUsername, {
+      balanceUsd,
+      updatedAt: Date.now(),
+    });
   }
 
   private async getWalletPositionShares(
