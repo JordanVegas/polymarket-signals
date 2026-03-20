@@ -2701,7 +2701,11 @@ export class PolymarketSignalService {
           this.recordLiveTradingIssue(username, error);
           return null;
         });
-      if (!response) {
+      if (!response || !isSuccessfulLiveOrderResponse(response)) {
+        this.recordLiveTradingIssue(
+          username,
+          new Error(`Live entry order was not accepted${describeLiveOrderResponse(response)}`),
+        );
         return;
       }
 
@@ -3499,7 +3503,11 @@ export class PolymarketSignalService {
         this.recordLiveTradingIssue(username, error);
         return null;
       });
-    if (!response) {
+    if (!response || !isSuccessfulLiveOrderResponse(response)) {
+      this.recordLiveTradingIssue(
+        username,
+        new Error(`Live trim order was not accepted${describeLiveOrderResponse(response)}`),
+      );
       return position;
     }
 
@@ -3596,7 +3604,11 @@ export class PolymarketSignalService {
         this.recordLiveTradingIssue(username, error);
         return null;
       });
-    if (!response) {
+    if (!response || !isSuccessfulLiveOrderResponse(response)) {
+      this.recordLiveTradingIssue(
+        username,
+        new Error(`Live close order was not accepted${describeLiveOrderResponse(response)}`),
+      );
       return position;
     }
 
@@ -4657,4 +4669,41 @@ const extractOrderStatus = (response: unknown): string | undefined => {
   }
 
   return undefined;
+};
+
+const isSuccessfulLiveOrderResponse = (response: unknown): boolean => {
+  if (!response || typeof response !== "object") {
+    return false;
+  }
+
+  const candidate = response as Record<string, unknown>;
+  if (candidate.success !== true) {
+    return false;
+  }
+
+  const status = typeof candidate.status === "string" ? candidate.status.trim().toLowerCase() : "";
+  if (["failed", "rejected", "cancelled", "canceled", "unmatched"].includes(status)) {
+    return false;
+  }
+
+  return true;
+};
+
+const describeLiveOrderResponse = (response: unknown): string => {
+  if (!response || typeof response !== "object") {
+    return "";
+  }
+
+  const candidate = response as Record<string, unknown>;
+  const status =
+    typeof candidate.status === "string" && candidate.status.trim() ? candidate.status.trim() : undefined;
+  const error =
+    typeof candidate.error === "string" && candidate.error.trim()
+      ? candidate.error.trim()
+      : typeof candidate.errorMsg === "string" && candidate.errorMsg.trim()
+        ? candidate.errorMsg.trim()
+        : undefined;
+
+  const details = [status ? `status=${status}` : null, error ? `error=${error}` : null].filter(Boolean);
+  return details.length > 0 ? ` (${details.join(", ")})` : "";
 };

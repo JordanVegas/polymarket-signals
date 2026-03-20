@@ -177,6 +177,8 @@ type StrategyTrade = {
   price: number;
   shares: number;
   usd: number;
+  orderId?: string;
+  status?: string;
 };
 
 type StrategyDashboardResponse = {
@@ -340,6 +342,7 @@ const copy = {
     liveTrading: "Live trading",
     liveTradingEnabled: "Live trading armed",
     liveTradingCredentials: "Live trading credentials",
+    liveTradingIssue: "Live trading issue",
     liveTradingReady: "Live trading ready",
     liveTradingNotReady: "Missing wallet or credentials",
     liveActivity: "Live activity",
@@ -794,6 +797,11 @@ function App() {
   const strategyLiveTitle = strategyRoute === "edge_swing" ? t.liveEdgeSwingTitle : t.liveAutoTradeTitle;
   const strategyLiveSubtitle =
     strategyRoute === "edge_swing" ? t.liveEdgeSwingSubtitle : t.liveAutoTradeSubtitle;
+  const profileLiveTradingMessage =
+    profile?.liveTradingError ?? (profile?.liveTradingReady ? t.liveTradingReady : t.liveTradingNotReady);
+  const liveStrategyStatusMessage = liveStrategyDashboard.enabled
+    ? liveStrategyDashboard.error ?? (liveStrategyDashboard.ready ? t.liveTradingReady : t.liveTradingNotReady)
+    : t.liveTrading;
 
   useEffect(() => {
     document.documentElement.lang = language;
@@ -1602,8 +1610,8 @@ function App() {
                 <p>{t.liveTradingBody}</p>
               </div>
 
-              <p className="profile-helper">
-                {profile?.liveTradingError ?? (profile?.liveTradingReady ? t.liveTradingReady : t.liveTradingNotReady)}
+              <p className={`profile-helper${profile?.liveTradingError ? " profile-helper-error" : ""}`}>
+                {profileLiveTradingMessage}
               </p>
 
               <label className="profile-field">
@@ -1883,10 +1891,14 @@ function App() {
               <StatusRow label={t.closedPositions} value={liveStrategyDashboard.summary.closedPositionCount.toString()} tone="neutral" />
               <StatusRow label={t.unrealizedPnl} value={currencyFormatter.format(liveStrategyDashboard.summary.unrealizedUsd)} tone={liveStrategyDashboard.summary.unrealizedUsd >= 0 ? "green" : "blue"} />
             </div>
-            <p className="profile-helper">
-              {liveStrategyDashboard.enabled
-                ? (liveStrategyDashboard.error ?? (liveStrategyDashboard.ready ? t.liveTradingReady : t.liveTradingNotReady))
-                : t.liveTrading}
+            {liveStrategyDashboard.error ? (
+              <div className="inline-alert inline-alert-error" role="alert">
+                <span className="inline-alert-label">{t.liveTrading}</span>
+                <strong>{liveStrategyDashboard.error}</strong>
+              </div>
+            ) : null}
+            <p className={`profile-helper${liveStrategyDashboard.error ? " profile-helper-error" : ""}`}>
+              {liveStrategyStatusMessage}
             </p>
             {liveStrategyDashboard.positions.length ? (
               <div className="signal-grid">
@@ -1951,7 +1963,9 @@ function App() {
                       <strong>{trade.marketQuestion}</strong>
                       <span>{`${trade.side} ${trade.outcome}`}</span>
                       <span>{`${t.activityTime}: ${formatRelativeTime(trade.timestamp, t)} - ${formatTimestamp(trade.timestamp, t.pending)}`}</span>
-                      <span>{`${trade.reason}${trade.orderId ? ` - ${trade.orderId}` : ""}`}</span>
+                      <span>
+                        {`${trade.reason}${trade.status ? ` - ${trade.status}` : ""}${trade.orderId ? ` - ${trade.orderId}` : ""}`}
+                      </span>
                         <span>{`${t.activityDetails}: ${trade.shares.toFixed(2)} shares - ${preciseCurrencyFormatter.format(trade.usd)} @ ${trade.price.toFixed(3)}`}</span>
                     </div>
                     <div className="profile-watch-actions">

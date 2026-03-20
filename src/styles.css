@@ -458,10 +458,36 @@ a {
   font-size: 0.8rem;
 }
 
+.profile-helper-error {
+  color: #ffb8b8;
+}
+
 .profile-message {
   margin: 0;
   color: #dffcff;
   font-size: 0.9rem;
+}
+
+.inline-alert {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.inline-alert-error {
+  border-color: rgba(255, 92, 92, 0.28);
+  background: rgba(255, 92, 92, 0.12);
+}
+
+.inline-alert-label {
+  color: #ffd0d0;
+  font-size: 0.74rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .profile-actions {
