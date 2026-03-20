@@ -124,6 +124,10 @@ type MarketBestBidAskMessage = {
 };
 
 type OrderBookResponse = {
+  bids?: Array<{
+    price?: string;
+    size?: string;
+  }>;
   asks?: Array<{
     price?: string;
     size?: string;
@@ -352,6 +356,7 @@ export class PolymarketSignalService {
   private readonly liveStrategyUserQueues = new Map<string, Promise<void>>();
   private readonly requestMetrics = new Map<string, RequestMetric>();
   private readonly bestAskByAssetId = new Map<string, { price: number; size: number | null; updatedAt: number }>();
+  private readonly bestBidByAssetId = new Map<string, { price: number; size: number | null; updatedAt: number }>();
   private readonly gapCandidatesById = new Map<string, GapCandidate>();
   private readonly gapCandidateIdsByAssetId = new Map<string, Set<string>>();
   private readonly liveTradingIssues = new Map<string, { message: string; blockedUntil: number }>();
@@ -1189,16 +1194,25 @@ export class PolymarketSignalService {
 
     const bestAsk = Number(message.best_ask);
     const bestBid = Number(message.best_bid);
-    const price = Number.isFinite(bestAsk) && bestAsk > 0 ? bestAsk : Number.isFinite(bestBid) && bestBid > 0 ? bestBid : null;
-    if (price === null) {
+    const updatedAt = Date.now();
+    if (!Number.isFinite(bestAsk) && !Number.isFinite(bestBid)) {
       return;
     }
 
-    this.bestAskByAssetId.set(message.asset_id, {
-      price,
-      size: null,
-      updatedAt: Date.now(),
-    });
+    if (Number.isFinite(bestAsk) && bestAsk > 0) {
+      this.bestAskByAssetId.set(message.asset_id, {
+        price: bestAsk,
+        size: null,
+        updatedAt,
+      });
+    }
+    if (Number.isFinite(bestBid) && bestBid > 0) {
+      this.bestBidByAssetId.set(message.asset_id, {
+        price: bestBid,
+        size: null,
+        updatedAt,
+      });
+    }
     void this.refreshGapCandidatesForAsset(message.asset_id);
   }
 
@@ -2073,7 +2087,7 @@ export class PolymarketSignalService {
         continue;
       }
 
-      const quote = await this.getBestAskQuote(assetId, OPEN_POSITION_PRICE_QUOTE_MAX_AGE_MS).catch(() => null);
+      const quote = await this.getBestBidQuote(assetId, OPEN_POSITION_PRICE_QUOTE_MAX_AGE_MS).catch(() => null);
       if (quote && Number.isFinite(quote.price) && quote.price > 0) {
         quoteByKey.set(key, quote.price);
       }
@@ -2335,6 +2349,40 @@ export class PolymarketSignalService {
       updatedAt: Date.now(),
     };
     this.bestAskByAssetId.set(assetId, quote);
+    return { price: quote.price, size: quote.size };
+  }
+
+  private async getBestBidQuote(
+    assetId: string,
+    maxAgeMs = 60_000,
+  ): Promise<{ price: number; size: number | null } | null> {
+    const cached = this.bestBidByAssetId.get(assetId);
+    if (cached && Date.now() - cached.updatedAt < maxAgeMs) {
+      return { price: cached.price, size: cached.size };
+    }
+
+    const url = new URL(`${CLOB_API_URL}/book`);
+    url.searchParams.set("token_id", assetId);
+    const response = await this.safeFetch(url, `position book ${assetId}`);
+    if (!response?.ok) {
+      return cached ? { price: cached.price, size: cached.size } : null;
+    }
+
+    const payload = (await response.json()) as OrderBookResponse;
+    const bestBid = payload.bids
+      ?.map((entry) => ({ price: Number(entry.price), size: Number(entry.size) }))
+      .filter((entry) => Number.isFinite(entry.price) && entry.price > 0)
+      .sort((left, right) => right.price - left.price)[0];
+    if (!bestBid) {
+      return cached ? { price: cached.price, size: cached.size } : null;
+    }
+
+    const quote = {
+      price: bestBid.price,
+      size: Number.isFinite(bestBid.size) && bestBid.size > 0 ? bestBid.size : null,
+      updatedAt: Date.now(),
+    };
+    this.bestBidByAssetId.set(assetId, quote);
     return { price: quote.price, size: quote.size };
   }
 
