@@ -559,6 +559,7 @@ export class PolymarketSignalService {
     let websocketConnectedShardCount = 0;
     const trackedTraderCount = await this.storage.countTrackedTraders();
     const requestStats = this.getRequestStats();
+    let lastTradeAt = this.lastTradeAt;
 
     for (const seenAt of this.websocketAssetSeenAt.values()) {
       if (seenAt >= recentCutoff) {
@@ -572,6 +573,19 @@ export class PolymarketSignalService {
       }
     }
 
+    const usesStoredMarketReadModel =
+      this.activeAssetIds.size > 0 &&
+      this.marketSocketShards.size === 0 &&
+      this.websocketAssetSeenAt.size === 0;
+
+    if (usesStoredMarketReadModel) {
+      const observedTradeSnapshot = await this.storage.getObservedTradeSnapshot(
+        Math.floor(recentCutoff / 1000),
+      );
+      websocketAssetsSeenRecentlyCount = observedTradeSnapshot.distinctAssetCount;
+      lastTradeAt = observedTradeSnapshot.lastTradeAt;
+    }
+
     return {
       status: {
         marketCount: this.activeAssetIds.size,
@@ -579,7 +593,7 @@ export class PolymarketSignalService {
         websocketShardCount: this.marketSocketShards.size,
         websocketConnectedShardCount,
         lastMarketSyncAt: this.lastMarketSyncAt,
-        lastTradeAt: this.lastTradeAt,
+        lastTradeAt,
         websocketSubscribedAssetCount: this.activeAssetIds.size,
         websocketAssetsSeenCount: this.websocketAssetSeenAt.size,
         websocketAssetsSeenRecentlyCount,

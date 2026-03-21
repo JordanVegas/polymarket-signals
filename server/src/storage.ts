@@ -702,6 +702,36 @@ export class SignalStorage {
     return rows.map(({ _id: _ignored, tradeId: _tradeId, createdAt: _createdAt, ...trade }) => trade);
   }
 
+  async getObservedTradeSnapshot(sinceTimestampSec: number): Promise<{
+    distinctAssetCount: number;
+    lastTradeAt: number | null;
+  }> {
+    const [summary] = await this.observedTradeCollection()
+      .aggregate<{ distinctAssetCount: number; lastTradeTimestamp: number | null }>([
+        { $match: { timestamp: { $gte: sinceTimestampSec } } },
+        {
+          $group: {
+            _id: null,
+            distinctAssets: { $addToSet: "$asset" },
+            lastTradeTimestamp: { $max: "$timestamp" },
+          },
+        },
+        {
+          $project: {
+            _id: 0,
+            distinctAssetCount: { $size: "$distinctAssets" },
+            lastTradeTimestamp: 1,
+          },
+        },
+      ])
+      .toArray();
+
+    return {
+      distinctAssetCount: summary?.distinctAssetCount ?? 0,
+      lastTradeAt: summary?.lastTradeTimestamp ? summary.lastTradeTimestamp * 1000 : null,
+    };
+  }
+
   async markMarketCatchupStarted(marketId: string): Promise<boolean> {
     const result = await this.marketCatchupCollection().updateOne(
       { marketId },
