@@ -1,12 +1,6 @@
 name: Sync TUF Live Edge Swing Prod
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - .github/workflows/sync-tuf-live-edge-swing-prod.yml
-      - scripts/sync-live-edge-swing-positions.mjs
   workflow_dispatch:
 
 jobs:
@@ -18,7 +12,7 @@ jobs:
       - name: Upload sync script to droplet
         uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets.DROPLET_HOST }}
+          host: 64.227.130.117
           username: ${{ secrets.DROPLET_USER }}
           port: ${{ secrets.DROPLET_PORT }}
           key: ${{ secrets.DROPLET_SSH_KEY }}
@@ -29,7 +23,7 @@ jobs:
       - name: Run sync on droplet
         uses: appleboy/ssh-action@v1.2.0
         with:
-          host: ${{ secrets.DROPLET_HOST }}
+          host: 64.227.130.117
           username: ${{ secrets.DROPLET_USER }}
           port: ${{ secrets.DROPLET_PORT }}
           key: ${{ secrets.DROPLET_SSH_KEY }}
@@ -40,7 +34,7 @@ jobs:
             cd "$APP_DIR"
             cp /tmp/polysignals-sync/scripts/sync-live-edge-swing-positions.mjs "$APP_DIR/.sync-live-edge-swing-positions.mjs"
             set -a
-            . "$APP_DIR/.env"
+            . "$APP_DIR/.env.app-execution"
             set +a
             node "$APP_DIR/.sync-live-edge-swing-positions.mjs" --username tuf --strategy edge_swing
             rm -f "$APP_DIR/.sync-live-edge-swing-positions.mjs"
