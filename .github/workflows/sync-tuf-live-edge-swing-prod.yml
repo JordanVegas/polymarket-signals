@@ -34,7 +34,7 @@ jobs:
             cd "$APP_DIR"
             cp /tmp/polysignals-sync/scripts/sync-live-edge-swing-positions.mjs "$APP_DIR/.sync-live-edge-swing-positions.mjs"
             set -a
-            . "$APP_DIR/.env.app-execution"
+            . <(tr -d '\r' < "$APP_DIR/.env.app-execution")
             set +a
             node "$APP_DIR/.sync-live-edge-swing-positions.mjs" --username tuf --strategy edge_swing
             rm -f "$APP_DIR/.sync-live-edge-swing-positions.mjs"

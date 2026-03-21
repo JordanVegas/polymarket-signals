@@ -36,7 +36,7 @@ jobs:
           cd "$APP_DIR"
           cp /tmp/inspect-live-equity-gap.mjs "$APP_DIR/.inspect-live-equity-gap.mjs"
           set -a
-          . "$APP_DIR/.env.app-execution"
+          . <(tr -d '\r' < "$APP_DIR/.env.app-execution")
           set +a
           node "$APP_DIR/.inspect-live-equity-gap.mjs" --username tuf
           rm -f "$APP_DIR/.inspect-live-equity-gap.mjs"

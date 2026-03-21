@@ -34,7 +34,7 @@ jobs:
             cd "$APP_DIR"
             cp /tmp/polysignals-close-untracked/scripts/close-untracked-live-positions.mjs "$APP_DIR/.close-untracked-live-positions.mjs"
             set -a
-            . "$APP_DIR/.env.app-execution"
+            . <(tr -d '\r' < "$APP_DIR/.env.app-execution")
             set +a
             node "$APP_DIR/.close-untracked-live-positions.mjs" --username tuf
             rm -f "$APP_DIR/.close-untracked-live-positions.mjs"
