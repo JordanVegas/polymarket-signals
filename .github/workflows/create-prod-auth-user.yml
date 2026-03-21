@@ -42,5 +42,5 @@ jobs:
             set -a
             . "$APP_DIR/.env"
             set +a
-            node "$APP_DIR/.create-prod-auth-user.mjs" --username gapy --password CrazyGaps
+            node "$APP_DIR/.create-prod-auth-user.mjs" --username idani --password Abhmkyhrx
             rm -f "$APP_DIR/.create-prod-auth-user.mjs"
