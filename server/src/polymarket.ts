@@ -2644,11 +2644,21 @@ export class PolymarketSignalService {
   ): Promise<void> {
     const aggregate = (await this.storage.loadMarketAggregates([marketSlug]))[0];
     if (!aggregate) {
+      this.logExecutionAction("paper_strategy", "reconcile_skipped_missing_aggregate", {
+        username,
+        marketSlug,
+        strategyKey,
+      });
       return;
     }
 
     const settings = await this.storage.getUserSettings(username);
     if (!this.isPaperStrategyEnabled(settings, strategyKey)) {
+      this.logExecutionAction("paper_strategy", "reconcile_skipped_disabled", {
+        username,
+        marketSlug,
+        strategyKey,
+      });
       return;
     }
     const startingBalanceUsd = this.getStrategyStartingBalance(settings, strategyKey);
@@ -2665,9 +2675,28 @@ export class PolymarketSignalService {
       currentParticipants.map((participant) => [participant.wallet, participant.weight] as const),
     );
     const position = existingMarketPosition;
+    this.logExecutionAction("paper_strategy", "reconcile_started", {
+      username,
+      marketSlug,
+      strategyKey,
+      trackedOutcome,
+      hasPosition: Boolean(position),
+      setupQuality,
+      currentBalanceUsd,
+      riskPercent,
+      latestSignalSide: aggregate.latestSignal.side,
+      latestSignalUsd: aggregate.latestSignal.totalUsd,
+    });
 
     if (!position) {
       if (!doesMarketQualifyForStrategy(aggregate, strategyKey)) {
+        this.logExecutionAction("paper_strategy", "entry_skipped_not_qualified", {
+          username,
+          marketSlug,
+          strategyKey,
+          edgeOutcome,
+          setupQuality,
+        });
         return;
       }
 
@@ -2728,6 +2757,18 @@ export class PolymarketSignalService {
         originalParticipants,
       };
       await this.storage.saveStrategyPosition(nextPosition);
+      this.logExecutionAction("paper_strategy", "position_opened", {
+        username,
+        marketSlug,
+        strategyKey,
+        outcome: edgeOutcome,
+        entryPrice,
+        currentPrice,
+        entryNotionalUsd,
+        acquiredShares: nextPosition.remainingShares,
+        originalSmartMoneyWeight,
+        participantCount: originalParticipants.length,
+      });
       return;
     }
 
@@ -2778,6 +2819,17 @@ export class PolymarketSignalService {
         soldPercent: Math.max(nextPosition.soldPercent, 50),
         trim96Hit: true,
       };
+      this.logExecutionAction("paper_strategy", "position_trimmed", {
+        username,
+        marketSlug,
+        strategyKey,
+        outcome: trackedOutcome,
+        sharesSold: sharesToSell,
+        remainingShares: nextPosition.remainingShares,
+        realizedUsd,
+        price: currentPrice,
+        reason: "Trim 0.96",
+      });
     }
 
     let exitReason: string | undefined;
@@ -2824,6 +2876,15 @@ export class PolymarketSignalService {
         soldPercent: 100,
         exitReason,
       };
+      this.logExecutionAction("paper_strategy", "position_closed", {
+        username,
+        marketSlug,
+        strategyKey,
+        outcome: trackedOutcome,
+        exitReason,
+        exitPrice,
+        realizedUsd,
+      });
     }
 
     await this.storage.saveStrategyPosition(nextPosition);
@@ -2861,14 +2922,30 @@ export class PolymarketSignalService {
   ): Promise<void> {
     const aggregate = (await this.storage.loadMarketAggregates([marketSlug]))[0];
     if (!aggregate) {
+      this.logExecutionAction("live_strategy", "reconcile_skipped_missing_aggregate", {
+        username,
+        marketSlug,
+        strategyKey,
+      });
       return;
     }
 
     const settings = await this.storage.getUserSettings(username);
     if (!this.isLiveStrategyEnabled(settings, strategyKey)) {
+      this.logExecutionAction("live_strategy", "reconcile_skipped_disabled", {
+        username,
+        marketSlug,
+        strategyKey,
+      });
       return;
     }
     if (this.isLiveTradingBlocked(username)) {
+      this.logExecutionAction("live_strategy", "reconcile_skipped_temporarily_blocked", {
+        username,
+        marketSlug,
+        strategyKey,
+        issue: this.getLiveTradingIssue(username),
+      });
       return;
     }
 
@@ -2880,6 +2957,16 @@ export class PolymarketSignalService {
       !settings.encryptedApiSecret ||
       !settings.encryptedApiPassphrase
     ) {
+      this.logExecutionAction("live_strategy", "reconcile_skipped_missing_credentials", {
+        username,
+        marketSlug,
+        strategyKey,
+        hasWallet: Boolean(tradingWalletAddress),
+        hasPrivateKey: Boolean(settings.encryptedPrivateKey),
+        hasApiKey: Boolean(settings.encryptedApiKey),
+        hasApiSecret: Boolean(settings.encryptedApiSecret),
+        hasApiPassphrase: Boolean(settings.encryptedApiPassphrase),
+      });
       return;
     }
 
@@ -2902,6 +2989,12 @@ export class PolymarketSignalService {
     const trackedOutcome = position?.outcome ?? edgeOutcome;
     const tokenID = this.findAssetIdForMarketOutcome(marketSlug, trackedOutcome);
     if (!tokenID) {
+      this.logExecutionAction("live_strategy", "reconcile_skipped_missing_token", {
+        username,
+        marketSlug,
+        strategyKey,
+        trackedOutcome,
+      });
       return;
     }
 
@@ -3005,6 +3098,21 @@ export class PolymarketSignalService {
         marketSlug,
         edgeOutcome,
       ).catch(() => 0);
+      this.logExecutionAction("live_strategy", "entry_order_submitting", {
+        username,
+        marketSlug,
+        strategyKey,
+        outcome: edgeOutcome,
+        tokenID,
+        tradingWalletAddress,
+        currentPrice,
+        entryPrice: safeEntryPrice,
+        entryNotionalUsd,
+        walletSharesBeforeEntry,
+        originalSmartMoneyWeight,
+        participantCount: originalParticipants.length,
+        options,
+      });
 
       const response = await client
         .createAndPostMarketOrder(
@@ -3053,6 +3161,14 @@ export class PolymarketSignalService {
         );
         return;
       }
+      this.logExecutionAction("live_strategy", "entry_order_accepted", {
+        username,
+        marketSlug,
+        strategyKey,
+        outcome: edgeOutcome,
+        tokenID,
+        response,
+      });
       const confirmedWalletShares = await this.waitForLiveEntryPositionConfirmation(
         tradingWalletAddress,
         tokenID,
@@ -3151,6 +3267,20 @@ export class PolymarketSignalService {
           response,
         }),
       );
+      this.logExecutionAction("live_strategy", "position_opened", {
+        username,
+        marketSlug,
+        strategyKey,
+        outcome: edgeOutcome,
+        tokenID,
+        tradingWalletAddress,
+        entryPrice: safeEntryPrice,
+        currentPrice,
+        entryNotionalUsd,
+        acquiredShares,
+        confirmedWalletShares,
+        response,
+      });
       return;
     }
 
@@ -3265,6 +3395,15 @@ export class PolymarketSignalService {
     }
 
     if (exitReason && nextPosition.remainingShares > 0) {
+      this.logExecutionAction("live_strategy", "close_triggered", {
+        username,
+        marketSlug,
+        strategyKey,
+        outcome: nextPosition.outcome,
+        exitReason,
+        currentPrice,
+        remainingShares: nextPosition.remainingShares,
+      });
       nextPosition = await this.executeLiveClose(
         username,
         nextPosition,
@@ -4226,6 +4365,34 @@ export class PolymarketSignalService {
     this.liveTradingIssues.delete(username.trim());
   }
 
+  private logExecutionAction(
+    category: string,
+    action: string,
+    details: Record<string, unknown>,
+  ): void {
+    void this.appendExecutionActionLog(category, action, details);
+  }
+
+  private async appendExecutionActionLog(
+    category: string,
+    action: string,
+    details: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      const logPath = config.appExecutionActionLogPath;
+      await mkdir(path.dirname(logPath), { recursive: true });
+      const payload = {
+        timestamp: new Date().toISOString(),
+        category,
+        action,
+        details: sanitizeForLogging(details),
+      };
+      await appendFile(logPath, `${JSON.stringify(payload)}\n`, "utf8");
+    } catch (logError) {
+      console.error("[polysignals] failed to write app execution action log", logError);
+    }
+  }
+
   private recordLiveTradingIssue(
     username: string,
     error: unknown,
@@ -4419,7 +4586,19 @@ export class PolymarketSignalService {
           },
         });
         return null;
-      });
+        });
+    this.logExecutionAction("live_strategy", "trim_order_submitted", {
+      username,
+      marketSlug: position.marketSlug,
+      strategyKey: position.strategyKey ?? "best_trades",
+      outcome: position.outcome,
+      tokenID,
+      sharesToSell,
+      thresholdPrice,
+      sellPrice: safeSellPrice,
+      response,
+      reason,
+    });
     if (!response || !isSuccessfulLiveOrderResponse(response)) {
       this.recordLiveTradingIssue(
         username,
@@ -4498,6 +4677,20 @@ export class PolymarketSignalService {
       );
 
     this.clearLiveTradingIssue(username);
+    this.logExecutionAction("live_strategy", "position_trimmed", {
+      username,
+      marketSlug: position.marketSlug,
+      strategyKey: position.strategyKey ?? "best_trades",
+      outcome: position.outcome,
+      tokenID,
+      sharesSold: soldShares,
+      remainingShares: nextPosition.remainingShares,
+      realizedUsd,
+      sellPrice: safeSellPrice,
+      thresholdPrice,
+      reason,
+      response,
+    });
 
     return nextPosition;
   }
@@ -4643,6 +4836,19 @@ export class PolymarketSignalService {
       });
       return null;
     });
+    this.logExecutionAction("live_strategy", "close_order_submitted", {
+      username,
+      marketSlug: position.marketSlug,
+      strategyKey: position.strategyKey ?? "best_trades",
+      outcome: position.outcome,
+      tokenID,
+      closeShares,
+      sellPrice: safeSellPrice,
+      exitReason,
+      targetPrice: targetPrice ?? null,
+      requestName,
+      response,
+    });
     if (!response || !isSuccessfulLiveOrderResponse(response)) {
       this.recordLiveTradingIssue(
         username,
@@ -4658,6 +4864,18 @@ export class PolymarketSignalService {
     }
 
     if (targetPrice != null) {
+      this.logExecutionAction("live_strategy", "close_order_placed_gtc", {
+        username,
+        marketSlug: position.marketSlug,
+        strategyKey: position.strategyKey ?? "best_trades",
+        outcome: position.outcome,
+        tokenID,
+        closeShares,
+        targetPrice,
+        exitReason,
+        orderId: extractOrderId(response),
+        status: extractOrderStatus(response),
+      });
       return {
         ...position,
         updatedAt: Date.now(),
@@ -4749,6 +4967,18 @@ export class PolymarketSignalService {
       );
 
     this.clearLiveTradingIssue(username);
+    this.logExecutionAction("live_strategy", "position_closed", {
+      username,
+      marketSlug: position.marketSlug,
+      strategyKey: position.strategyKey ?? "best_trades",
+      outcome: position.outcome,
+      tokenID,
+      exitReason,
+      soldShares,
+      realizedUsd,
+      sellPrice: safeSellPrice,
+      response,
+    });
 
     return nextPosition;
   }

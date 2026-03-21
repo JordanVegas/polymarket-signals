@@ -135,4 +135,8 @@ export const config = {
     process.env.LIVE_EXECUTION_ERROR_LOG_PATH
       ? path.resolve(appRootDir, process.env.LIVE_EXECUTION_ERROR_LOG_PATH)
       : path.resolve(appRootDir, "logs", "live-execution-errors.log"),
+  appExecutionActionLogPath:
+    process.env.APP_EXECUTION_ACTION_LOG_PATH
+      ? path.resolve(appRootDir, process.env.APP_EXECUTION_ACTION_LOG_PATH)
+      : path.resolve(appRootDir, "logs", "app-execution-actions.log"),
 };

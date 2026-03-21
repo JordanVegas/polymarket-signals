@@ -49,6 +49,7 @@ API_PROXY_FILE=
 RECENT_CATCHUP_LOOKBACK_MINUTES=30
 RECENT_CATCHUP_MAX_OFFSET=3000
 TRADING_ENCRYPTION_SECRET=
+APP_EXECUTION_ACTION_LOG_PATH=logs/app-execution-actions.log
 HISTORICAL_FETCH_ENABLED=false
 STARTUP_HISTORICAL_BACKFILL_ENABLED=false
 MARKET_HISTORY_CATCHUP_ENABLED=false
@@ -59,6 +60,7 @@ HISTORICAL_BACKFILL_LOOKBACK_HOURS=168
 
 Set `API_PROXY_ENABLED=false` to force direct connections even if `API_PROXY_URL`, `API_PROXY_URLS`, or `API_PROXY_FILE` are configured.
 Set `MIN_WS_TRADE_FETCH_USD=10` to ignore tiny websocket trades when deciding whether to fetch recent market trades.
+Set `APP_EXECUTION_ACTION_LOG_PATH` to control where detailed app-execution JSONL action logs are written.
 
 ## Split services
 
