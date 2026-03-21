@@ -9,6 +9,16 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service_name: market-intelligence
+            env_file: .env.market-intelligence
+            systemd_unit: market-intelligence
+          - service_name: app-execution
+            env_file: .env.app-execution
+            systemd_unit: app-execution
     steps:
       - uses: actions/checkout@v4
 
@@ -17,10 +27,10 @@ jobs:
           set -euo pipefail
           git archive --format=tar.gz --output=polymarket-signals.tar.gz HEAD
 
-      - name: Upload archive to droplet
+      - name: Upload archive to ${{ matrix.service_name }} droplet
         uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets.DROPLET_HOST }}
+          host: ${{ matrix.service_name == 'market-intelligence' && '139.59.0.218' || '64.227.130.117' }}
           username: ${{ secrets.DROPLET_USER }}
           port: ${{ secrets.DROPLET_PORT }}
           key: ${{ secrets.DROPLET_SSH_KEY }}
@@ -28,10 +38,10 @@ jobs:
           source: polymarket-signals.tar.gz
           target: /tmp
 
-      - name: Deploy app on droplet
+      - name: Deploy ${{ matrix.service_name }} on droplet
         uses: appleboy/ssh-action@v1.2.0
         with:
-          host: ${{ secrets.DROPLET_HOST }}
+          host: ${{ matrix.service_name == 'market-intelligence' && '139.59.0.218' || '64.227.130.117' }}
           username: ${{ secrets.DROPLET_USER }}
           port: ${{ secrets.DROPLET_PORT }}
           key: ${{ secrets.DROPLET_SSH_KEY }}
@@ -44,9 +54,9 @@ jobs:
             RUNTIME_ENV_TMP=""
             mkdir -p "$APP_PARENT"
             tar -xzf /tmp/polymarket-signals.tar.gz -C "$RELEASE_DIR"
-            if [ -f "$APP_DIR/.env" ]; then
+            if [ -f "$APP_DIR/${{ matrix.env_file }}" ]; then
               RUNTIME_ENV_TMP=$(mktemp)
-              cp "$APP_DIR/.env" "$RUNTIME_ENV_TMP"
+              cp "$APP_DIR/${{ matrix.env_file }}" "$RUNTIME_ENV_TMP"
             fi
             cd "$RELEASE_DIR"
             npm ci
@@ -57,7 +67,7 @@ jobs:
             fi
             mv "$RELEASE_DIR" "$APP_DIR"
             if [ -n "$RUNTIME_ENV_TMP" ]; then
-              mv "$RUNTIME_ENV_TMP" "$APP_DIR/.env"
+              mv "$RUNTIME_ENV_TMP" "$APP_DIR/${{ matrix.env_file }}"
             fi
-            systemctl restart polysignals
-            systemctl status polysignals --no-pager --lines=20
+            systemctl restart ${{ matrix.systemd_unit }}
+            systemctl status ${{ matrix.systemd_unit }} --no-pager --lines=20

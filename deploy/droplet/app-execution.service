@@ -1,16 +1,15 @@
 [Unit]
-Description=Polymarket Signals
+Description=Polymarket Signals App Execution
 After=network.target
 
 [Service]
 Type=simple
 User=root
 WorkingDirectory=__APP_DIR__
-EnvironmentFile=__APP_DIR__/.env
-ExecStart=/usr/bin/node dist/server/index.js
+EnvironmentFile=__APP_DIR__/.env.app-execution
+ExecStart=/usr/bin/node dist/server/app-execution/index.js
 Restart=always
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
-

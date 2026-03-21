@@ -1,0 +1,15 @@
+[Unit]
+Description=Polymarket Signals Market Intelligence
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=__APP_DIR__
+EnvironmentFile=__APP_DIR__/.env.market-intelligence
+ExecStart=/usr/bin/node dist/server/market-intelligence/index.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

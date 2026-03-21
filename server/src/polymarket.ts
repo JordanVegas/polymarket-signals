@@ -383,7 +383,10 @@ export class PolymarketSignalService {
   private liveWalletCoverageTimer: NodeJS.Timeout | null = null;
   private bestTradeResolutionTimer: NodeJS.Timeout | null = null;
   private openPositionPriceRefreshTimer: NodeJS.Timeout | null = null;
+  private signalMonitorTimer: NodeJS.Timeout | null = null;
+  private storedMarketCatalogRefreshTimer: NodeJS.Timeout | null = null;
   private lastTradeTimestampSec = 0;
+  private lastExecutionSignalTimestamp = 0;
   private websocketConnected = false;
   private lastMarketSyncAt: number | null = null;
   private lastTradeAt: number | null = null;
@@ -393,8 +396,14 @@ export class PolymarketSignalService {
   private nextShardId = 1;
   private nextFetchDispatcherIndex = 0;
   private listeners = new Set<(payload: WhaleSignal) => void>();
+  private readonly seenExecutionSignalIds = new Set<string>();
 
   async start(): Promise<void> {
+    await this.startMarketIntelligence();
+    await this.startAppExecution();
+  }
+
+  async startMarketIntelligence(): Promise<void> {
     await this.storage.connect();
     await this.restoreActiveClusters();
     this.runBackgroundTask("initial market sync", this.syncMarkets());
@@ -408,22 +417,40 @@ export class PolymarketSignalService {
     this.marketSyncTimer = setInterval(() => {
       this.runBackgroundTask("scheduled market sync", this.syncMarkets());
     }, config.marketRefreshMs);
+    this.bestTradeResolutionTimer = setInterval(() => {
+      this.runBackgroundTask("best trade resolution sync", this.syncResolvedBestTradeCandidates());
+    }, 15 * 60_000);
+    this.drainTrackedTraderPollQueue();
+  }
+
+  async startAppExecution(): Promise<void> {
+    await this.storage.connect();
+    await this.loadStoredMarkets();
+    const recentSignals = await this.storage.loadRecentSignals(200);
+    for (const signal of recentSignals) {
+      this.seenExecutionSignalIds.add(signal.id);
+      this.lastExecutionSignalTimestamp = Math.max(this.lastExecutionSignalTimestamp, signal.timestamp);
+    }
+    this.runBackgroundTask("initial portfolio watch sync", this.syncTrackedWalletWatches());
+    this.runBackgroundTask("initial live wallet coverage sync", this.syncLiveWalletCoverage());
+    this.runBackgroundTask("initial open position price refresh", this.refreshOpenPositionPrices());
+    this.runBackgroundTask("initial current best-trade reconcile", this.queueCurrentBestTradeReconciles());
+    this.runBackgroundTask("initial current edge-swing reconcile", this.queueCurrentEdgeSwingReconciles());
     this.portfolioSyncTimer = setInterval(() => {
       this.runBackgroundTask("portfolio watch sync", this.syncTrackedWalletWatches());
     }, 3 * 60_000);
     this.liveWalletCoverageTimer = setInterval(() => {
       this.runBackgroundTask("live wallet coverage sync", this.syncLiveWalletCoverage());
     }, 3 * 60_000);
-    this.bestTradeResolutionTimer = setInterval(() => {
-      this.runBackgroundTask("best trade resolution sync", this.syncResolvedBestTradeCandidates());
-    }, 15 * 60_000);
     this.openPositionPriceRefreshTimer = setInterval(() => {
       this.runBackgroundTask("open position price refresh", this.refreshOpenPositionPrices());
     }, OPEN_POSITION_PRICE_REFRESH_MS);
-    this.runBackgroundTask("initial portfolio watch sync", this.syncTrackedWalletWatches());
-    this.runBackgroundTask("initial live wallet coverage sync", this.syncLiveWalletCoverage());
-    this.runBackgroundTask("initial open position price refresh", this.refreshOpenPositionPrices());
-    this.drainTrackedTraderPollQueue();
+    this.signalMonitorTimer = setInterval(() => {
+      this.runBackgroundTask("execution signal poll", this.pollExecutionSignals());
+    }, 5_000);
+    this.storedMarketCatalogRefreshTimer = setInterval(() => {
+      this.runBackgroundTask("stored market catalog refresh", this.loadStoredMarkets());
+    }, 60_000);
   }
 
   private async restoreActiveClusters(): Promise<void> {
@@ -433,6 +460,51 @@ export class PolymarketSignalService {
 
     for (const cluster of clusters) {
       this.accumulators.set(cluster.clusterKey, this.fromPersistedCluster(cluster));
+    }
+  }
+
+  private async loadStoredMarkets(): Promise<void> {
+    const markets = await this.storage.loadMarketCatalog();
+    this.marketsByAssetId.clear();
+    this.activeAssetIds.clear();
+
+    for (const market of markets) {
+      for (const assetId of Object.keys(market.outcomeByAssetId)) {
+        this.marketsByAssetId.set(assetId, market);
+        this.activeAssetIds.add(assetId);
+      }
+    }
+  }
+
+  private async pollExecutionSignals(): Promise<void> {
+    const signals = await this.storage.loadSignalsSince(
+      Math.max(0, this.lastExecutionSignalTimestamp - 1),
+      500,
+    );
+
+    for (const signal of signals) {
+      if (signal.timestamp < this.lastExecutionSignalTimestamp) {
+        continue;
+      }
+
+      if (this.seenExecutionSignalIds.has(signal.id)) {
+        continue;
+      }
+
+      this.seenExecutionSignalIds.add(signal.id);
+      if (this.seenExecutionSignalIds.size > 5_000) {
+        const recentIds = new Set(Array.from(this.seenExecutionSignalIds).slice(-2_500));
+        this.seenExecutionSignalIds.clear();
+        for (const recentId of recentIds) {
+          this.seenExecutionSignalIds.add(recentId);
+        }
+      }
+
+      this.lastExecutionSignalTimestamp = Math.max(this.lastExecutionSignalTimestamp, signal.timestamp);
+      for (const listener of this.listeners) {
+        listener(signal);
+      }
+      await this.queuePaperAndLiveReconcilesForSignal(signal);
     }
   }
 
@@ -454,6 +526,12 @@ export class PolymarketSignalService {
     }
     if (this.openPositionPriceRefreshTimer) {
       clearInterval(this.openPositionPriceRefreshTimer);
+    }
+    if (this.signalMonitorTimer) {
+      clearInterval(this.signalMonitorTimer);
+    }
+    if (this.storedMarketCatalogRefreshTimer) {
+      clearInterval(this.storedMarketCatalogRefreshTimer);
     }
     for (const timer of this.delayedLiveReconcileTimers.values()) {
       clearTimeout(timer);
@@ -587,15 +665,10 @@ export class PolymarketSignalService {
       throw new Error("Username, market slug, and outcome are required");
     }
 
-    const { webhookUrl: savedWebhookUrl } = await this.storage.getUserSettings(normalizedUsername);
-    if (!savedWebhookUrl) {
-      throw new Error("Add your Discord webhook URL in Profile before enabling sell alerts");
-    }
-
     await this.storage.watchMarket(normalizedUsername, normalizedMarketSlug, normalizedOutcome);
     return {
       isWatched: true,
-      webhookConfigured: true,
+      webhookConfigured: false,
     };
   }
 
@@ -608,10 +681,9 @@ export class PolymarketSignalService {
     }
 
     await this.storage.unwatchMarket(normalizedUsername, normalizedMarketSlug, normalizedOutcome);
-    const { webhookUrl: savedWebhookUrl } = await this.storage.getUserSettings(normalizedUsername);
     return {
       isWatched: false,
-      webhookConfigured: Boolean(savedWebhookUrl),
+      webhookConfigured: false,
     };
   }
 
@@ -955,11 +1027,7 @@ export class PolymarketSignalService {
       await this.queueCurrentEdgeSwingReconcilesForUser(normalizedUsername);
     }
     if (updates.edgeSwingPaperTradingEnabled) {
-      const edgeSwingSlugs = (
-        await this.storage.loadMarketAggregates(
-          Array.from(new Set(Array.from(this.marketsByAssetId.values(), (market) => market.slug))),
-        )
-      )
+      const edgeSwingSlugs = (await this.storage.loadAllMarketAggregates())
         .filter((aggregate) => qualifiesEdgeSwingMarket(aggregate))
         .map((aggregate) => aggregate.marketSlug);
       for (const marketSlug of edgeSwingSlugs) {
@@ -1013,7 +1081,7 @@ export class PolymarketSignalService {
           question: market.question,
           slug: market.slug,
           image: market.image ?? "",
-        endDate: market.endDate ?? market.umaEndDate ?? "",
+          endDate: market.endDate ?? market.umaEndDate ?? "",
           liquidity: Number(market.liquidityNum ?? 0),
           volume24hr: Number(market.volume24hr ?? 0),
           outcomeByAssetId,
@@ -1038,6 +1106,9 @@ export class PolymarketSignalService {
       this.activeAssetIds.add(assetId);
     }
 
+    await this.storage.syncMarketCatalog(Array.from(new Map(
+      Array.from(nextMarketsByAssetId.values(), (market) => [market.slug, market] as const),
+    ).values()));
     this.lastMarketSyncAt = Date.now();
     this.rebuildMarketSockets();
     this.captureInitialActiveMarkets();
@@ -1832,22 +1903,6 @@ export class PolymarketSignalService {
     await this.storage.saveCluster(this.toPersistedCluster(accumulator));
     await this.storage.saveSignal(styledSignal);
     await this.refreshMarketAggregate(accumulator.market.slug);
-    const autoTradeUsers = await this.storage.loadAutoTradeUsers("best_trades");
-    for (const user of autoTradeUsers) {
-      await this.queueStrategyReconcile(accumulator.market.slug, user.username, "best_trades");
-    }
-    const edgeSwingPaperUsers = await this.storage.loadAutoTradeUsers("edge_swing");
-    for (const user of edgeSwingPaperUsers) {
-      await this.queueStrategyReconcile(accumulator.market.slug, user.username, "edge_swing");
-    }
-    const liveTradeUsers = await this.storage.loadLiveTradeUsers("best_trades");
-    for (const user of liveTradeUsers) {
-      await this.queueLiveStrategyReconcile(accumulator.market.slug, user.username, "best_trades");
-    }
-    const edgeSwingLiveUsers = await this.storage.loadLiveTradeUsers("edge_swing");
-    for (const user of edgeSwingLiveUsers) {
-      await this.queueLiveStrategyReconcile(accumulator.market.slug, user.username, "edge_swing");
-    }
 
     if (config.marketHistoryCatchupEnabled && this.initialActiveConditionIds.has(accumulator.market.conditionId)) {
       this.runBackgroundTask(
@@ -1860,18 +1915,34 @@ export class PolymarketSignalService {
       this.runBackgroundTask(`trader catch-up ${trader.wallet}`, this.backfillTraderHistory(trader));
     }
 
-    if (!wasAlreadyEmitted && styledSignal.side === "SELL") {
-      this.runBackgroundTask(
-        `sell alert ${styledSignal.marketSlug}`,
-        this.sendSellSignalAlerts(styledSignal),
-      );
-    }
-
     for (const listener of this.listeners) {
       listener(styledSignal);
     }
 
     return !wasAlreadyEmitted;
+  }
+
+  private async queuePaperAndLiveReconcilesForSignal(signal: WhaleSignal): Promise<void> {
+    const marketSlug = signal.marketSlug;
+    const [paperUsers, edgeSwingPaperUsers, liveUsers, edgeSwingLiveUsers] = await Promise.all([
+      this.storage.loadAutoTradeUsers("best_trades"),
+      this.storage.loadAutoTradeUsers("edge_swing"),
+      this.storage.loadLiveTradeUsers("best_trades"),
+      this.storage.loadLiveTradeUsers("edge_swing"),
+    ]);
+
+    for (const user of paperUsers) {
+      await this.queueStrategyReconcile(marketSlug, user.username, "best_trades");
+    }
+    for (const user of edgeSwingPaperUsers) {
+      await this.queueStrategyReconcile(marketSlug, user.username, "edge_swing");
+    }
+    for (const user of liveUsers) {
+      await this.queueLiveStrategyReconcile(marketSlug, user.username, "best_trades");
+    }
+    for (const user of edgeSwingLiveUsers) {
+      await this.queueLiveStrategyReconcile(marketSlug, user.username, "edge_swing");
+    }
   }
 
   private pruneAccumulators(): void {
@@ -2180,9 +2251,7 @@ export class PolymarketSignalService {
 
   private async queueCurrentEdgeSwingReconciles(): Promise<void> {
     const [aggregates, paperTradeUsers, liveTradeUsers] = await Promise.all([
-      this.storage.loadMarketAggregates(
-        Array.from(new Set(Array.from(this.marketsByAssetId.values(), (market) => market.slug))),
-      ),
+      this.storage.loadAllMarketAggregates(),
       this.storage.loadAutoTradeUsers("edge_swing"),
       this.storage.loadLiveTradeUsers("edge_swing"),
     ]);
@@ -2220,9 +2289,7 @@ export class PolymarketSignalService {
   ): Promise<void> {
     const nextMarketSlugs =
       marketSlugs ??
-      (await this.storage.loadMarketAggregates(
-        Array.from(new Set(Array.from(this.marketsByAssetId.values(), (market) => market.slug))),
-      ))
+      (await this.storage.loadAllMarketAggregates())
         .filter((aggregate) => qualifiesEdgeSwingMarket(aggregate))
         .map((aggregate) => aggregate.marketSlug);
 

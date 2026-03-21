@@ -5,9 +5,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
-import { SharedAuthService } from "./auth.js";
-import { config } from "./config.js";
-import { PolymarketSignalService } from "./polymarket.js";
+import { SharedAuthService } from "../auth.js";
+import { config } from "../config.js";
+import { AppExecutionService } from "./service.js";
 
 const app = express();
 const auth = new SharedAuthService();
@@ -27,18 +27,18 @@ app.use(auth.attachSessionUser());
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const clientDistDir = path.resolve(__dirname, "../");
+const clientDistDir = path.resolve(__dirname, "../../");
 const builtClientIndex = path.join(clientDistDir, "index.html");
 const hasBuiltClient = fs.existsSync(builtClientIndex);
 
-const service = new PolymarketSignalService();
+const service = new AppExecutionService();
 
 app.get("/api/health", (_request, response) => {
-  response.json({ ok: true });
+  response.json({ ok: true, service: "app-execution" });
 });
 
 app.get("/health", (_request, response) => {
-  response.json({ ok: true });
+  response.json({ ok: true, service: "app-execution" });
 });
 
 app.get("/login", (request, response) => {
@@ -183,7 +183,7 @@ app.post("/api/market-alerts/watch", async (request, response) => {
     response.json(await service.watchMarket(request.sessionUser.username, marketSlug, outcome));
   } catch (error) {
     response.status(400).json({
-      error: error instanceof Error ? error.message : "Unable to enable sell alerts",
+      error: error instanceof Error ? error.message : "Unable to update watch",
     });
   }
 });
@@ -206,7 +206,7 @@ app.delete("/api/market-alerts/watch/:marketSlug", async (request, response) => 
     response.json(await service.unwatchMarket(request.sessionUser.username, marketSlug, outcome));
   } catch (error) {
     response.status(400).json({
-      error: error instanceof Error ? error.message : "Unable to disable sell alerts",
+      error: error instanceof Error ? error.message : "Unable to update watch",
     });
   }
 });
@@ -272,5 +272,5 @@ void (async () => {
 })();
 
 server.listen(config.port, () => {
-  console.log(`Server listening on http://localhost:${config.port}`);
+  console.log(`App execution listening on http://localhost:${config.port}`);
 });

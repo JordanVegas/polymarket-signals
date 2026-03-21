@@ -3,6 +3,7 @@ import { config } from "./config.js";
 import type {
   GapOpportunity,
   MarketAggregate,
+  MarketRecord,
   StrategyKey,
   StrategyPosition,
   StrategyTrade,
@@ -110,6 +111,10 @@ export type PersistedMarketAggregate = MarketAggregate & {
   updatedAt: Date;
 };
 
+export type PersistedMarketRecord = MarketRecord & {
+  updatedAt: Date;
+};
+
 export type PersistedGapOpportunity = GapOpportunity & {
   updatedAtDate: Date;
 };
@@ -183,6 +188,9 @@ export class SignalStorage {
     await this.marketAggregateCollection().createIndex({ latestTimestamp: -1 });
     await this.marketAggregateCollection().createIndex({ weightedScore: -1, latestTimestamp: -1 });
     await this.marketAggregateCollection().createIndex({ participantCount: -1, latestTimestamp: -1 });
+    await this.marketCatalogCollection().createIndex({ slug: 1 }, { unique: true });
+    await this.marketCatalogCollection().createIndex({ eventSlug: 1, slug: 1 });
+    await this.marketCatalogCollection().createIndex({ updatedAt: -1 });
     await this.gapOpportunityCollection().createIndex({ id: 1 }, { unique: true });
     await this.gapOpportunityCollection().createIndex({ grossEdge: -1, updatedAt: -1 });
     await this.gapOpportunityCollection().createIndex({ combinedNoAsk: 1, updatedAt: -1 });
@@ -237,6 +245,14 @@ export class SignalStorage {
     return rows.map(({ _id: _ignored, updatedAt: _updatedAt, ...signal }) => signal);
   }
 
+  async loadSignalsSince(timestamp: number, limit = 500): Promise<WhaleSignal[]> {
+    const rows = await this.collection()
+      .find({ timestamp: { $gte: timestamp } }, { sort: { timestamp: 1 }, limit })
+      .toArray();
+
+    return rows.map(({ _id: _ignored, updatedAt: _updatedAt, ...signal }) => signal);
+  }
+
   async loadSignalsForMarketSlugs(marketSlugs: string[]): Promise<WhaleSignal[]> {
     if (marketSlugs.length === 0) {
       return [];
@@ -274,6 +290,14 @@ export class SignalStorage {
     return rows.map(({ _id: _ignored, updatedAt: _updatedAt, ...aggregate }) => aggregate);
   }
 
+  async loadAllMarketAggregates(limit = 2_000): Promise<MarketAggregate[]> {
+    const rows = await this.marketAggregateCollection()
+      .find({}, { sort: { latestTimestamp: -1 }, limit })
+      .toArray();
+
+    return rows.map(({ _id: _ignored, updatedAt: _updatedAt, ...aggregate }) => aggregate);
+  }
+
   async loadBestTradeMarketSlugs(limit = 500): Promise<string[]> {
     const rows = await this.marketAggregateCollection()
       .find({ isBestTrade: true }, { projection: { _id: 0, marketSlug: 1 }, sort: { latestTimestamp: -1 }, limit })
@@ -297,6 +321,40 @@ export class SignalStorage {
 
   async deleteMarketAggregate(marketSlug: string): Promise<void> {
     await this.marketAggregateCollection().deleteOne({ marketSlug });
+  }
+
+  async syncMarketCatalog(markets: MarketRecord[]): Promise<void> {
+    const uniqueMarkets = Array.from(new Map(markets.map((market) => [market.slug, market])).values());
+
+    if (uniqueMarkets.length > 0) {
+      await this.marketCatalogCollection().bulkWrite(
+        uniqueMarkets.map((market) => ({
+          updateOne: {
+            filter: { slug: market.slug },
+            update: {
+              $set: {
+                ...market,
+                updatedAt: new Date(),
+              },
+            },
+            upsert: true,
+          },
+        })),
+        { ordered: false },
+      );
+    }
+
+    await this.marketCatalogCollection().deleteMany(
+      uniqueMarkets.length > 0 ? { slug: { $nin: uniqueMarkets.map((market) => market.slug) } } : {},
+    );
+  }
+
+  async loadMarketCatalog(): Promise<MarketRecord[]> {
+    const rows = await this.marketCatalogCollection()
+      .find({}, { sort: { updatedAt: -1 } })
+      .toArray();
+
+    return rows.map(({ _id: _ignored, updatedAt: _updatedAt, ...market }) => market);
   }
 
   async saveGapOpportunity(gap: GapOpportunity): Promise<void> {
@@ -1153,6 +1211,16 @@ export class SignalStorage {
     return this.client
       .db(config.mongoDbName)
       .collection<PersistedMarketAggregate>("market_aggregates");
+  }
+
+  private marketCatalogCollection() {
+    if (!this.client) {
+      throw new Error("Mongo client not connected");
+    }
+
+    return this.client
+      .db(config.mongoDbName)
+      .collection<PersistedMarketRecord>("market_catalog");
   }
 
   private gapOpportunityCollection() {

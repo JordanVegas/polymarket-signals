@@ -8,6 +8,9 @@ Realtime Polymarket signal dashboard that:
 - classifies traders into whale, shark, and pro profile tiers
 - streams signals into a live web UI with market and profile links
 
+Microservices migration notes live in [docs/microservices-architecture.md](/Users/Jordan/Documents/polymarket-signals/docs/microservices-architecture.md).
+The recommended first split for this repo is documented in [docs/two-service-split.md](/Users/Jordan/Documents/polymarket-signals/docs/two-service-split.md).
+
 ## Run locally
 
 ```bash
@@ -17,12 +20,15 @@ npm run dev
 
 Frontend: `http://localhost:5173`
 
-Backend: `http://localhost:3001`
+App execution: `http://localhost:3001`
+
+Market intelligence: `http://localhost:3002`
 
 ## Environment variables
 
 ```bash
 PORT=3001
+MARKET_INTELLIGENCE_PORT=3002
 MONGO_URI=mongodb://127.0.0.1:27017
 MONGO_DB_NAME=polymarket_signals
 MONGO_SIGNALS_COLLECTION=signals
@@ -53,6 +59,31 @@ HISTORICAL_BACKFILL_LOOKBACK_HOURS=168
 
 Set `API_PROXY_ENABLED=false` to force direct connections even if `API_PROXY_URL`, `API_PROXY_URLS`, or `API_PROXY_FILE` are configured.
 Set `MIN_WS_TRADE_FETCH_USD=10` to ignore tiny websocket trades when deciding whether to fetch recent market trades.
+
+## Split services
+
+The repo now has two server entrypoints:
+
+- `server/src/market-intelligence/index.ts`
+- `server/src/app-execution/index.ts`
+
+Service-specific wrappers live in:
+
+- `server/src/market-intelligence/service.ts`
+- `server/src/app-execution/service.ts`
+
+Useful commands:
+
+- `npm run dev` runs both services plus the client
+- `npm run start:market-intelligence` runs only the market intelligence service
+- `npm run start:app-execution` runs only the UI and execution service
+
+The old combined server entrypoint has been removed.
+
+Deploy env files:
+
+- `deploy/droplet/market-intelligence.service` loads `.env.market-intelligence`
+- `deploy/droplet/app-execution.service` loads `.env.app-execution`
 
 ## Notes
 

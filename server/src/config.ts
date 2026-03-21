@@ -94,6 +94,7 @@ const proxyEnabled = parseBoolean(
 
 export const config = {
   port: parseNumber(process.env.PORT, 3001),
+  marketIntelligencePort: parseNumber(process.env.MARKET_INTELLIGENCE_PORT, 3002),
   mongoUri: defaultMongoUri,
   mongoDbName: process.env.MONGO_DB_NAME || "polymarket_signals",
   mongoSignalsCollection: process.env.MONGO_SIGNALS_COLLECTION || "signals",
