@@ -385,6 +385,7 @@ export class PolymarketSignalService {
   private openPositionPriceRefreshTimer: NodeJS.Timeout | null = null;
   private signalMonitorTimer: NodeJS.Timeout | null = null;
   private storedMarketCatalogRefreshTimer: NodeJS.Timeout | null = null;
+  private serviceStatusHeartbeatTimer: NodeJS.Timeout | null = null;
   private lastTradeTimestampSec = 0;
   private lastExecutionSignalTimestamp = 0;
   private websocketConnected = false;
@@ -420,6 +421,10 @@ export class PolymarketSignalService {
     this.bestTradeResolutionTimer = setInterval(() => {
       this.runBackgroundTask("best trade resolution sync", this.syncResolvedBestTradeCandidates());
     }, 15 * 60_000);
+    this.runBackgroundTask("service status heartbeat", this.persistServiceStatusHeartbeat());
+    this.serviceStatusHeartbeatTimer = setInterval(() => {
+      this.runBackgroundTask("service status heartbeat", this.persistServiceStatusHeartbeat());
+    }, 5_000);
     this.drainTrackedTraderPollQueue();
   }
 
@@ -533,6 +538,9 @@ export class PolymarketSignalService {
     if (this.storedMarketCatalogRefreshTimer) {
       clearInterval(this.storedMarketCatalogRefreshTimer);
     }
+    if (this.serviceStatusHeartbeatTimer) {
+      clearInterval(this.serviceStatusHeartbeatTimer);
+    }
     for (const timer of this.delayedLiveReconcileTimers.values()) {
       clearTimeout(timer);
     }
@@ -579,9 +587,14 @@ export class PolymarketSignalService {
       this.websocketAssetSeenAt.size === 0;
 
     if (usesStoredMarketReadModel) {
-      const observedTradeSnapshot = await this.storage.getObservedTradeSnapshot(
-        Math.floor(recentCutoff / 1000),
-      );
+      const persistedStatus = await this.storage.loadServiceStatus("market-intelligence");
+      if (persistedStatus) {
+        return {
+          status: persistedStatus.status,
+        };
+      }
+
+      const observedTradeSnapshot = await this.storage.getObservedTradeSnapshot(Math.floor(recentCutoff / 1000));
       websocketAssetsSeenRecentlyCount = observedTradeSnapshot.distinctAssetCount;
       lastTradeAt = observedTradeSnapshot.lastTradeAt;
     }
@@ -604,6 +617,10 @@ export class PolymarketSignalService {
         requestStats,
       },
     };
+  }
+
+  private async persistServiceStatusHeartbeat(): Promise<void> {
+    await this.storage.saveServiceStatus("market-intelligence", (await this.getSnapshot()).status);
   }
 
   async getMarketPage(

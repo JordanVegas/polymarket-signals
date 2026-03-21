@@ -1,6 +1,7 @@
 import { MongoClient } from "mongodb";
 import { config } from "./config.js";
 import type {
+  AppSnapshot,
   GapOpportunity,
   MarketAggregate,
   MarketRecord,
@@ -13,6 +14,12 @@ import type {
 } from "./types.js";
 
 type PersistedSignal = WhaleSignal & {
+  updatedAt: Date;
+};
+
+type PersistedServiceStatus = {
+  service: string;
+  status: AppSnapshot["status"];
   updatedAt: Date;
 };
 
@@ -235,6 +242,8 @@ export class SignalStorage {
       { username: 1, marketSlug: 1, outcome: 1, signalId: 1 },
       { unique: true },
     );
+    await this.serviceStatusCollection().createIndex({ service: 1 }, { unique: true });
+    await this.serviceStatusCollection().createIndex({ updatedAt: -1 });
   }
 
   async loadRecentSignals(limit: number): Promise<WhaleSignal[]> {
@@ -729,6 +738,34 @@ export class SignalStorage {
     return {
       distinctAssetCount: summary?.distinctAssetCount ?? 0,
       lastTradeAt: summary?.lastTradeTimestamp ? summary.lastTradeTimestamp * 1000 : null,
+    };
+  }
+
+  async saveServiceStatus(service: string, status: AppSnapshot["status"]): Promise<void> {
+    await this.serviceStatusCollection().updateOne(
+      { service },
+      {
+        $set: {
+          service,
+          status,
+          updatedAt: new Date(),
+        },
+      },
+      { upsert: true },
+    );
+  }
+
+  async loadServiceStatus(
+    service: string,
+  ): Promise<{ status: AppSnapshot["status"]; updatedAt: number } | null> {
+    const row = await this.serviceStatusCollection().findOne({ service });
+    if (!row) {
+      return null;
+    }
+
+    return {
+      status: row.status,
+      updatedAt: row.updatedAt.getTime(),
     };
   }
 
@@ -1376,5 +1413,15 @@ export class SignalStorage {
     return this.client
       .db(config.mongoDbName)
       .collection<PersistedAlertDelivery>("alert_deliveries");
+  }
+
+  private serviceStatusCollection() {
+    if (!this.client) {
+      throw new Error("Mongo client not connected");
+    }
+
+    return this.client
+      .db(config.mongoDbName)
+      .collection<PersistedServiceStatus>("service_status");
   }
 }
