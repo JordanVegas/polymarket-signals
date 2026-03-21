@@ -27,9 +27,25 @@ app.use(auth.attachSessionUser());
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const clientDistDir = path.resolve(__dirname, "../../");
-const builtClientIndex = path.join(clientDistDir, "index.html");
-const hasBuiltClient = fs.existsSync(builtClientIndex);
+
+function resolveClientDistDir(currentDir: string): string | null {
+  const candidates = [
+    path.resolve(currentDir, "../../../dist"),
+    path.resolve(currentDir, "../../../../"),
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(path.join(candidate, "index.html"))) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+const clientDistDir = resolveClientDistDir(__dirname);
+const builtClientIndex = clientDistDir ? path.join(clientDistDir, "index.html") : null;
+const hasBuiltClient = Boolean(clientDistDir && builtClientIndex);
 
 const service = new AppExecutionService();
 
@@ -211,7 +227,7 @@ app.delete("/api/market-alerts/watch/:marketSlug", async (request, response) => 
   }
 });
 
-if (hasBuiltClient) {
+if (hasBuiltClient && clientDistDir && builtClientIndex) {
   app.use(express.static(clientDistDir));
 
   app.get("*", (request, response, next) => {
