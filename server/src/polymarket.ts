@@ -2921,6 +2921,27 @@ export class PolymarketSignalService {
         );
         return;
       }
+      if (!hasLiveOrderExecutionEvidence(response)) {
+        this.recordLiveTradingIssue(
+          username,
+          new Error(`Live entry order was accepted without execution evidence${describeLiveOrderResponse(response)}`),
+          {
+            operation: "live_entry",
+            request: "createAndPostMarketOrder",
+            params: {
+              order: {
+                tokenID,
+                amount: entryNotionalUsd,
+                side: ClobSide.BUY,
+              },
+              options,
+              orderType: OrderType.FOK,
+            },
+            response,
+          },
+        );
+        return;
+      }
 
       const confirmedWalletShares = await this.waitForLiveEntryPositionConfirmation(
         tradingWalletAddress,
@@ -2955,12 +2976,31 @@ export class PolymarketSignalService {
 
       const openedAt = Date.now();
       const acquiredShares = Math.max(0, confirmedWalletShares - walletSharesBeforeEntry);
-      const remainingShares =
-        acquiredShares > 0 ? acquiredShares : entryNotionalUsd / safeEntryPrice;
-    const nextPosition: StrategyPosition = {
-      id: createStrategyPositionId(username, marketSlug, edgeOutcome, strategyKey, "live"),
-      strategyKey,
-      username,
+      if (acquiredShares <= 0) {
+        this.recordLiveTradingIssue(
+          username,
+          new Error(`Live entry confirmation returned no acquired shares${describeLiveOrderResponse(response)}`),
+          {
+            operation: "live_entry_confirmation",
+            request: "positions",
+            params: {
+              wallet: tradingWalletAddress,
+              tokenID,
+              marketSlug,
+              outcome: edgeOutcome,
+              previousShares: walletSharesBeforeEntry,
+              confirmedShares: confirmedWalletShares,
+            },
+            response,
+          },
+        );
+        return;
+      }
+
+      const nextPosition: StrategyPosition = {
+        id: createStrategyPositionId(username, marketSlug, edgeOutcome, strategyKey, "live"),
+        strategyKey,
+        username,
         marketSlug,
         marketQuestion: aggregate.marketQuestion,
         marketUrl: aggregate.marketUrl,
@@ -2972,7 +3012,7 @@ export class PolymarketSignalService {
         entryPrice: safeEntryPrice,
         lastPrice: currentPrice,
         entryNotionalUsd,
-        remainingShares,
+        remainingShares: acquiredShares,
         realizedUsd: 0,
         originalSmartMoneyWeight,
         remainingSmartMoneyWeight: originalSmartMoneyWeight,
@@ -2992,8 +3032,8 @@ export class PolymarketSignalService {
           side: "BUY",
           reason: "Entry",
           timestamp: openedAt,
-            price: safeEntryPrice,
-          shares: remainingShares,
+          price: safeEntryPrice,
+          shares: acquiredShares,
           usd: entryNotionalUsd,
           response,
         }),
@@ -3686,13 +3726,12 @@ export class PolymarketSignalService {
       return Number(exactAssetMatch.size ?? 0);
     }
 
-    const fallbackMatch = rows.find((row) => {
-      const rowSlug = String(row.slug ?? "").trim().toLowerCase();
-      const rowOutcome = String(row.outcome ?? "").trim().toLowerCase();
-      return rowSlug === normalizedSlug && rowOutcome === normalizedOutcome && Number(row.size ?? 0) > 0;
-    });
-
-    return fallbackMatch ? Number(fallbackMatch.size ?? 0) : 0;
+    // Do not fall back to slug/outcome here. We only want to confirm the exact token
+    // the strategy attempted to trade, otherwise unrelated wallet activity can be
+    // mistaken for a successful auto-trade entry or exit.
+    void normalizedSlug;
+    void normalizedOutcome;
+    return 0;
   }
 
   private async waitForLiveEntryPositionConfirmation(
@@ -3965,6 +4004,27 @@ export class PolymarketSignalService {
       );
       return position;
     }
+    if (!hasLiveOrderExecutionEvidence(response)) {
+      this.recordLiveTradingIssue(
+        username,
+        new Error(`Live trim order was accepted without execution evidence${describeLiveOrderResponse(response)}`),
+        {
+          operation: "live_trim",
+          request: "createAndPostMarketOrder",
+          params: {
+            order: {
+              tokenID,
+              amount: sharesToSell,
+              side: ClobSide.SELL,
+            },
+            options,
+            orderType: OrderType.FOK,
+          },
+          response,
+        },
+      );
+      return position;
+    }
 
     const confirmedWalletShares = await this.waitForLiveExitPositionConfirmation(
       tradingWalletAddress,
@@ -4194,6 +4254,19 @@ export class PolymarketSignalService {
         pendingClosePlacedAt: Date.now(),
         pendingCloseStatus: extractOrderStatus(response) ?? "submitted",
       };
+    }
+    if (!hasLiveOrderExecutionEvidence(response)) {
+      this.recordLiveTradingIssue(
+        username,
+        new Error(`Live close order was accepted without execution evidence${describeLiveOrderResponse(response)}`),
+        {
+          operation: "live_close",
+          request: requestName,
+          params: requestParams,
+          response,
+        },
+      );
+      return position;
     }
 
     const confirmedWalletShares = await this.waitForLiveExitPositionConfirmation(
@@ -5413,6 +5486,30 @@ const isSuccessfulLiveOrderResponse = (response: unknown): boolean => {
   }
 
   return true;
+};
+
+const hasLiveOrderExecutionEvidence = (response: unknown): boolean => {
+  if (!response || typeof response !== "object") {
+    return false;
+  }
+
+  const candidate = response as Record<string, unknown>;
+  const transactionHashes = candidate.transactionsHashes;
+  if (Array.isArray(transactionHashes) && transactionHashes.some((value) => typeof value === "string" && value.trim())) {
+    return true;
+  }
+
+  const takingAmount = Number(candidate.takingAmount ?? 0);
+  if (Number.isFinite(takingAmount) && takingAmount > 0) {
+    return true;
+  }
+
+  const makingAmount = Number(candidate.makingAmount ?? 0);
+  if (Number.isFinite(makingAmount) && makingAmount > 0) {
+    return true;
+  }
+
+  return false;
 };
 
 const describeLiveOrderResponse = (response: unknown): string => {
