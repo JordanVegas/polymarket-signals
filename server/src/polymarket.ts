@@ -3240,7 +3240,7 @@ export class PolymarketSignalService {
         return;
       }
 
-      const nextPosition: StrategyPosition = {
+      let nextPosition: StrategyPosition = {
         id: createStrategyPositionId(username, marketSlug, edgeOutcome, strategyKey, "live"),
         strategyKey,
         username,
@@ -3266,6 +3266,20 @@ export class PolymarketSignalService {
         peakOutcomeWeight: getOutcomeWeightForMarket(aggregate, edgeOutcome),
         originalParticipants,
       };
+      const syncedWalletPosition = await this.findWalletSyncLivePosition(
+        tradingWalletAddress,
+        marketSlug,
+        edgeOutcome,
+        tokenID,
+      );
+      if (syncedWalletPosition) {
+        nextPosition = this.applyWalletPositionSnapshotToLivePosition(
+          nextPosition,
+          syncedWalletPosition.row,
+          aggregate,
+          setupQuality,
+        );
+      }
       await this.storage.saveLiveStrategyPosition(nextPosition);
       this.clearLiveTradingIssue(username);
       await this.storage.saveLiveStrategyTrade(
@@ -4208,11 +4222,8 @@ export class PolymarketSignalService {
       Number(walletPosition.curPrice ?? 0),
       getMarketPriceForOutcome(aggregate, outcome),
     );
-    const entryPrice = Math.max(
-      0,
-      Number(walletPosition.avgPrice ?? 0),
-      currentPrice,
-    );
+    const reportedEntryPrice = Math.max(0, Number(walletPosition.avgPrice ?? 0));
+    const entryPrice = reportedEntryPrice > 0 ? reportedEntryPrice : currentPrice;
     const totalBought = Math.max(remainingShares, Number(walletPosition.totalBought ?? remainingShares));
     const originalParticipants =
       aggregate.outcomeParticipants
@@ -4227,11 +4238,9 @@ export class PolymarketSignalService {
       || getOutcomeWeightForMarket(aggregate, outcome);
     const soldPercent =
       totalBought > 0 ? Math.max(0, Math.min(100, (1 - remainingShares / totalBought) * 100)) : 0;
-    const entryNotionalUsd = Math.max(
-      0,
-      Number(walletPosition.initialValue ?? 0),
-      remainingShares * entryPrice,
-    );
+    const reportedInitialValue = Math.max(0, Number(walletPosition.initialValue ?? 0));
+    const entryNotionalUsd =
+      reportedInitialValue > 0 ? reportedInitialValue : Math.max(0, remainingShares * entryPrice);
     const importedAt = Date.now();
 
     return {
@@ -4275,17 +4284,22 @@ export class PolymarketSignalService {
       getMarketPriceForOutcome(aggregate, position.outcome),
       position.lastPrice,
     );
-    const entryPrice = Math.max(0, Number(walletPosition.avgPrice ?? 0), position.entryPrice);
+    const reportedEntryPrice = Math.max(0, Number(walletPosition.avgPrice ?? 0));
+    const entryPrice = reportedEntryPrice > 0 ? reportedEntryPrice : position.entryPrice;
     const totalBought = Math.max(remainingShares, Number(walletPosition.totalBought ?? remainingShares));
     const soldPercent =
       totalBought > 0 ? Math.max(0, Math.min(100, (1 - remainingShares / totalBought) * 100)) : position.soldPercent;
+    const reportedInitialValue = Math.max(0, Number(walletPosition.initialValue ?? 0));
 
     return {
       ...position,
       updatedAt: Date.now(),
       entryPrice,
       lastPrice: currentPrice,
-      entryNotionalUsd: Math.max(position.entryNotionalUsd, Number(walletPosition.initialValue ?? 0), remainingShares * entryPrice),
+      entryNotionalUsd:
+        reportedInitialValue > 0
+          ? reportedInitialValue
+          : Math.max(position.entryNotionalUsd, remainingShares * entryPrice),
       remainingShares,
       realizedUsd: Math.max(position.realizedUsd, Number(walletPosition.realizedPnl ?? 0)),
       soldPercent,
