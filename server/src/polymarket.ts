@@ -431,6 +431,10 @@ export class PolymarketSignalService {
   async startAppExecution(): Promise<void> {
     await this.storage.connect();
     await this.loadStoredMarkets();
+    this.logExecutionAction("service", "app_execution_started", {
+      activeAssetCount: this.activeAssetIds.size,
+      marketCount: new Set(Array.from(this.marketsByAssetId.values(), (market) => market.slug)).size,
+    });
     const recentSignals = await this.storage.loadRecentSignals(200);
     for (const signal of recentSignals) {
       this.seenExecutionSignalIds.add(signal.id);
