@@ -2921,28 +2921,6 @@ export class PolymarketSignalService {
         );
         return;
       }
-      if (!hasLiveOrderExecutionEvidence(response)) {
-        this.recordLiveTradingIssue(
-          username,
-          new Error(`Live entry order was accepted without execution evidence${describeLiveOrderResponse(response)}`),
-          {
-            operation: "live_entry",
-            request: "createAndPostMarketOrder",
-            params: {
-              order: {
-                tokenID,
-                amount: entryNotionalUsd,
-                side: ClobSide.BUY,
-              },
-              options,
-              orderType: OrderType.FOK,
-            },
-            response,
-          },
-        );
-        return;
-      }
-
       const confirmedWalletShares = await this.waitForLiveEntryPositionConfirmation(
         tradingWalletAddress,
         tokenID,
@@ -4004,28 +3982,6 @@ export class PolymarketSignalService {
       );
       return position;
     }
-    if (!hasLiveOrderExecutionEvidence(response)) {
-      this.recordLiveTradingIssue(
-        username,
-        new Error(`Live trim order was accepted without execution evidence${describeLiveOrderResponse(response)}`),
-        {
-          operation: "live_trim",
-          request: "createAndPostMarketOrder",
-          params: {
-            order: {
-              tokenID,
-              amount: sharesToSell,
-              side: ClobSide.SELL,
-            },
-            options,
-            orderType: OrderType.FOK,
-          },
-          response,
-        },
-      );
-      return position;
-    }
-
     const confirmedWalletShares = await this.waitForLiveExitPositionConfirmation(
       tradingWalletAddress,
       tokenID,
@@ -4255,20 +4211,6 @@ export class PolymarketSignalService {
         pendingCloseStatus: extractOrderStatus(response) ?? "submitted",
       };
     }
-    if (!hasLiveOrderExecutionEvidence(response)) {
-      this.recordLiveTradingIssue(
-        username,
-        new Error(`Live close order was accepted without execution evidence${describeLiveOrderResponse(response)}`),
-        {
-          operation: "live_close",
-          request: requestName,
-          params: requestParams,
-          response,
-        },
-      );
-      return position;
-    }
-
     const confirmedWalletShares = await this.waitForLiveExitPositionConfirmation(
       tradingWalletAddress,
       tokenID,
@@ -5486,30 +5428,6 @@ const isSuccessfulLiveOrderResponse = (response: unknown): boolean => {
   }
 
   return true;
-};
-
-const hasLiveOrderExecutionEvidence = (response: unknown): boolean => {
-  if (!response || typeof response !== "object") {
-    return false;
-  }
-
-  const candidate = response as Record<string, unknown>;
-  const transactionHashes = candidate.transactionsHashes;
-  if (Array.isArray(transactionHashes) && transactionHashes.some((value) => typeof value === "string" && value.trim())) {
-    return true;
-  }
-
-  const takingAmount = Number(candidate.takingAmount ?? 0);
-  if (Number.isFinite(takingAmount) && takingAmount > 0) {
-    return true;
-  }
-
-  const makingAmount = Number(candidate.makingAmount ?? 0);
-  if (Number.isFinite(makingAmount) && makingAmount > 0) {
-    return true;
-  }
-
-  return false;
 };
 
 const describeLiveOrderResponse = (response: unknown): string => {
