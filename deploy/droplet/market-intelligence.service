@@ -5,9 +5,9 @@ After=network.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=__APP_DIR__
-EnvironmentFile=__APP_DIR__/.env.market-intelligence
-ExecStart=/usr/bin/node dist/server/market-intelligence/index.js
+WorkingDirectory=/opt/polymarket-signals
+EnvironmentFile=/opt/polymarket-signals/.env.market-intelligence
+ExecStart=/usr/bin/node /opt/polymarket-signals/dist/server/server/src/market-intelligence/index.js
 Restart=always
 RestartSec=5
 
