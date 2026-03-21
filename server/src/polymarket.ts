@@ -2624,15 +2624,20 @@ export class PolymarketSignalService {
     username: string,
     strategyKey: StrategyKey = "best_trades",
   ): Promise<void> {
-    const normalizedQueueKey = `${username.trim()}:${strategyKey}`;
-    if (!username.trim()) {
+    const normalizedUsername = typeof username === "string" ? username.trim() : "";
+    if (!normalizedUsername) {
+      this.logExecutionAction("paper_strategy", "reconcile_skipped_missing_username", {
+        marketSlug,
+        strategyKey,
+      });
       return Promise.resolve();
     }
+    const normalizedQueueKey = `${normalizedUsername}:${strategyKey}`;
 
     const previous = this.strategyUserQueues.get(normalizedQueueKey) ?? Promise.resolve();
     const next = previous
       .catch(() => undefined)
-      .then(() => this.reconcileStrategyPosition(marketSlug, username.trim(), strategyKey));
+      .then(() => this.reconcileStrategyPosition(marketSlug, normalizedUsername, strategyKey));
     this.strategyUserQueues.set(normalizedQueueKey, next.finally(() => {
       if (this.strategyUserQueues.get(normalizedQueueKey) === next) {
         this.strategyUserQueues.delete(normalizedQueueKey);
@@ -2899,17 +2904,22 @@ export class PolymarketSignalService {
     username: string,
     strategyKey: StrategyKey = "best_trades",
   ): Promise<void> {
-    const normalizedQueueKey = `${username.trim()}:${strategyKey}`;
-    if (!username.trim()) {
+    const normalizedUsername = typeof username === "string" ? username.trim() : "";
+    if (!normalizedUsername) {
+      this.logExecutionAction("live_strategy", "reconcile_skipped_missing_username", {
+        marketSlug,
+        strategyKey,
+      });
       return Promise.resolve();
     }
+    const normalizedQueueKey = `${normalizedUsername}:${strategyKey}`;
 
     const previous = this.liveStrategyUserQueues.get(normalizedQueueKey) ?? Promise.resolve();
     const next = previous
       .catch(() => undefined)
-      .then(() => this.reconcileLiveStrategyPosition(marketSlug, username.trim(), strategyKey))
+      .then(() => this.reconcileLiveStrategyPosition(marketSlug, normalizedUsername, strategyKey))
       .catch((error) => {
-        logFetchFailure(`live strategy ${username.trim()} ${strategyKey} ${marketSlug}`, error);
+        logFetchFailure(`live strategy ${normalizedUsername} ${strategyKey} ${marketSlug}`, error);
       });
     this.liveStrategyUserQueues.set(normalizedQueueKey, next.finally(() => {
       if (this.liveStrategyUserQueues.get(normalizedQueueKey) === next) {
