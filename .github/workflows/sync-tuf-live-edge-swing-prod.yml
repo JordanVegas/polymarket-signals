@@ -36,5 +36,5 @@ jobs:
             set -a
             . <(tr -d '\r' < "$APP_DIR/.env.app-execution")
             set +a
-            node "$APP_DIR/.sync-live-edge-swing-positions.mjs" --username tuf --strategy edge_swing
+            node "$APP_DIR/.sync-live-edge-swing-positions.mjs" --username idani --strategy edge_swing
             rm -f "$APP_DIR/.sync-live-edge-swing-positions.mjs"
