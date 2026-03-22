@@ -2916,7 +2916,9 @@ export class PolymarketSignalService {
     const currentAggregate = await this.refreshAggregateCurrentPricesForMarket(aggregate);
     const setupQuality = getSetupQualityScore(currentAggregate);
     const currentParticipants =
-      currentAggregate.outcomeParticipants?.filter((participant) => participant.outcome === trackedOutcome) ?? [];
+      currentAggregate.outcomeParticipants?.filter(
+        (participant) => normalizeOutcomeName(participant.outcome) === normalizeOutcomeName(trackedOutcome),
+      ) ?? [];
     const currentWeightByWallet = new Map(
       currentParticipants.map((participant) => [participant.wallet, participant.weight] as const),
     );
@@ -3190,16 +3192,6 @@ export class PolymarketSignalService {
       });
       return;
     }
-    if (this.isLiveTradingBlocked(username)) {
-      this.logExecutionAction("live_strategy", "reconcile_skipped_temporarily_blocked", {
-        username,
-        marketSlug,
-        strategyKey,
-        issue: this.getLiveTradingIssue(username),
-      });
-      return;
-    }
-
     const tradingWalletAddress = settings.tradingWalletAddress?.trim() ?? "";
     if (
       !tradingWalletAddress ||
@@ -3236,6 +3228,15 @@ export class PolymarketSignalService {
         aggregate,
       );
     }
+    if (this.isLiveTradingBlocked(username) && !position?.pendingEntryOrderId && !position?.pendingCloseOrderId) {
+      this.logExecutionAction("live_strategy", "reconcile_skipped_temporarily_blocked", {
+        username,
+        marketSlug,
+        strategyKey,
+        issue: this.getLiveTradingIssue(username),
+      });
+      return;
+    }
 
     const trackedOutcome = position?.outcome ?? edgeOutcome;
     const tokenID = this.findAssetIdForMarketOutcome(marketSlug, trackedOutcome);
@@ -3252,7 +3253,9 @@ export class PolymarketSignalService {
     const currentAggregate = await this.refreshAggregateCurrentPricesForMarket(aggregate);
     const setupQuality = getSetupQualityScore(currentAggregate);
     const currentParticipants =
-      currentAggregate.outcomeParticipants?.filter((participant) => participant.outcome === trackedOutcome) ?? [];
+      currentAggregate.outcomeParticipants?.filter(
+        (participant) => normalizeOutcomeName(participant.outcome) === normalizeOutcomeName(trackedOutcome),
+      ) ?? [];
     const currentWeightByWallet = new Map(
       currentParticipants.map((participant) => [participant.wallet, participant.weight] as const),
     );
@@ -4470,7 +4473,7 @@ export class PolymarketSignalService {
     }
 
     const normalizedSlug = marketSlug.trim().toLowerCase();
-    const normalizedPreferredOutcome = preferredOutcome.trim().toLowerCase();
+    const normalizedPreferredOutcome = normalizeOutcomeName(preferredOutcome);
     const marketRows = rows.filter((row) => String(row.slug ?? "").trim().toLowerCase() === normalizedSlug);
     if (marketRows.length === 0) {
       return null;
@@ -4488,7 +4491,7 @@ export class PolymarketSignalService {
     }
 
     const preferredOutcomeMatch = marketRows.find(
-      (row) => String(row.outcome ?? "").trim().toLowerCase() === normalizedPreferredOutcome,
+      (row) => normalizeOutcomeName(String(row.outcome ?? "")) === normalizedPreferredOutcome,
     );
     if (preferredOutcomeMatch) {
       const matchedTokenID = this.findAssetIdForMarketOutcome(
@@ -6392,7 +6395,14 @@ const calculatePaperCashBalanceFromPositions = (
       positions.reduce((sum, position) => sum + position.realizedUsd, 0),
   );
 
-const normalizeOutcomeName = (value: string): string => value.trim().toLowerCase();
+const normalizeOutcomeName = (value: string): string =>
+  value
+    .normalize("NFKD")
+    .replace(/['’`]/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, " ")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
 
 const delay = (ms: number): Promise<void> =>
   new Promise((resolve) => {
@@ -6417,9 +6427,9 @@ const isBinaryYesNoMarket = (market: MarketRecord): boolean => {
 };
 
 const findAssetIdForOutcome = (market: MarketRecord, outcome: string): string | null => {
-  const normalizedOutcome = outcome.trim().toLowerCase();
+  const normalizedOutcome = normalizeOutcomeName(outcome);
   for (const [assetId, assetOutcome] of Object.entries(market.outcomeByAssetId)) {
-    if (assetOutcome.trim().toLowerCase() === normalizedOutcome) {
+    if (normalizeOutcomeName(assetOutcome) === normalizedOutcome) {
       return assetId;
     }
   }

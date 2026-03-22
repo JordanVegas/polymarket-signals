@@ -33,8 +33,12 @@ const parseArgs = (argv) => {
 
 const normalizeOutcomeName = (value) =>
   String(value || "")
+    .normalize("NFKD")
+    .replace(/['’`]/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, " ")
     .trim()
-    .toLowerCase();
+    .toLowerCase()
+    .replace(/\s+/g, " ");
 
 const getOutcomeWeightForMarket = (aggregate, outcome) => {
   const normalizedOutcome = normalizeOutcomeName(outcome);
@@ -57,7 +61,8 @@ const getEdgePointsForOutcome = (aggregate, outcome) => {
   return trackedWeight - opposingWeight;
 };
 
-const toOpenPositionKey = (marketSlug, outcome) => `${marketSlug}:${outcome}`;
+const toOpenPositionKey = (marketSlug, outcome) =>
+  `${String(marketSlug || "").trim().toLowerCase()}:${normalizeOutcomeName(outcome)}`;
 
 const parseNumber = (value, fallback = 0) => {
   const parsed = Number(value);
