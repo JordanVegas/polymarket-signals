@@ -3470,6 +3470,49 @@ export class PolymarketSignalService {
         walletSharesBeforeEntry,
       );
       if (confirmedWalletShares == null) {
+        const pendingPosition: StrategyPosition = {
+          id: createStrategyPositionId(username, marketSlug, edgeOutcome, strategyKey, "live"),
+          strategyKey,
+          username,
+          marketSlug,
+          marketQuestion: currentAggregate.marketQuestion,
+          marketUrl: currentAggregate.marketUrl,
+          marketImage: currentAggregate.marketImage,
+          outcome: edgeOutcome,
+          status: "open",
+          openedAt: Date.now(),
+          updatedAt: Date.now(),
+          entryPrice: safeEntryPrice,
+          lastPrice: safeEntryPrice,
+          entryNotionalUsd,
+          remainingShares: 0,
+          realizedUsd: 0,
+          originalSmartMoneyWeight,
+          remainingSmartMoneyWeight: originalSmartMoneyWeight,
+          soldPercent: 0,
+          trim96Hit: false,
+          setupQuality,
+          peakEdgePoints: getEdgePointsForOutcome(currentAggregate, edgeOutcome),
+          peakOutcomeWeight: getOutcomeWeightForMarket(currentAggregate, edgeOutcome),
+          pendingEntryOrderId: extractOrderId(response) ?? undefined,
+          pendingEntryPlacedAt: Date.now(),
+          pendingEntryStatus: extractOrderStatus(response) ?? "submitted",
+          originalParticipants,
+        };
+        await this.storage.saveLiveStrategyPosition(pendingPosition);
+        this.logExecutionAction("live_strategy", "entry_order_pending_confirmation", {
+          username,
+          marketSlug,
+          strategyKey,
+          outcome: edgeOutcome,
+          tokenID,
+          tradingWalletAddress,
+          entryPrice: safeEntryPrice,
+          entryNotionalUsd,
+          orderId: pendingPosition.pendingEntryOrderId ?? null,
+          status: pendingPosition.pendingEntryStatus,
+          response,
+        });
         this.logLiveTradingIssue(
           username,
           new Error(
@@ -3589,6 +3632,14 @@ export class PolymarketSignalService {
         response,
       });
       return;
+    }
+
+    if (position.pendingEntryOrderId) {
+      position = await this.reconcilePendingLiveEntryOrder(username, position, tokenID, currentAggregate, setupQuality);
+      await this.storage.saveLiveStrategyPosition(position);
+      if (position.pendingEntryOrderId || position.status === "closed") {
+        return;
+      }
     }
 
     const syncedWalletPosition = await this.findWalletSyncLivePosition(
@@ -4513,6 +4564,9 @@ export class PolymarketSignalService {
       imported.openedAt = existingOpenMarketPosition.openedAt;
       imported.realizedUsd = Math.max(imported.realizedUsd, existingOpenMarketPosition.realizedUsd);
       imported.trim96Hit = imported.trim96Hit || existingOpenMarketPosition.trim96Hit;
+      imported.pendingEntryOrderId = existingOpenMarketPosition.pendingEntryOrderId;
+      imported.pendingEntryPlacedAt = existingOpenMarketPosition.pendingEntryPlacedAt;
+      imported.pendingEntryStatus = existingOpenMarketPosition.pendingEntryStatus;
       imported.pendingCloseOrderId = existingOpenMarketPosition.pendingCloseOrderId;
       imported.pendingClosePrice = existingOpenMarketPosition.pendingClosePrice;
       imported.pendingCloseReason = existingOpenMarketPosition.pendingCloseReason;
@@ -5631,6 +5685,114 @@ export class PolymarketSignalService {
     return nextPosition;
   }
 
+  private async reconcilePendingLiveEntryOrder(
+    username: string,
+    position: StrategyPosition,
+    tokenID: string,
+    aggregate: MarketAggregate,
+    setupQuality: number,
+  ): Promise<StrategyPosition> {
+    if (!position.pendingEntryOrderId) {
+      return position;
+    }
+
+    const settings = await this.storage.getUserSettings(username);
+    const tradingWalletAddress = settings.tradingWalletAddress?.trim() ?? "";
+    const client = this.createLiveTradingClient(settings);
+    const syncedWalletPosition = await this.findWalletSyncLivePosition(
+      tradingWalletAddress,
+      position.marketSlug,
+      position.outcome,
+      tokenID,
+    );
+    if (syncedWalletPosition) {
+      const nextPosition = this.clearPendingEntryState(
+        this.applyWalletPositionSnapshotToLivePosition(position, syncedWalletPosition.row, aggregate, setupQuality),
+      );
+      await this.ensureLiveEntryTradeRecorded(username, nextPosition, syncedWalletPosition.row);
+      this.clearLiveTradingIssue(username);
+      return nextPosition;
+    }
+
+    const order = await client.getOrder(position.pendingEntryOrderId).catch((error) => {
+      this.recordLiveTradingIssue(username, error, {
+        operation: "live_pending_entry",
+        request: "getOrder",
+        params: {
+          orderId: position.pendingEntryOrderId,
+          marketSlug: position.marketSlug,
+          outcome: position.outcome,
+        },
+      });
+      return null;
+    });
+    if (!order) {
+      return {
+        ...position,
+        pendingEntryStatus: position.pendingEntryStatus ?? "submitted",
+      };
+    }
+
+    const orderStatus = typeof order.status === "string" ? order.status.trim().toLowerCase() : "";
+    if (["canceled", "cancelled", "unmatched", "failed", "rejected"].includes(orderStatus)) {
+      return this.clearPendingEntryState({
+        ...position,
+        status: "closed",
+        soldPercent: 100,
+        exitReason: "Pending entry failed",
+        pendingEntryStatus: order.status,
+        updatedAt: Date.now(),
+      });
+    }
+
+    return {
+      ...position,
+      pendingEntryStatus: order.status,
+      updatedAt: Date.now(),
+    };
+  }
+
+  private clearPendingEntryState(position: StrategyPosition): StrategyPosition {
+    const nextPosition = { ...position };
+    delete nextPosition.pendingEntryOrderId;
+    delete nextPosition.pendingEntryPlacedAt;
+    delete nextPosition.pendingEntryStatus;
+    return nextPosition;
+  }
+
+  private async ensureLiveEntryTradeRecorded(
+    username: string,
+    position: StrategyPosition,
+    walletPosition: RawPosition,
+  ): Promise<void> {
+    const existingTrades = await this.storage.loadLiveStrategyTrades(username, position.strategyKey ?? "best_trades", 1_000);
+    const hasRecordedEntryTrade = existingTrades.some(
+      (trade) =>
+        trade.marketSlug === position.marketSlug &&
+        normalizeOutcomeName(trade.outcome) === normalizeOutcomeName(position.outcome) &&
+        trade.side === "BUY",
+    );
+    if (hasRecordedEntryTrade) {
+      return;
+    }
+
+    const shares = Math.max(0, Number(walletPosition.size ?? position.remainingShares));
+    const price = Math.max(0, Number(walletPosition.avgPrice ?? position.entryPrice));
+    await this.storage.saveLiveStrategyTrade(
+      username,
+      this.buildLiveStrategyTrade(position, {
+        id: `${position.id}:entry-recovered:${Date.now()}`,
+        side: "BUY",
+        reason: "Recovered pending entry",
+        timestamp: Date.now(),
+        price,
+        shares,
+        usd: Math.max(0, Number(walletPosition.initialValue ?? position.entryNotionalUsd)),
+        response: { status: "recovered" },
+      }),
+    );
+  }
+
   private buildLiveStrategyTrade(
     position: StrategyPosition,
     trade: {
@@ -6201,8 +6363,14 @@ const dedupeLogicalOpenPositions = (positions: StrategyPosition[]): StrategyPosi
       continue;
     }
 
-    const existingScore = (existing.updatedAt ?? 0) * 10 + (existing.pendingCloseOrderId ? 1 : 0);
-    const nextScore = (position.updatedAt ?? 0) * 10 + (position.pendingCloseOrderId ? 1 : 0);
+    const existingScore =
+      (existing.updatedAt ?? 0) * 10 +
+      (existing.pendingCloseOrderId ? 1 : 0) +
+      (existing.pendingEntryOrderId ? 1 : 0);
+    const nextScore =
+      (position.updatedAt ?? 0) * 10 +
+      (position.pendingCloseOrderId ? 1 : 0) +
+      (position.pendingEntryOrderId ? 1 : 0);
     if (nextScore >= existingScore) {
       dedupedOpenPositions.set(key, position);
     }

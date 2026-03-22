@@ -240,6 +240,9 @@ export type StrategyPosition = {
   pendingCloseReason?: string;
   pendingClosePlacedAt?: number;
   pendingCloseStatus?: string;
+  pendingEntryOrderId?: string;
+  pendingEntryPlacedAt?: number;
+  pendingEntryStatus?: string;
   originalParticipants: Array<{
     wallet: string;
     weight: number;
