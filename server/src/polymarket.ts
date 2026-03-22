@@ -305,8 +305,15 @@ const LIVE_ENTRY_CONFIRM_DELAY_MS = 1_500;
 const LIVE_ENTRY_CONFIRM_RETRY_DELAYS_MS = [15_000, 60_000, 180_000];
 const LIVE_EXIT_CONFIRM_RETRIES = 5;
 const LIVE_EXIT_CONFIRM_DELAY_MS = 1_500;
+const LIVE_PENDING_CLOSE_MARKET_FALLBACK_DELAY_MS = 20_000;
+const PROFILE_LIVE_VALIDATION_TIMEOUT_MS = 12_000;
 const OPEN_POSITION_PRICE_REFRESH_MS = 30_000;
+const OPEN_POSITION_MARKET_PRICE_REFRESH_MS = 30_000;
 const OPEN_POSITION_PRICE_QUOTE_MAX_AGE_MS = 25_000;
+const LIVE_ENTRY_MARKET_STALENESS_MAX_ABSOLUTE_DEVIATION = 0.08;
+const LIVE_ENTRY_MARKET_STALENESS_MAX_RELATIVE_DEVIATION = 0.35;
+const LIVE_ENTRY_EXECUTION_MAX_ABSOLUTE_DEVIATION = 0.04;
+const LIVE_ENTRY_EXECUTION_MAX_RELATIVE_DEVIATION = 0.5;
 const EDGE_SWING_AUTO_TAKE_PROFIT_TRIGGER_PRICE = 0.99;
 const EDGE_SWING_AUTO_TAKE_PROFIT_PRICE = 0.999;
 
@@ -383,6 +390,7 @@ export class PolymarketSignalService {
   private liveWalletCoverageTimer: NodeJS.Timeout | null = null;
   private bestTradeResolutionTimer: NodeJS.Timeout | null = null;
   private openPositionPriceRefreshTimer: NodeJS.Timeout | null = null;
+  private openPositionMarketPriceRefreshTimer: NodeJS.Timeout | null = null;
   private signalMonitorTimer: NodeJS.Timeout | null = null;
   private storedMarketCatalogRefreshTimer: NodeJS.Timeout | null = null;
   private serviceStatusHeartbeatTimer: NodeJS.Timeout | null = null;
@@ -409,6 +417,7 @@ export class PolymarketSignalService {
     await this.restoreActiveClusters();
     this.runBackgroundTask("initial market sync", this.syncMarkets());
     this.runBackgroundTask("market aggregate refresh", this.refreshMarketAggregates());
+    this.runBackgroundTask("open position market price refresh", this.refreshCurrentPricesForOpenPositionMarkets());
     this.runBackgroundTask("best trade resolution sync", this.syncResolvedBestTradeCandidates());
     this.startTradePolling();
     this.runBackgroundTask("recent catch-up", this.catchUpRecentTrades());
@@ -418,6 +427,9 @@ export class PolymarketSignalService {
     this.marketSyncTimer = setInterval(() => {
       this.runBackgroundTask("scheduled market sync", this.syncMarkets());
     }, config.marketRefreshMs);
+    this.openPositionMarketPriceRefreshTimer = setInterval(() => {
+      this.runBackgroundTask("open position market price refresh", this.refreshCurrentPricesForOpenPositionMarkets());
+    }, OPEN_POSITION_MARKET_PRICE_REFRESH_MS);
     this.bestTradeResolutionTimer = setInterval(() => {
       this.runBackgroundTask("best trade resolution sync", this.syncResolvedBestTradeCandidates());
     }, 15 * 60_000);
@@ -808,31 +820,47 @@ export class PolymarketSignalService {
     username: string,
     strategyKey: StrategyKey = "best_trades",
   ): Promise<LiveStrategyDashboardResponse> {
-    const [positions, trades, settings] = await Promise.all([
+    const [storedPositions, trades, settings] = await Promise.all([
       this.storage.loadLiveStrategyPositions(username, strategyKey, 200),
       this.storage.loadLiveStrategyTrades(username, strategyKey, 300),
       this.storage.getUserSettings(username),
     ]);
+    let positions = dedupeLogicalOpenPositions(storedPositions);
+    const aggregates = await this.storage.loadMarketAggregates(
+      Array.from(new Set(positions.map((position) => position.marketSlug))),
+    );
+    positions = this.applyAggregatePricesToLivePositions(positions, aggregates);
 
-    const ready = Boolean(
-      this.isLiveStrategyEnabled(settings, strategyKey) &&
-        settings.tradingWalletAddress &&
+    const hasLiveTradingCredentials = Boolean(
+      settings.tradingWalletAddress &&
         settings.encryptedPrivateKey &&
         settings.encryptedApiKey &&
         settings.encryptedApiSecret &&
         settings.encryptedApiPassphrase,
     );
-    let cashBalanceUsd = this.getCachedLiveCollateralBalance(username);
+    const ready = Boolean(this.isLiveStrategyEnabled(settings, strategyKey) && hasLiveTradingCredentials);
+    let cashBalanceUsd = Math.max(
+      this.getStoredStrategyCurrentBalance(settings, strategyKey),
+      this.getCachedLiveCollateralBalance(username),
+    );
     let error: string | null = this.getLiveTradingIssue(username);
-    if (ready && !error) {
+    if (hasLiveTradingCredentials) {
       try {
-        cashBalanceUsd = await this.getLiveCollateralBalance(this.createLiveTradingClient(settings));
+        cashBalanceUsd = await this.withTimeout(
+          this.getLiveCollateralBalance(this.createLiveTradingClient(settings)),
+          PROFILE_LIVE_VALIDATION_TIMEOUT_MS,
+          "Live trading balance refresh timed out.",
+        );
         this.cacheLiveCollateralBalance(username, cashBalanceUsd);
-        this.clearLiveTradingIssue(username);
-        error = null;
+        if (!error) {
+          this.clearLiveTradingIssue(username);
+        }
       } catch (caughtError) {
         this.recordLiveTradingIssue(username, caughtError);
-        cashBalanceUsd = this.getCachedLiveCollateralBalance(username);
+        cashBalanceUsd = Math.max(
+          this.getStoredStrategyCurrentBalance(settings, strategyKey),
+          this.getCachedLiveCollateralBalance(username),
+        );
         error = this.getLiveTradingIssue(username);
       }
     }
@@ -1005,7 +1033,11 @@ export class PolymarketSignalService {
         };
 
         try {
-          await this.getLiveCollateralBalance(this.createLiveTradingClient(validationSettings));
+          await this.withTimeout(
+            this.getLiveCollateralBalance(this.createLiveTradingClient(validationSettings)),
+            PROFILE_LIVE_VALIDATION_TIMEOUT_MS,
+            "Live trading validation timed out. Please try again.",
+          );
           this.clearLiveTradingIssue(normalizedUsername);
         } catch (caughtError) {
           this.recordLiveTradingIssue(normalizedUsername, caughtError);
@@ -1050,27 +1082,14 @@ export class PolymarketSignalService {
         : {}),
       clearTradingCredentials: updates.clearTradingCredentials,
     });
-    if (updates.liveTradingEnabled) {
-      await this.queueCurrentBestTradeReconcilesForUser(normalizedUsername);
-    }
-    if (updates.paperTradingEnabled) {
-      for (const marketSlug of await this.storage.loadBestTradeMarketSlugs()) {
-        await this.queueStrategyReconcile(marketSlug, normalizedUsername, "best_trades");
-      }
-    }
-    if (updates.edgeSwingLiveTradingEnabled) {
-      await this.queueCurrentEdgeSwingReconcilesForUser(normalizedUsername);
-    }
-    if (updates.edgeSwingPaperTradingEnabled) {
-      const edgeSwingSlugs = (await this.storage.loadAllMarketAggregates())
-        .filter((aggregate) => qualifiesEdgeSwingMarket(aggregate))
-        .map((aggregate) => aggregate.marketSlug);
-      for (const marketSlug of edgeSwingSlugs) {
-        await this.queueStrategyReconcile(marketSlug, normalizedUsername, "edge_swing");
-      }
-    }
-    await this.syncTrackedWalletWatchesForUser(normalizedUsername, normalizedMonitoredWallet);
-    return this.getUserProfile(normalizedUsername);
+    const profile = await this.getUserProfile(normalizedUsername);
+    this.kickOffProfilePostSaveSyncs(normalizedUsername, normalizedMonitoredWallet, {
+      paperTradingEnabled: updates.paperTradingEnabled,
+      liveTradingEnabled: updates.liveTradingEnabled,
+      edgeSwingPaperTradingEnabled: updates.edgeSwingPaperTradingEnabled,
+      edgeSwingLiveTradingEnabled: updates.edgeSwingLiveTradingEnabled,
+    });
+    return profile;
   }
 
   private async syncMarkets(): Promise<void> {
@@ -1099,33 +1118,12 @@ export class PolymarketSignalService {
       }
 
       for (const market of markets) {
-        const assetIds = this.safeJsonParse<string[]>(market.clobTokenIds, []);
-        const outcomes = this.safeJsonParse<string[]>(market.outcomes, []);
-        if (assetIds.length === 0) {
+        const record = this.toMarketRecord(market);
+        if (!record) {
           continue;
         }
 
-        const outcomeByAssetId: Record<string, string> = {};
-        assetIds.forEach((assetId, index) => {
-          outcomeByAssetId[assetId] = outcomes[index] ?? `Outcome ${index + 1}`;
-        });
-
-        const record: MarketRecord = {
-          id: market.id,
-          conditionId: market.conditionId ?? market.id,
-          question: market.question,
-          slug: market.slug,
-          image: market.image ?? "",
-          endDate: market.endDate ?? market.umaEndDate ?? "",
-          liquidity: Number(market.liquidityNum ?? 0),
-          volume24hr: Number(market.volume24hr ?? 0),
-          outcomeByAssetId,
-          category: market.category,
-          eventSlug: market.events?.[0]?.slug ?? market.slug,
-          eventTitle: market.events?.[0]?.title ?? market.question,
-        };
-
-        assetIds.forEach((assetId) => {
+        Object.keys(record.outcomeByAssetId).forEach((assetId) => {
           nextMarketsByAssetId.set(assetId, record);
         });
       }
@@ -1916,7 +1914,7 @@ export class PolymarketSignalService {
       displayName: trader.displayName,
       marketQuestion: accumulator.market.question,
       marketSlug: accumulator.market.slug,
-      marketUrl: `https://polymarket.com/event/${accumulator.market.slug}`,
+      marketUrl: "https://polymarket.com/event/" + accumulator.market.slug,
       marketImage: accumulator.market.image,
       outcome: accumulator.outcome,
       side: accumulator.side,
@@ -2170,8 +2168,7 @@ export class PolymarketSignalService {
     for (const marketSlug of activeMarketSlugs) {
       const aggregate = aggregateBySlug.get(marketSlug);
       if (aggregate) {
-        aggregate.marketEndDate = getMarketEndDateForSlug(this.marketsByAssetId, marketSlug);
-        await this.storage.saveMarketAggregate(aggregate);
+        await this.storage.saveMarketAggregate(this.enrichAggregateWithMarketRecord(aggregate));
       } else {
         await this.storage.deleteMarketAggregate(marketSlug);
       }
@@ -2187,9 +2184,9 @@ export class PolymarketSignalService {
     const aggregate = aggregateMarkets(activeSignals)[0];
 
     if (aggregate) {
-      aggregate.marketEndDate = getMarketEndDateForSlug(this.marketsByAssetId, marketSlug);
-      await this.storage.saveMarketAggregate(aggregate);
-      await this.syncBestTradeCandidates([aggregate]);
+      const enrichedAggregate = this.enrichAggregateWithMarketRecord(aggregate);
+      await this.storage.saveMarketAggregate(enrichedAggregate);
+      await this.syncBestTradeCandidates([enrichedAggregate]);
       return;
     }
 
@@ -2246,15 +2243,10 @@ export class PolymarketSignalService {
 
     for (const position of livePositions) {
       const nextPrice = quoteByKey.get(`${position.marketSlug}:${position.outcome}`);
-      if (nextPrice == null || !Number.isFinite(nextPrice) || nextPrice <= 0 || nextPrice === position.lastPrice) {
+      if (nextPrice == null || !Number.isFinite(nextPrice) || nextPrice <= 0) {
         continue;
       }
 
-      await this.storage.saveLiveStrategyPosition({
-        ...position,
-        updatedAt: now,
-        lastPrice: nextPrice,
-      });
       await this.queueLiveStrategyReconcile(
         position.marketSlug,
         position.username,
@@ -2330,6 +2322,108 @@ export class PolymarketSignalService {
 
     for (const marketSlug of nextMarketSlugs) {
       await this.queueLiveStrategyReconcile(marketSlug, username, "edge_swing");
+    }
+  }
+
+  private async withTimeout<T>(
+    promise: Promise<T>,
+    timeoutMs: number,
+    message: string,
+  ): Promise<T> {
+    let timeoutHandle: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<T>((_, reject) => {
+          timeoutHandle = setTimeout(() => reject(new Error(message)), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+    }
+  }
+
+  private kickOffProfilePostSaveSyncs(
+    username: string,
+    monitoredWallet: string,
+    options: {
+      paperTradingEnabled: boolean;
+      liveTradingEnabled: boolean;
+      edgeSwingPaperTradingEnabled: boolean;
+      edgeSwingLiveTradingEnabled: boolean;
+    },
+  ): void {
+    const normalizedUsername = username.trim();
+    if (!normalizedUsername) {
+      return;
+    }
+
+    this.logExecutionAction("profile", "post_save_sync_scheduled", {
+      username: normalizedUsername,
+      hasMonitoredWallet: Boolean(monitoredWallet),
+      ...options,
+    });
+
+    setImmediate(() => {
+      void this.runProfilePostSaveSyncs(normalizedUsername, monitoredWallet, options);
+    });
+  }
+
+  private async runProfilePostSaveSyncs(
+    username: string,
+    monitoredWallet: string,
+    options: {
+      paperTradingEnabled: boolean;
+      liveTradingEnabled: boolean;
+      edgeSwingPaperTradingEnabled: boolean;
+      edgeSwingLiveTradingEnabled: boolean;
+    },
+  ): Promise<void> {
+    const startedAt = Date.now();
+    this.logExecutionAction("profile", "post_save_sync_started", {
+      username,
+      hasMonitoredWallet: Boolean(monitoredWallet),
+      ...options,
+    });
+
+    try {
+      if (options.liveTradingEnabled) {
+        await this.queueCurrentBestTradeReconcilesForUser(username);
+      }
+      if (options.paperTradingEnabled) {
+        for (const marketSlug of await this.storage.loadBestTradeMarketSlugs()) {
+          await this.queueStrategyReconcile(marketSlug, username, "best_trades");
+        }
+      }
+      if (options.edgeSwingLiveTradingEnabled) {
+        await this.queueCurrentEdgeSwingReconcilesForUser(username);
+      }
+      if (options.edgeSwingPaperTradingEnabled) {
+        const edgeSwingSlugs = (await this.storage.loadAllMarketAggregates())
+          .filter((aggregate) => qualifiesEdgeSwingMarket(aggregate))
+          .map((aggregate) => aggregate.marketSlug);
+        for (const marketSlug of edgeSwingSlugs) {
+          await this.queueStrategyReconcile(marketSlug, username, "edge_swing");
+        }
+      }
+      await this.syncTrackedWalletWatchesForUser(username, monitoredWallet);
+
+      this.logExecutionAction("profile", "post_save_sync_completed", {
+        username,
+        durationMs: Date.now() - startedAt,
+        hasMonitoredWallet: Boolean(monitoredWallet),
+        ...options,
+      });
+    } catch (error) {
+      this.logExecutionAction("profile", "post_save_sync_failed", {
+        username,
+        durationMs: Date.now() - startedAt,
+        error: stringifyUnknownError(error),
+        hasMonitoredWallet: Boolean(monitoredWallet),
+        ...options,
+      });
     }
   }
 
@@ -2563,6 +2657,43 @@ export class PolymarketSignalService {
     }
   }
 
+  private async refreshCurrentPricesForOpenPositionMarkets(): Promise<void> {
+    const marketSlugs = await this.storage.loadOpenPositionMarketSlugs(500);
+    if (marketSlugs.length === 0) {
+      return;
+    }
+
+    for (const marketSlug of marketSlugs) {
+      const record = await this.fetchAndStoreMarketRecord(marketSlug);
+      if (!record) {
+        continue;
+      }
+
+      const aggregate = (await this.storage.loadMarketAggregates([marketSlug]))[0];
+      if (!aggregate) {
+        continue;
+      }
+
+      await this.storage.saveMarketAggregate(this.enrichAggregateWithMarketRecord(aggregate, record));
+    }
+  }
+
+  private async fetchAndStoreMarketRecord(marketSlug: string): Promise<MarketRecord | null> {
+    const market = await this.fetchMarketBySlug(marketSlug);
+    if (!market) {
+      return null;
+    }
+
+    const record = this.toMarketRecord(market);
+    if (!record) {
+      return null;
+    }
+
+    this.applyMarketRecord(record);
+    await this.storage.upsertMarketCatalog([record]);
+    return record;
+  }
+
   private async fetchMarketBySlug(slug: string): Promise<RawMarket | null> {
     const url = new URL(GAMMA_MARKETS_URL);
     url.searchParams.set("slug", slug);
@@ -2573,6 +2704,93 @@ export class PolymarketSignalService {
 
     const payload = (await response.json()) as RawMarket[];
     return payload.find((market) => market.slug === slug) ?? payload[0] ?? null;
+  }
+
+  private toMarketRecord(market: RawMarket): MarketRecord | null {
+    const assetIds = this.safeJsonParse<string[]>(market.clobTokenIds, []);
+    const outcomes = this.safeJsonParse<string[]>(market.outcomes, []);
+    const outcomePrices = this.safeJsonParse<Array<number | string>>(market.outcomePrices, []);
+    if (assetIds.length === 0) {
+      return null;
+    }
+
+    const outcomeByAssetId: Record<string, string> = {};
+    const outcomePriceByAssetId: Record<string, number> = {};
+    assetIds.forEach((assetId, index) => {
+      outcomeByAssetId[assetId] = outcomes[index] ?? `Outcome ${index + 1}`;
+      const price = Number(outcomePrices[index]);
+      if (Number.isFinite(price) && price >= 0) {
+        outcomePriceByAssetId[assetId] = price;
+      }
+    });
+
+    return {
+      id: market.id,
+      conditionId: market.conditionId ?? market.id,
+      question: market.question,
+      slug: market.slug,
+      image: market.image ?? "",
+      endDate: market.endDate ?? market.umaEndDate ?? "",
+      liquidity: Number(market.liquidityNum ?? 0),
+      volume24hr: Number(market.volume24hr ?? 0),
+      outcomeByAssetId,
+      outcomePriceByAssetId,
+      category: market.category,
+      eventSlug: market.events?.[0]?.slug ?? market.slug,
+      eventTitle: market.events?.[0]?.title ?? market.question,
+    };
+  }
+
+  private applyMarketRecord(record: MarketRecord): void {
+    for (const assetId of Object.keys(record.outcomeByAssetId)) {
+      this.marketsByAssetId.set(assetId, record);
+      this.activeAssetIds.add(assetId);
+    }
+  }
+
+  private getMarketRecordBySlug(marketSlug: string): MarketRecord | null {
+    for (const market of this.marketsByAssetId.values()) {
+      if (market.slug === marketSlug) {
+        return market;
+      }
+    }
+
+    return null;
+  }
+
+  private enrichAggregateWithMarketRecord(
+    aggregate: MarketAggregate,
+    marketRecord?: MarketRecord | null,
+  ): MarketAggregate {
+    const record = marketRecord ?? this.getMarketRecordBySlug(aggregate.marketSlug);
+    if (!record) {
+      return {
+        ...aggregate,
+        marketEndDate: getMarketEndDateForSlug(this.marketsByAssetId, aggregate.marketSlug),
+      };
+    }
+
+    const priceTimestamp = Date.now();
+    const currentPrices = Object.entries(record.outcomePriceByAssetId ?? {})
+      .map(([assetId, price]) => ({
+        outcome: record.outcomeByAssetId[assetId] ?? assetId,
+        price,
+        timestamp: priceTimestamp,
+      }))
+      .filter((entry) => Number.isFinite(entry.price) && entry.price >= 0);
+
+    return {
+      ...aggregate,
+      marketEndDate: record.endDate,
+      outcomeLatestPrices: currentPrices.length > 0 ? currentPrices : aggregate.outcomeLatestPrices,
+    };
+  }
+
+  private async refreshAggregateCurrentPricesForMarket(
+    aggregate: MarketAggregate,
+  ): Promise<MarketAggregate> {
+    const marketRecord = await this.fetchAndStoreMarketRecord(aggregate.marketSlug).catch(() => null);
+    return this.enrichAggregateWithMarketRecord(aggregate, marketRecord);
   }
 
   private getWinningOutcomeForClosedMarket(market: RawMarket): string | null {
@@ -2677,9 +2895,10 @@ export class PolymarketSignalService {
     const edgeOutcome = aggregate.outcomeWeights[0]?.outcome ?? aggregate.latestSignal.outcome;
     const existingMarketPosition = await this.storage.loadOpenStrategyPositionForMarket(username, marketSlug, strategyKey);
     const trackedOutcome = existingMarketPosition?.outcome ?? edgeOutcome;
-    const setupQuality = getSetupQualityScore(aggregate);
+    const currentAggregate = await this.refreshAggregateCurrentPricesForMarket(aggregate);
+    const setupQuality = getSetupQualityScore(currentAggregate);
     const currentParticipants =
-      aggregate.outcomeParticipants?.filter((participant) => participant.outcome === trackedOutcome) ?? [];
+      currentAggregate.outcomeParticipants?.filter((participant) => participant.outcome === trackedOutcome) ?? [];
     const currentWeightByWallet = new Map(
       currentParticipants.map((participant) => [participant.wallet, participant.weight] as const),
     );
@@ -2800,12 +3019,12 @@ export class PolymarketSignalService {
       return;
     }
     const currentEdgePoints = getEdgePointsForOutcome(aggregate, trackedOutcome);
-    const currentOutcomeWeight = getOutcomeWeightForMarket(aggregate, trackedOutcome);
+    const currentOutcomeWeight = getOutcomeWeightForMarket(currentAggregate, trackedOutcome);
     const peakEdgePoints = Math.max(position.peakEdgePoints ?? currentEdgePoints, currentEdgePoints);
     const peakOutcomeWeight = Math.max(position.peakOutcomeWeight ?? currentOutcomeWeight, currentOutcomeWeight);
     const edgeSwingTakeProfitTriggered =
       strategyKey === "edge_swing" &&
-      Math.max(currentPrice, position.lastPrice ?? 0) >= EDGE_SWING_AUTO_TAKE_PROFIT_TRIGGER_PRICE;
+      currentPrice >= EDGE_SWING_AUTO_TAKE_PROFIT_TRIGGER_PRICE;
 
     let nextPosition: StrategyPosition = {
       ...position,
@@ -2845,12 +3064,12 @@ export class PolymarketSignalService {
     if (strategyKey === "best_trades" && !qualifiesIgnoringPriceCap) {
       const thesisBreakReasons = edgeFlipped
         ? [`leading outcome switched to ${edgeOutcome}`]
-        : getBestTradeFailureReasons(aggregate, {
-        ignorePriceCap: true,
-        ignorePriceDeviation: true,
-        minTotalWeight: 40,
-        minOutcomeShare: 0.5,
-      });
+        : getBestTradeFailureReasons(currentAggregate, {
+          ignorePriceCap: true,
+          ignorePriceDeviation: true,
+          minTotalWeight: 40,
+          minOutcomeShare: 0.5,
+        });
       exitReason = `Thesis break: ${thesisBreakReasons.join(", ")}`;
     } else if (strategyKey === "best_trades" && currentPrice >= 0.995) {
       exitReason = "Take profit 0.995";
@@ -3012,20 +3231,43 @@ export class PolymarketSignalService {
       return;
     }
 
-    const setupQuality = getSetupQualityScore(aggregate);
+    const currentAggregate = await this.refreshAggregateCurrentPricesForMarket(aggregate);
+    const setupQuality = getSetupQualityScore(currentAggregate);
     const currentParticipants =
-      aggregate.outcomeParticipants?.filter((participant) => participant.outcome === trackedOutcome) ?? [];
+      currentAggregate.outcomeParticipants?.filter((participant) => participant.outcome === trackedOutcome) ?? [];
     const currentWeightByWallet = new Map(
       currentParticipants.map((participant) => [participant.wallet, participant.weight] as const),
     );
 
     if (!position) {
-      if (!doesMarketQualifyForStrategy(aggregate, strategyKey)) {
+      if (!doesMarketQualifyForStrategy(currentAggregate, strategyKey)) {
         return;
       }
 
-      const currentPrice = getMarketPriceForOutcome(aggregate, edgeOutcome);
+      const currentPrice = getMarketPriceForOutcome(currentAggregate, edgeOutcome);
       if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
+        return;
+      }
+
+      const staleReferencePrice = getMarketPriceForOutcome(aggregate, edgeOutcome);
+      if (
+        Number.isFinite(staleReferencePrice) &&
+        staleReferencePrice > 0 &&
+        hasMeaningfulPriceDeviation(
+          staleReferencePrice,
+          currentPrice,
+          LIVE_ENTRY_MARKET_STALENESS_MAX_ABSOLUTE_DEVIATION,
+          LIVE_ENTRY_MARKET_STALENESS_MAX_RELATIVE_DEVIATION,
+        )
+      ) {
+        this.logExecutionAction("live_strategy", "entry_skipped_stale_market_price", {
+          username,
+          marketSlug,
+          strategyKey,
+          outcome: edgeOutcome,
+          staleReferencePrice,
+          refreshedCurrentPrice: currentPrice,
+        });
         return;
       }
 
@@ -3106,6 +3348,25 @@ export class PolymarketSignalService {
         return;
       }
       const safeEntryPrice = entryPrice;
+      if (
+        hasMeaningfulPriceDeviation(
+          currentPrice,
+          safeEntryPrice,
+          LIVE_ENTRY_EXECUTION_MAX_ABSOLUTE_DEVIATION,
+          LIVE_ENTRY_EXECUTION_MAX_RELATIVE_DEVIATION,
+        )
+      ) {
+        this.logExecutionAction("live_strategy", "entry_skipped_execution_price_dislocated", {
+          username,
+          marketSlug,
+          strategyKey,
+          outcome: edgeOutcome,
+          currentPrice,
+          calculatedExecutionPrice: safeEntryPrice,
+          entryNotionalUsd,
+        });
+        return;
+      }
       const walletSharesBeforeEntry = await this.getWalletPositionShares(
         tradingWalletAddress,
         tokenID,
@@ -3245,15 +3506,15 @@ export class PolymarketSignalService {
         strategyKey,
         username,
         marketSlug,
-        marketQuestion: aggregate.marketQuestion,
-        marketUrl: aggregate.marketUrl,
-        marketImage: aggregate.marketImage,
+        marketQuestion: currentAggregate.marketQuestion,
+        marketUrl: currentAggregate.marketUrl,
+        marketImage: currentAggregate.marketImage,
         outcome: edgeOutcome,
         status: "open",
         openedAt,
         updatedAt: openedAt,
         entryPrice: safeEntryPrice,
-        lastPrice: currentPrice,
+        lastPrice: safeEntryPrice,
         entryNotionalUsd,
         remainingShares: acquiredShares,
         realizedUsd: 0,
@@ -3262,8 +3523,8 @@ export class PolymarketSignalService {
         soldPercent: 0,
         trim96Hit: false,
         setupQuality,
-        peakEdgePoints: getEdgePointsForOutcome(aggregate, edgeOutcome),
-        peakOutcomeWeight: getOutcomeWeightForMarket(aggregate, edgeOutcome),
+        peakEdgePoints: getEdgePointsForOutcome(currentAggregate, edgeOutcome),
+        peakOutcomeWeight: getOutcomeWeightForMarket(currentAggregate, edgeOutcome),
         originalParticipants,
       };
       const syncedWalletPosition = await this.findWalletSyncLivePosition(
@@ -3276,7 +3537,7 @@ export class PolymarketSignalService {
         nextPosition = this.applyWalletPositionSnapshotToLivePosition(
           nextPosition,
           syncedWalletPosition.row,
-          aggregate,
+          currentAggregate,
           setupQuality,
         );
       }
@@ -3331,7 +3592,12 @@ export class PolymarketSignalService {
       return;
     }
     if (Math.abs(Number(syncedWalletPosition.row.size ?? 0) - position.remainingShares) > 0.000001) {
-      position = this.applyWalletPositionSnapshotToLivePosition(position, syncedWalletPosition.row, aggregate, setupQuality);
+      position = this.applyWalletPositionSnapshotToLivePosition(
+        position,
+        syncedWalletPosition.row,
+        currentAggregate,
+        setupQuality,
+      );
     }
 
     const remainingSmartMoneyWeight = position.originalParticipants.reduce(
@@ -3342,32 +3608,31 @@ export class PolymarketSignalService {
     const exitedRatio =
       position.originalSmartMoneyWeight > 0 ? exitedWeight / position.originalSmartMoneyWeight : 0;
     const edgeFlipped = position.outcome !== edgeOutcome;
-    const qualifiesIgnoringPriceCap = !edgeFlipped && isBestTradeMarket(aggregate, {
+    const qualifiesIgnoringPriceCap = !edgeFlipped && isBestTradeMarket(currentAggregate, {
       ignorePriceCap: true,
       ignorePriceDeviation: true,
       minTotalWeight: 40,
       minOutcomeShare: 0.5,
     });
-    const currentPrice = getMarketPriceForOutcome(aggregate, trackedOutcome);
+    const currentPrice = getMarketPriceForOutcome(currentAggregate, trackedOutcome);
     if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
       return;
     }
-    const currentOutcomeWeight = getOutcomeWeightForMarket(aggregate, trackedOutcome);
+    const currentOutcomeWeight = getOutcomeWeightForMarket(currentAggregate, trackedOutcome);
     const edgeSwingTakeProfitTriggered =
       strategyKey === "edge_swing" &&
-      Math.max(currentPrice, position.lastPrice ?? 0) >= EDGE_SWING_AUTO_TAKE_PROFIT_TRIGGER_PRICE;
+      currentPrice >= EDGE_SWING_AUTO_TAKE_PROFIT_TRIGGER_PRICE;
 
     let nextPosition: StrategyPosition = {
       ...position,
       strategyKey: position.strategyKey ?? strategyKey,
       updatedAt: Date.now(),
-      lastPrice: currentPrice,
       remainingSmartMoneyWeight,
       setupQuality,
-      peakEdgePoints: Math.max(position.peakEdgePoints ?? getEdgePointsForOutcome(aggregate, trackedOutcome), getEdgePointsForOutcome(aggregate, trackedOutcome)),
+      peakEdgePoints: Math.max(position.peakEdgePoints ?? getEdgePointsForOutcome(currentAggregate, trackedOutcome), getEdgePointsForOutcome(currentAggregate, trackedOutcome)),
       peakOutcomeWeight: Math.max(position.peakOutcomeWeight ?? currentOutcomeWeight, currentOutcomeWeight),
     };
-    const currentEdgePoints = getEdgePointsForOutcome(aggregate, trackedOutcome);
+    const currentEdgePoints = getEdgePointsForOutcome(currentAggregate, trackedOutcome);
 
     if (nextPosition.pendingCloseOrderId) {
       nextPosition = await this.reconcilePendingLiveCloseOrder(username, nextPosition, tokenID);
@@ -3852,6 +4117,18 @@ export class PolymarketSignalService {
       : settings.riskPercent ?? 5;
   }
 
+  private getStoredStrategyCurrentBalance(
+    settings: Awaited<ReturnType<SignalStorage["getUserSettings"]>>,
+    strategyKey: StrategyKey,
+  ): number {
+    const value =
+      strategyKey === "edge_swing"
+        ? settings.edgeSwingCurrentBalanceUsd ?? settings.edgeSwingStartingBalanceUsd ?? 0
+        : settings.currentBalanceUsd ?? settings.startingBalanceUsd ?? 0;
+
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  }
+
   private async syncLiveWalletCoverage(): Promise<void> {
     await Promise.all([
       this.syncLiveWalletCoverageForStrategy("best_trades"),
@@ -4204,7 +4481,46 @@ export class PolymarketSignalService {
       walletPosition.row,
       walletPosition.outcome,
     );
+    const existingOpenPosition = await this.storage.loadOpenLiveStrategyPosition(
+      username,
+      marketSlug,
+      imported.outcome,
+      strategyKey,
+    );
+    if (existingOpenPosition) {
+      imported.id = existingOpenPosition.id;
+      imported.openedAt = existingOpenPosition.openedAt;
+      imported.realizedUsd = Math.max(imported.realizedUsd, existingOpenPosition.realizedUsd);
+      imported.trim96Hit = imported.trim96Hit || existingOpenPosition.trim96Hit;
+      imported.pendingCloseOrderId = existingOpenPosition.pendingCloseOrderId;
+      imported.pendingClosePrice = existingOpenPosition.pendingClosePrice;
+      imported.pendingCloseReason = existingOpenPosition.pendingCloseReason;
+      imported.pendingClosePlacedAt = existingOpenPosition.pendingClosePlacedAt;
+      imported.pendingCloseStatus = existingOpenPosition.pendingCloseStatus;
+    }
     await this.storage.saveLiveStrategyPosition(imported);
+    const existingTrades = await this.storage.loadLiveStrategyTrades(username, strategyKey, 1_000);
+    const hasRecordedEntryTrade = existingTrades.some(
+      (trade) =>
+        trade.marketSlug === imported.marketSlug &&
+        normalizeOutcomeName(trade.outcome) === normalizeOutcomeName(imported.outcome) &&
+        trade.side === "BUY",
+    );
+    if (!hasRecordedEntryTrade) {
+      await this.storage.saveLiveStrategyTrade(
+        username,
+        this.buildLiveStrategyTrade(imported, {
+          id: `${imported.id}:entry-recovery:${imported.openedAt}`,
+          side: "BUY",
+          reason: "Recovered from wallet sync",
+          timestamp: imported.openedAt,
+          price: imported.entryPrice,
+          shares: imported.remainingShares,
+          usd: imported.entryNotionalUsd,
+          response: { status: "recovered" },
+        }),
+      );
+    }
     return imported;
   }
 
@@ -4256,7 +4572,7 @@ export class PolymarketSignalService {
       openedAt: importedAt,
       updatedAt: importedAt,
       entryPrice,
-      lastPrice: currentPrice,
+      lastPrice: entryPrice,
       entryNotionalUsd,
       remainingShares,
       realizedUsd: Math.max(0, Number(walletPosition.realizedPnl ?? 0)),
@@ -4278,12 +4594,6 @@ export class PolymarketSignalService {
     setupQuality: number,
   ): StrategyPosition {
     const remainingShares = Math.max(0, Number(walletPosition.size ?? 0));
-    const currentPrice = Math.max(
-      0,
-      Number(walletPosition.curPrice ?? 0),
-      getMarketPriceForOutcome(aggregate, position.outcome),
-      position.lastPrice,
-    );
     const reportedEntryPrice = Math.max(0, Number(walletPosition.avgPrice ?? 0));
     const entryPrice = reportedEntryPrice > 0 ? reportedEntryPrice : position.entryPrice;
     const totalBought = Math.max(remainingShares, Number(walletPosition.totalBought ?? remainingShares));
@@ -4295,7 +4605,6 @@ export class PolymarketSignalService {
       ...position,
       updatedAt: Date.now(),
       entryPrice,
-      lastPrice: currentPrice,
       entryNotionalUsd:
         reportedInitialValue > 0
           ? reportedInitialValue
@@ -4305,6 +4614,42 @@ export class PolymarketSignalService {
       soldPercent,
       setupQuality,
     };
+  }
+
+  private applyAggregatePricesToLivePositions(
+    positions: StrategyPosition[],
+    aggregates: MarketAggregate[],
+  ): StrategyPosition[] {
+    if (positions.length === 0 || aggregates.length === 0) {
+      return positions;
+    }
+
+    const aggregateBySlug = new Map(
+      aggregates.map((aggregate) => [
+        aggregate.marketSlug.trim().toLowerCase(),
+        aggregate,
+      ] as const),
+    );
+
+    return positions.map((position) => {
+      if (position.status !== "open") {
+        return position;
+      }
+
+      const aggregate = aggregateBySlug.get(position.marketSlug.trim().toLowerCase());
+      if (!aggregate) {
+        return position;
+      }
+      const currentPrice = getMarketPriceForOutcome(aggregate, position.outcome);
+      if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
+        return position;
+      }
+
+      return {
+        ...position,
+        lastPrice: currentPrice,
+      };
+    });
   }
 
   private scheduleDelayedLiveStrategyReconcile(
@@ -4684,7 +5029,6 @@ export class PolymarketSignalService {
     const nextPosition: StrategyPosition = {
       ...position,
       updatedAt: Date.now(),
-      lastPrice: Math.max(position.lastPrice, thresholdPrice),
       remainingShares: Math.max(0, confirmedWalletShares),
       realizedUsd: position.realizedUsd + realizedUsd,
       soldPercent: Math.max(position.soldPercent, 50),
@@ -4907,7 +5251,6 @@ export class PolymarketSignalService {
       return {
         ...position,
         updatedAt: Date.now(),
-        lastPrice: Math.max(position.lastPrice, targetPrice),
         remainingShares: closeShares,
         pendingCloseOrderId: extractOrderId(response),
         pendingClosePrice: targetPrice,
@@ -4924,27 +5267,57 @@ export class PolymarketSignalService {
       walletSharesBeforeClose,
     );
     if (confirmedWalletShares == null) {
-        this.recordLiveTradingIssue(
-          username,
-          new Error(
-            `Live close order was accepted but wallet shares did not decrease${describeLiveOrderResponse(response)}`,
-          ),
-          {
-            operation: "live_close_confirmation",
-            request: "positions",
-            params: {
-              wallet: tradingWalletAddress,
-              tokenID,
-              marketSlug: position.marketSlug,
-              outcome: position.outcome,
-              previousShares: walletSharesBeforeClose,
-              retries: LIVE_EXIT_CONFIRM_RETRIES,
-              retryDelayMs: LIVE_EXIT_CONFIRM_DELAY_MS,
-            },
-            response,
+      this.recordLiveTradingIssue(
+        username,
+        new Error(
+          `Live close order was accepted but wallet shares did not decrease${describeLiveOrderResponse(response)}`,
+        ),
+        {
+          operation: "live_close_confirmation",
+          request: "positions",
+          params: {
+            wallet: tradingWalletAddress,
+            tokenID,
+            marketSlug: position.marketSlug,
+            outcome: position.outcome,
+            previousShares: walletSharesBeforeClose,
+            retries: LIVE_EXIT_CONFIRM_RETRIES,
+            retryDelayMs: LIVE_EXIT_CONFIRM_DELAY_MS,
           },
-        );
-      return position;
+          response,
+        },
+      );
+
+      const pendingPosition = {
+        ...position,
+        updatedAt: Date.now(),
+        remainingShares: closeShares,
+        pendingCloseOrderId: extractOrderId(response) ?? position.pendingCloseOrderId,
+        pendingClosePrice: safeSellPrice,
+        pendingCloseReason: exitReason,
+        pendingClosePlacedAt: Date.now(),
+        pendingCloseStatus: extractOrderStatus(response) ?? "submitted",
+      };
+
+      this.logExecutionAction("live_strategy", "close_order_pending_confirmation", {
+        username,
+        marketSlug: position.marketSlug,
+        strategyKey: position.strategyKey ?? "best_trades",
+        outcome: position.outcome,
+        tokenID,
+        closeShares,
+        sellPrice: safeSellPrice,
+        exitReason,
+        orderId: pendingPosition.pendingCloseOrderId ?? null,
+        status: pendingPosition.pendingCloseStatus,
+        response,
+      });
+
+      for (const delayMs of LIVE_ENTRY_CONFIRM_RETRY_DELAYS_MS) {
+        this.scheduleDelayedLiveStrategyReconcile(position.marketSlug, username, position.strategyKey ?? "best_trades", delayMs);
+      }
+
+      return pendingPosition;
     }
     if (confirmedWalletShares > 0) {
         this.recordLiveTradingIssue(
@@ -4973,7 +5346,6 @@ export class PolymarketSignalService {
     const nextPosition: StrategyPosition = {
       ...position,
       updatedAt: Date.now(),
-        lastPrice: safeSellPrice,
       remainingShares: confirmedWalletShares,
       realizedUsd: position.realizedUsd + realizedUsd,
       soldPercent: 100,
@@ -5037,7 +5409,6 @@ export class PolymarketSignalService {
       nextPosition = {
         ...nextPosition,
         updatedAt: Date.now(),
-        lastPrice: closePrice,
         remainingShares: Math.max(0, walletShares),
         realizedUsd: position.realizedUsd + soldShares * closePrice,
         soldPercent:
@@ -5070,6 +5441,10 @@ export class PolymarketSignalService {
     });
 
     const orderStatus = typeof order?.status === "string" ? order.status.trim().toLowerCase() : "";
+    const pendingCloseAgeMs =
+      position.pendingClosePlacedAt && Number.isFinite(position.pendingClosePlacedAt)
+        ? Math.max(0, Date.now() - position.pendingClosePlacedAt)
+        : null;
     if (!order) {
       return {
         ...nextPosition,
@@ -5078,10 +5453,98 @@ export class PolymarketSignalService {
     }
 
     if (["canceled", "cancelled", "unmatched", "failed", "rejected"].includes(orderStatus)) {
-      return this.clearPendingCloseState({
-        ...nextPosition,
-        pendingCloseStatus: order.status,
+      const fallbackOptions = await this.getLiveOrderOptions(client, tokenID).catch((error) => {
+        this.recordLiveTradingIssue(username, error, {
+          operation: "live_pending_close_fallback",
+          request: "getOrderBook",
+          params: {
+            tokenID,
+            marketSlug: position.marketSlug,
+            outcome: position.outcome,
+          },
+        });
+        return null;
       });
+      if (!fallbackOptions) {
+        return this.clearPendingCloseState({
+          ...nextPosition,
+          pendingCloseStatus: order.status,
+        });
+      }
+      this.logExecutionAction("live_strategy", "close_order_fallback_market", {
+        username,
+        marketSlug: position.marketSlug,
+        strategyKey: position.strategyKey ?? "best_trades",
+        outcome: position.outcome,
+        tokenID,
+        previousOrderId: position.pendingCloseOrderId,
+        previousStatus: order.status,
+        reason: position.pendingCloseReason ?? position.exitReason ?? "Pending close failed",
+        trigger: "terminal_pending_close_failure",
+      });
+      return this.executeLiveClose(
+        username,
+        this.clearPendingCloseState({
+          ...nextPosition,
+          pendingCloseStatus: order.status,
+        }),
+        tokenID,
+        fallbackOptions,
+        position.pendingCloseReason ?? position.exitReason ?? "Pending close failed",
+      );
+    }
+
+    if (
+      pendingCloseAgeMs != null &&
+      pendingCloseAgeMs >= LIVE_PENDING_CLOSE_MARKET_FALLBACK_DELAY_MS &&
+      ["matched", "delayed", "live", "submitted", "open", "pending"].includes(orderStatus)
+    ) {
+      this.logExecutionAction("live_strategy", "close_order_fallback_market", {
+        username,
+        marketSlug: position.marketSlug,
+        strategyKey: position.strategyKey ?? "best_trades",
+        outcome: position.outcome,
+        tokenID,
+        previousOrderId: position.pendingCloseOrderId,
+        previousStatus: order.status,
+        pendingCloseAgeMs,
+        reason: position.pendingCloseReason ?? position.exitReason ?? "Pending close stale",
+        trigger: "stale_pending_close",
+      });
+
+      if (["live", "open", "submitted", "pending", "delayed"].includes(orderStatus)) {
+        await client.cancelOrder({ orderID: position.pendingCloseOrderId }).catch(() => undefined);
+      }
+
+      const fallbackOptions = await this.getLiveOrderOptions(client, tokenID).catch((error) => {
+        this.recordLiveTradingIssue(username, error, {
+          operation: "live_pending_close_fallback",
+          request: "getOrderBook",
+          params: {
+            tokenID,
+            marketSlug: position.marketSlug,
+            outcome: position.outcome,
+          },
+        });
+        return null;
+      });
+      if (!fallbackOptions) {
+        return {
+          ...nextPosition,
+          pendingCloseStatus: order.status,
+        };
+      }
+
+      return this.executeLiveClose(
+        username,
+        this.clearPendingCloseState({
+          ...nextPosition,
+          pendingCloseStatus: order.status,
+        }),
+        tokenID,
+        fallbackOptions,
+        position.pendingCloseReason ?? position.exitReason ?? "Pending close stale",
+      );
     }
 
     return {
@@ -5502,7 +5965,8 @@ const getBestTradeFailureReasons = (
     return reasons;
   }
 
-  const currentDisplayedPrice = market.latestSignal.averagePrice;
+  const referenceOutcome = market.outcomeWeights[0]?.outcome ?? market.latestSignal.outcome;
+  const currentDisplayedPrice = getMarketPriceForOutcome(market, referenceOutcome);
   if (!options?.ignorePriceCap && currentDisplayedPrice >= 0.9) {
     reasons.push(`price ${currentDisplayedPrice.toFixed(3)} >= 0.900`);
   }
@@ -5517,10 +5981,11 @@ const getBestTradeFailureReasons = (
 
 const getSetupQualityScore = (market: MarketAggregate): number => {
   const totalWeight = Math.max(0, market.weightedScore);
+  const leadOutcome = market.outcomeWeights[0]?.outcome ?? market.latestSignal.outcome;
   const leadingWeight = Math.max(0, market.outcomeWeights[0]?.weight ?? 0);
   const dominanceRatio = totalWeight > 0 ? leadingWeight / totalWeight : 0;
   const participantCount = Math.max(0, market.participantCount);
-  const lastPrice = market.latestSignal.averagePrice;
+  const lastPrice = getMarketPriceForOutcome(market, leadOutcome);
   const avgEntry = market.observedAvgEntry;
   const ageMinutes = Math.max(0, (Date.now() - market.latestTimestamp) / 60_000);
 
@@ -5644,6 +6109,40 @@ const buildStoredStrategyDashboard = (
     positions,
     trades: [...trades].sort((left, right) => right.timestamp - left.timestamp),
   };
+};
+
+const dedupeLogicalOpenPositions = (positions: StrategyPosition[]): StrategyPosition[] => {
+  const dedupedOpenPositions = new Map<string, StrategyPosition>();
+  const nonOpenPositions: StrategyPosition[] = [];
+
+  for (const position of positions) {
+    if (position.status !== "open") {
+      nonOpenPositions.push(position);
+      continue;
+    }
+
+    const key = [
+      position.username.trim().toLowerCase(),
+      (position.strategyKey ?? "best_trades").trim().toLowerCase(),
+      position.marketSlug.trim().toLowerCase(),
+      normalizeOutcomeName(position.outcome),
+    ].join(":");
+    const existing = dedupedOpenPositions.get(key);
+    if (!existing) {
+      dedupedOpenPositions.set(key, position);
+      continue;
+    }
+
+    const existingScore = (existing.updatedAt ?? 0) * 10 + (existing.pendingCloseOrderId ? 1 : 0);
+    const nextScore = (position.updatedAt ?? 0) * 10 + (position.pendingCloseOrderId ? 1 : 0);
+    if (nextScore >= existingScore) {
+      dedupedOpenPositions.set(key, position);
+    }
+  }
+
+  return [...nonOpenPositions, ...dedupedOpenPositions.values()].sort(
+    (left, right) => right.updatedAt - left.updatedAt,
+  );
 };
 
 const calculatePaperCashBalanceFromPositions = (
@@ -5983,6 +6482,26 @@ const getOutcomeWeightForMarket = (aggregate: MarketAggregate, outcome: string):
   return (
     aggregate.outcomeWeights.find((entry) => normalizeOutcomeName(entry.outcome) === normalizedOutcome)?.weight ?? 0
   );
+};
+
+const hasMeaningfulPriceDeviation = (
+  referencePrice: number,
+  observedPrice: number,
+  absoluteThreshold: number,
+  relativeThreshold: number,
+): boolean => {
+  if (
+    !Number.isFinite(referencePrice) ||
+    !Number.isFinite(observedPrice) ||
+    referencePrice <= 0 ||
+    observedPrice <= 0
+  ) {
+    return false;
+  }
+
+  const absoluteDeviation = Math.abs(referencePrice - observedPrice);
+  const relativeDeviation = absoluteDeviation / referencePrice;
+  return absoluteDeviation >= absoluteThreshold && relativeDeviation >= relativeThreshold;
 };
 
 const getMarketPriceForOutcome = (aggregate: MarketAggregate, outcome: string): number => {

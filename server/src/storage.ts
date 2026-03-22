@@ -307,6 +307,21 @@ export class SignalStorage {
     return rows.map(({ _id: _ignored, updatedAt: _updatedAt, ...aggregate }) => aggregate);
   }
 
+  async loadOpenPositionMarketSlugs(limit = 1_000): Promise<string[]> {
+    const [paperSlugs, liveSlugs] = await Promise.all([
+      this.strategyPositionCollection().distinct("marketSlug", { status: "open" }),
+      this.liveStrategyPositionCollection().distinct("marketSlug", { status: "open" }),
+    ]);
+
+    return Array.from(
+      new Set(
+        [...paperSlugs, ...liveSlugs]
+          .map((marketSlug) => String(marketSlug ?? "").trim())
+          .filter(Boolean),
+      ),
+    ).slice(0, limit);
+  }
+
   async loadBestTradeMarketSlugs(limit = 500): Promise<string[]> {
     const rows = await this.marketAggregateCollection()
       .find({ isBestTrade: true }, { projection: { _id: 0, marketSlug: 1 }, sort: { latestTimestamp: -1 }, limit })
@@ -335,26 +350,33 @@ export class SignalStorage {
   async syncMarketCatalog(markets: MarketRecord[]): Promise<void> {
     const uniqueMarkets = Array.from(new Map(markets.map((market) => [market.slug, market])).values());
 
-    if (uniqueMarkets.length > 0) {
-      await this.marketCatalogCollection().bulkWrite(
-        uniqueMarkets.map((market) => ({
-          updateOne: {
-            filter: { slug: market.slug },
-            update: {
-              $set: {
-                ...market,
-                updatedAt: new Date(),
-              },
-            },
-            upsert: true,
-          },
-        })),
-        { ordered: false },
-      );
-    }
+    await this.upsertMarketCatalog(uniqueMarkets);
 
     await this.marketCatalogCollection().deleteMany(
       uniqueMarkets.length > 0 ? { slug: { $nin: uniqueMarkets.map((market) => market.slug) } } : {},
+    );
+  }
+
+  async upsertMarketCatalog(markets: MarketRecord[]): Promise<void> {
+    const uniqueMarkets = Array.from(new Map(markets.map((market) => [market.slug, market])).values());
+    if (uniqueMarkets.length === 0) {
+      return;
+    }
+
+    await this.marketCatalogCollection().bulkWrite(
+      uniqueMarkets.map((market) => ({
+        updateOne: {
+          filter: { slug: market.slug },
+          update: {
+            $set: {
+              ...market,
+              updatedAt: new Date(),
+            },
+          },
+          upsert: true,
+        },
+      })),
+      { ordered: false },
     );
   }
 

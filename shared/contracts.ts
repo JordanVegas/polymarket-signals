@@ -8,6 +8,7 @@ export type MarketRecord = {
   liquidity: number;
   volume24hr: number;
   outcomeByAssetId: Record<string, string>;
+  outcomePriceByAssetId?: Record<string, number>;
   category?: string;
   eventSlug?: string;
   eventTitle?: string;
