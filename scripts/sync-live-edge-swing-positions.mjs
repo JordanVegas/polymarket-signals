@@ -221,7 +221,15 @@ const main = async () => {
 
       const result = await liveStrategyPositionsCollection.updateOne(
         { id: syncedPosition.id },
-        { $set: syncedPosition },
+        {
+          $set: syncedPosition,
+          $unset: {
+            pendingEntryOrderId: "",
+            pendingEntryPlacedAt: "",
+            pendingEntryStatus: "",
+            exitReason: "",
+          },
+        },
         { upsert: true },
       );
 
