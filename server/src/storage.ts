@@ -213,6 +213,10 @@ export class SignalStorage {
     await this.liveStrategyPositionCollection().createIndex({ status: 1, updatedAt: -1 });
     await this.liveStrategyPositionCollection().createIndex({ username: 1, status: 1, updatedAt: -1 });
     await this.liveStrategyPositionCollection().createIndex({ username: 1, marketSlug: 1, outcome: 1, status: 1 });
+    await this.liveStrategyPositionCollection().createIndex(
+      { username: 1, strategyKey: 1, marketSlug: 1 },
+      { unique: true, partialFilterExpression: { status: "open" } },
+    );
     await this.liveStrategyTradeCollection().createIndex({ id: 1 }, { unique: true });
     await this.liveStrategyTradeCollection().createIndex({ username: 1, timestamp: -1 });
     await this.tradeCollection().createIndex({ tradeId: 1 }, { unique: true });
@@ -664,11 +668,25 @@ export class SignalStorage {
       updatedAtDate: new Date(),
     };
 
-    await this.liveStrategyPositionCollection().updateOne(
-      { id: position.id },
-      { $set: payload },
-      { upsert: true },
-    );
+    if (payload.status === "open") {
+      const { id, ...payloadWithoutId } = payload;
+      await this.liveStrategyPositionCollection().updateOne(
+        {
+          username: payload.username,
+          strategyKey: payload.strategyKey,
+          marketSlug: payload.marketSlug,
+          status: "open",
+        },
+        {
+          $set: payloadWithoutId,
+          $setOnInsert: { id },
+        },
+        { upsert: true },
+      );
+      return;
+    }
+
+    await this.liveStrategyPositionCollection().updateOne({ id: position.id }, { $set: payload }, { upsert: true });
   }
 
   async loadLiveStrategyTrades(

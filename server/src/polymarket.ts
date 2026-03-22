@@ -826,6 +826,10 @@ export class PolymarketSignalService {
       this.storage.getUserSettings(username),
     ]);
     let positions = dedupeLogicalOpenPositions(storedPositions);
+    if (settings.tradingWalletAddress) {
+      const walletPositions = await this.loadWalletActivePositions(settings.tradingWalletAddress).catch(() => []);
+      positions = this.reconcileLiveDashboardPositionsWithWallet(positions, walletPositions);
+    }
     const aggregates = await this.storage.loadMarketAggregates(
       Array.from(new Set(positions.map((position) => position.marketSlug))),
     );
@@ -4487,16 +4491,19 @@ export class PolymarketSignalService {
       imported.outcome,
       strategyKey,
     );
-    if (existingOpenPosition) {
-      imported.id = existingOpenPosition.id;
-      imported.openedAt = existingOpenPosition.openedAt;
-      imported.realizedUsd = Math.max(imported.realizedUsd, existingOpenPosition.realizedUsd);
-      imported.trim96Hit = imported.trim96Hit || existingOpenPosition.trim96Hit;
-      imported.pendingCloseOrderId = existingOpenPosition.pendingCloseOrderId;
-      imported.pendingClosePrice = existingOpenPosition.pendingClosePrice;
-      imported.pendingCloseReason = existingOpenPosition.pendingCloseReason;
-      imported.pendingClosePlacedAt = existingOpenPosition.pendingClosePlacedAt;
-      imported.pendingCloseStatus = existingOpenPosition.pendingCloseStatus;
+    const existingOpenMarketPosition =
+      existingOpenPosition
+      ?? (await this.storage.loadOpenLiveStrategyPositionForMarket(username, marketSlug, strategyKey));
+    if (existingOpenMarketPosition) {
+      imported.id = existingOpenMarketPosition.id;
+      imported.openedAt = existingOpenMarketPosition.openedAt;
+      imported.realizedUsd = Math.max(imported.realizedUsd, existingOpenMarketPosition.realizedUsd);
+      imported.trim96Hit = imported.trim96Hit || existingOpenMarketPosition.trim96Hit;
+      imported.pendingCloseOrderId = existingOpenMarketPosition.pendingCloseOrderId;
+      imported.pendingClosePrice = existingOpenMarketPosition.pendingClosePrice;
+      imported.pendingCloseReason = existingOpenMarketPosition.pendingCloseReason;
+      imported.pendingClosePlacedAt = existingOpenMarketPosition.pendingClosePlacedAt;
+      imported.pendingCloseStatus = existingOpenMarketPosition.pendingCloseStatus;
     }
     await this.storage.saveLiveStrategyPosition(imported);
     const existingTrades = await this.storage.loadLiveStrategyTrades(username, strategyKey, 1_000);
@@ -4649,6 +4656,53 @@ export class PolymarketSignalService {
         ...position,
         lastPrice: currentPrice,
       };
+    });
+  }
+
+  private reconcileLiveDashboardPositionsWithWallet(
+    positions: StrategyPosition[],
+    walletPositions: RawPosition[],
+  ): StrategyPosition[] {
+    if (positions.length === 0) {
+      return positions;
+    }
+
+    const walletPositionByKey = new Map(
+      walletPositions.map((row) => [
+        `${String(row.slug ?? "").trim().toLowerCase()}:${normalizeOutcomeName(String(row.outcome ?? ""))}`,
+        row,
+      ] as const),
+    );
+
+    return positions.map((position) => {
+      if (position.status !== "open") {
+        return position;
+      }
+
+      const walletPosition = walletPositionByKey.get(
+        `${position.marketSlug.trim().toLowerCase()}:${normalizeOutcomeName(position.outcome)}`,
+      );
+      if (!walletPosition) {
+        return {
+          ...this.clearPendingCloseState(position),
+          status: "closed",
+          remainingShares: 0,
+          soldPercent: 100,
+          exitReason: position.exitReason ?? "Wallet sync: not present in active positions",
+          updatedAt: Date.now(),
+        };
+      }
+
+      const walletShares = Number(walletPosition.size ?? 0);
+      if (Number.isFinite(walletShares) && walletShares >= 0 && Math.abs(walletShares - position.remainingShares) > 0.000001) {
+        return {
+          ...position,
+          remainingShares: walletShares,
+          updatedAt: Date.now(),
+        };
+      }
+
+      return position;
     });
   }
 
