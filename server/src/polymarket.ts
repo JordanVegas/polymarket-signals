@@ -407,6 +407,10 @@ export class PolymarketSignalService {
   private listeners = new Set<(payload: WhaleSignal) => void>();
   private readonly seenExecutionSignalIds = new Set<string>();
 
+  protected isExecutionRuntime(): boolean {
+    return true;
+  }
+
   async start(): Promise<void> {
     await this.startMarketIntelligence();
     await this.startAppExecution();
@@ -498,6 +502,10 @@ export class PolymarketSignalService {
   }
 
   private async pollExecutionSignals(): Promise<void> {
+    if (!this.isExecutionRuntime()) {
+      return;
+    }
+
     const signals = await this.storage.loadSignalsSince(
       Math.max(0, this.lastExecutionSignalTimestamp - 1),
       500,
@@ -1960,6 +1968,10 @@ export class PolymarketSignalService {
   }
 
   private async queuePaperAndLiveReconcilesForSignal(signal: WhaleSignal): Promise<void> {
+    if (!this.isExecutionRuntime()) {
+      return;
+    }
+
     const marketSlug = signal.marketSlug;
     const [paperUsers, edgeSwingPaperUsers, liveUsers, edgeSwingLiveUsers] = await Promise.all([
       this.storage.loadAutoTradeUsers("best_trades"),
@@ -2178,8 +2190,10 @@ export class PolymarketSignalService {
       }
     }
 
-    await this.queueCurrentBestTradeReconciles();
-    await this.queueCurrentEdgeSwingReconciles();
+    if (this.isExecutionRuntime()) {
+      await this.queueCurrentBestTradeReconciles();
+      await this.queueCurrentEdgeSwingReconciles();
+    }
   }
 
   private async refreshMarketAggregate(marketSlug: string): Promise<void> {
