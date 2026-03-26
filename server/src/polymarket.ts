@@ -314,6 +314,10 @@ const LIVE_ENTRY_MARKET_STALENESS_MAX_ABSOLUTE_DEVIATION = 0.08;
 const LIVE_ENTRY_MARKET_STALENESS_MAX_RELATIVE_DEVIATION = 0.35;
 const LIVE_ENTRY_EXECUTION_MAX_ABSOLUTE_DEVIATION = 0.04;
 const LIVE_ENTRY_EXECUTION_MAX_RELATIVE_DEVIATION = 0.5;
+const EDGE_SWING_MID_PRICE_MIN = 0.4;
+const EDGE_SWING_MID_PRICE_MAX = 0.65;
+const EDGE_SWING_MID_PRICE_MIN_SETUP_QUALITY = 75;
+const EDGE_SWING_ADVERSE_MOVE_EXIT_RATIO = 0.5;
 const EDGE_SWING_AUTO_TAKE_PROFIT_TRIGGER_PRICE = 0.99;
 const EDGE_SWING_AUTO_TAKE_PROFIT_PRICE = 0.999;
 
@@ -2952,6 +2956,18 @@ export class PolymarketSignalService {
       if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
         return;
       }
+      if (shouldSkipEdgeSwingMidPriceEntry(strategyKey, currentPrice, setupQuality)) {
+        this.logExecutionAction("paper_strategy", "entry_skipped_mid_price_low_quality", {
+          username,
+          marketSlug,
+          strategyKey,
+          outcome: edgeOutcome,
+          currentPrice,
+          setupQuality,
+          minimumSetupQuality: EDGE_SWING_MID_PRICE_MIN_SETUP_QUALITY,
+        });
+        return;
+      }
 
       const originalParticipants = currentParticipants.map((participant) => ({
         wallet: participant.wallet,
@@ -3099,6 +3115,8 @@ export class PolymarketSignalService {
       exitReason = "Take profit 0.999";
     } else if (strategyKey === "edge_swing" && edgeFlipped) {
       exitReason = `Edge flipped to ${edgeOutcome}`;
+    } else if (shouldExitEdgeSwingOnAdverseMove(strategyKey, nextPosition.entryPrice, currentPrice)) {
+      exitReason = `Adverse move: price dropped to ${currentPrice.toFixed(3)} from entry ${nextPosition.entryPrice.toFixed(3)}`;
     } else if (strategyKey === "edge_swing" && peakEdgePoints > 0 && currentEdgePoints <= peakEdgePoints * 0.35) {
       exitReason = `Edge dropped to ${currentEdgePoints.toFixed(1)} from ${peakEdgePoints.toFixed(1)}`;
     } else if (
@@ -3267,6 +3285,18 @@ export class PolymarketSignalService {
 
       const currentPrice = getMarketPriceForOutcome(currentAggregate, edgeOutcome);
       if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
+        return;
+      }
+      if (shouldSkipEdgeSwingMidPriceEntry(strategyKey, currentPrice, setupQuality)) {
+        this.logExecutionAction("live_strategy", "entry_skipped_mid_price_low_quality", {
+          username,
+          marketSlug,
+          strategyKey,
+          outcome: edgeOutcome,
+          currentPrice,
+          setupQuality,
+          minimumSetupQuality: EDGE_SWING_MID_PRICE_MIN_SETUP_QUALITY,
+        });
         return;
       }
 
@@ -3745,6 +3775,8 @@ export class PolymarketSignalService {
       exitReason = "Take profit 0.999";
     } else if (strategyKey === "edge_swing" && edgeFlipped) {
       exitReason = `Edge flipped to ${edgeOutcome}`;
+    } else if (shouldExitEdgeSwingOnAdverseMove(strategyKey, nextPosition.entryPrice, currentPrice)) {
+      exitReason = `Adverse move: price dropped to ${currentPrice.toFixed(3)} from entry ${nextPosition.entryPrice.toFixed(3)}`;
     } else if (
       strategyKey === "edge_swing" &&
       (nextPosition.peakEdgePoints ?? currentEdgePoints) > 0 &&
@@ -6749,6 +6781,29 @@ const hasMeaningfulPriceDeviation = (
   const relativeDeviation = absoluteDeviation / referencePrice;
   return absoluteDeviation >= absoluteThreshold && relativeDeviation >= relativeThreshold;
 };
+
+const shouldSkipEdgeSwingMidPriceEntry = (
+  strategyKey: StrategyKey,
+  currentPrice: number,
+  setupQuality: number,
+): boolean =>
+  strategyKey === "edge_swing" &&
+  Number.isFinite(currentPrice) &&
+  currentPrice >= EDGE_SWING_MID_PRICE_MIN &&
+  currentPrice <= EDGE_SWING_MID_PRICE_MAX &&
+  setupQuality < EDGE_SWING_MID_PRICE_MIN_SETUP_QUALITY;
+
+const shouldExitEdgeSwingOnAdverseMove = (
+  strategyKey: StrategyKey,
+  entryPrice: number,
+  currentPrice: number,
+): boolean =>
+  strategyKey === "edge_swing" &&
+  Number.isFinite(entryPrice) &&
+  entryPrice > 0 &&
+  Number.isFinite(currentPrice) &&
+  currentPrice > 0 &&
+  currentPrice <= entryPrice * EDGE_SWING_ADVERSE_MOVE_EXIT_RATIO;
 
 const getMarketPriceForOutcome = (aggregate: MarketAggregate, outcome: string): number => {
   const normalizedOutcome = normalizeOutcomeName(outcome);
