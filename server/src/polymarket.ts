@@ -319,6 +319,10 @@ const EDGE_SWING_MID_PRICE_MIN = 0.4;
 const EDGE_SWING_MID_PRICE_MAX = 0.65;
 const EDGE_SWING_MID_PRICE_MIN_SETUP_QUALITY = 75;
 const EDGE_SWING_ADVERSE_MOVE_EXIT_RATIO = 0.5;
+const EDGE_SWING_MIN_ENTRY_PRICE_PROP = 0.85;
+const EDGE_SWING_MIN_ENTRY_PRICE_MONEYLINE = 0.7;
+const EDGE_SWING_MIN_ENTRY_PRICE_MAP_GAME = 0.7;
+const EDGE_SWING_MIN_TIME_TO_EXPIRY_MS = 3 * 60 * 60_000;
 const EDGE_SWING_AUTO_TAKE_PROFIT_TRIGGER_PRICE = 0.99;
 const EDGE_SWING_AUTO_TAKE_PROFIT_PRICE = 0.999;
 
@@ -6833,6 +6837,33 @@ const shouldExitEdgeSwingOnAdverseMove = (
 const isBelowMinimumLiveCloseSize = (shares: number): boolean =>
   Number.isFinite(shares) && shares > 0 && shares < MIN_LIVE_CLOSE_SHARES;
 
+const classifyEdgeSwingMarketType = (aggregate: MarketAggregate): "spread" | "total" | "map_game" | "prop_yes_no" | "moneyline_h2h" | "other" => {
+  const slug = aggregate.marketSlug.trim().toLowerCase();
+  const question = aggregate.marketQuestion.trim().toLowerCase();
+  if (slug.includes("spread") || question.includes("spread:")) {
+    return "spread";
+  }
+  if (slug.includes("total") || question.includes("o/u")) {
+    return "total";
+  }
+  if (
+    question.includes(" map ") ||
+    slug.includes("-game") ||
+    question.includes("game 1") ||
+    question.includes("game 2") ||
+    question.includes("game 3")
+  ) {
+    return "map_game";
+  }
+  if (question.startsWith("will ") || question.includes("will the") || question.includes("will ")) {
+    return "prop_yes_no";
+  }
+  if (question.includes(" vs. ") || question.includes(" vs ")) {
+    return "moneyline_h2h";
+  }
+  return "other";
+};
+
 const getMarketPriceForOutcome = (aggregate: MarketAggregate, outcome: string): number => {
   const normalizedOutcome = normalizeOutcomeName(outcome);
   const outcomePrice = aggregate.outcomeLatestPrices?.find(
@@ -6863,11 +6894,34 @@ const qualifiesEdgeSwingMarket = (aggregate: MarketAggregate): boolean => {
 
   const now = Date.now();
   const timeUntilEnd = endDate - now;
-  if (timeUntilEnd < 0 || timeUntilEnd > 2 * 24 * 60 * 60_000) {
+  if (timeUntilEnd < EDGE_SWING_MIN_TIME_TO_EXPIRY_MS || timeUntilEnd > 2 * 24 * 60 * 60_000) {
     return false;
   }
 
-  return getEdgePointsForOutcome(aggregate, leadOutcome) >= 50;
+  if (getEdgePointsForOutcome(aggregate, leadOutcome) < 50) {
+    return false;
+  }
+
+  const marketType = classifyEdgeSwingMarketType(aggregate);
+  const leadPrice = getMarketPriceForOutcome(aggregate, leadOutcome);
+  if (!Number.isFinite(leadPrice) || leadPrice <= 0) {
+    return false;
+  }
+
+  if (marketType === "spread" || marketType === "total") {
+    return false;
+  }
+  if (marketType === "prop_yes_no") {
+    return leadPrice >= EDGE_SWING_MIN_ENTRY_PRICE_PROP;
+  }
+  if (marketType === "moneyline_h2h") {
+    return leadPrice >= EDGE_SWING_MIN_ENTRY_PRICE_MONEYLINE;
+  }
+  if (marketType === "map_game") {
+    return leadPrice >= EDGE_SWING_MIN_ENTRY_PRICE_MAP_GAME;
+  }
+
+  return false;
 };
 
 const doesMarketQualifyForStrategy = (aggregate: MarketAggregate, strategyKey: StrategyKey): boolean =>
