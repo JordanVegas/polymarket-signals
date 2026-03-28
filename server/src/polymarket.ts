@@ -300,6 +300,7 @@ const MARKET_TRADE_FETCH_COOLDOWN_MS = 1_000;
 const MIN_STRATEGY_ENTRY_USD = 1;
 const MIN_LIVE_TRADE_USD = 5;
 const MIN_LIVE_TRADE_CASH_PERCENT = 5;
+const MIN_LIVE_CLOSE_SHARES = 5;
 const LIVE_ENTRY_CONFIRM_RETRIES = 5;
 const LIVE_ENTRY_CONFIRM_DELAY_MS = 1_500;
 const LIVE_ENTRY_CONFIRM_RETRY_DELAYS_MS = [15_000, 60_000, 180_000];
@@ -3744,6 +3745,30 @@ export class PolymarketSignalService {
       }
     }
 
+    if (isBelowMinimumLiveCloseSize(nextPosition.remainingShares)) {
+      const dustExitReason = `Below minimum close size (${MIN_LIVE_CLOSE_SHARES} shares)`;
+      const dustPosition =
+        nextPosition.exitReason === dustExitReason
+          ? nextPosition
+          : {
+              ...nextPosition,
+              updatedAt: Date.now(),
+              exitReason: dustExitReason,
+            };
+      if (nextPosition.exitReason !== dustExitReason) {
+        this.logExecutionAction("live_strategy", "close_skipped_below_min_size", {
+          username,
+          marketSlug,
+          strategyKey,
+          outcome: dustPosition.outcome,
+          remainingShares: dustPosition.remainingShares,
+          minimumCloseShares: MIN_LIVE_CLOSE_SHARES,
+        });
+      }
+      await this.storage.saveLiveStrategyPosition(dustPosition);
+      return;
+    }
+
     const options = await this.getLiveOrderOptions(client, tokenID).catch((error) => {
       this.recordLiveTradingIssue(username, error);
       return null;
@@ -6804,6 +6829,9 @@ const shouldExitEdgeSwingOnAdverseMove = (
   Number.isFinite(currentPrice) &&
   currentPrice > 0 &&
   currentPrice <= entryPrice * EDGE_SWING_ADVERSE_MOVE_EXIT_RATIO;
+
+const isBelowMinimumLiveCloseSize = (shares: number): boolean =>
+  Number.isFinite(shares) && shares > 0 && shares < MIN_LIVE_CLOSE_SHARES;
 
 const getMarketPriceForOutcome = (aggregate: MarketAggregate, outcome: string): number => {
   const normalizedOutcome = normalizeOutcomeName(outcome);
