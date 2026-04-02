@@ -315,6 +315,8 @@ const LIVE_ENTRY_MARKET_STALENESS_MAX_ABSOLUTE_DEVIATION = 0.08;
 const LIVE_ENTRY_MARKET_STALENESS_MAX_RELATIVE_DEVIATION = 0.35;
 const LIVE_ENTRY_EXECUTION_MAX_ABSOLUTE_DEVIATION = 0.04;
 const LIVE_ENTRY_EXECUTION_MAX_RELATIVE_DEVIATION = 0.5;
+const GAMMA_MARKET_SYNC_BASE_BACKOFF_MS = 15_000;
+const GAMMA_MARKET_SYNC_MAX_BACKOFF_MS = 10 * 60_000;
 const EDGE_SWING_MID_PRICE_MIN = 0.4;
 const EDGE_SWING_MID_PRICE_MAX = 0.65;
 const EDGE_SWING_MID_PRICE_MIN_SETUP_QUALITY = 75;
@@ -413,6 +415,8 @@ export class PolymarketSignalService {
   private forcingMarketSync: Promise<void> | null = null;
   private nextShardId = 1;
   private nextFetchDispatcherIndex = 0;
+  private gammaMarketSyncCooldownUntil = 0;
+  private gammaMarketSyncBackoffMs = GAMMA_MARKET_SYNC_BASE_BACKOFF_MS;
   private listeners = new Set<(payload: WhaleSignal) => void>();
   private readonly seenExecutionSignalIds = new Set<string>();
 
@@ -1114,6 +1118,10 @@ export class PolymarketSignalService {
   }
 
   private async syncMarkets(): Promise<void> {
+    if (this.gammaMarketSyncCooldownUntil > Date.now()) {
+      return;
+    }
+
     const nextMarketsByAssetId = new Map<string, MarketRecord>();
     let offset = 0;
     const pageSize = 500;
@@ -1130,6 +1138,19 @@ export class PolymarketSignalService {
         return;
       }
       if (!response.ok) {
+        if (response.status === 429) {
+          const retryAfterMs = getRetryAfterMs(response);
+          const backoffMs = retryAfterMs ?? this.gammaMarketSyncBackoffMs;
+          this.gammaMarketSyncCooldownUntil = Date.now() + backoffMs;
+          this.gammaMarketSyncBackoffMs = Math.min(
+            Math.max(this.gammaMarketSyncBackoffMs * 2, GAMMA_MARKET_SYNC_BASE_BACKOFF_MS),
+            GAMMA_MARKET_SYNC_MAX_BACKOFF_MS,
+          );
+          console.warn(
+            `[polysignals] gamma markets rate limited; backing off for ${Math.round(backoffMs / 1000)}s`,
+          );
+          return;
+        }
         throw new Error(`Failed to sync markets: ${response.status}`);
       }
 
@@ -1163,6 +1184,8 @@ export class PolymarketSignalService {
     await this.storage.syncMarketCatalog(Array.from(new Map(
       Array.from(nextMarketsByAssetId.values(), (market) => [market.slug, market] as const),
     ).values()));
+    this.gammaMarketSyncCooldownUntil = 0;
+    this.gammaMarketSyncBackoffMs = GAMMA_MARKET_SYNC_BASE_BACKOFF_MS;
     this.lastMarketSyncAt = Date.now();
     this.rebuildMarketSockets();
     this.captureInitialActiveMarkets();
@@ -6836,6 +6859,25 @@ const shouldExitEdgeSwingOnAdverseMove = (
 
 const isBelowMinimumLiveCloseSize = (shares: number): boolean =>
   Number.isFinite(shares) && shares > 0 && shares < MIN_LIVE_CLOSE_SHARES;
+
+const getRetryAfterMs = (response: Response): number | null => {
+  const retryAfter = response.headers.get("retry-after");
+  if (!retryAfter) {
+    return null;
+  }
+
+  const seconds = Number(retryAfter);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return seconds * 1000;
+  }
+
+  const retryAt = Date.parse(retryAfter);
+  if (Number.isFinite(retryAt)) {
+    return Math.max(0, retryAt - Date.now());
+  }
+
+  return null;
+};
 
 const classifyEdgeSwingMarketType = (aggregate: MarketAggregate): "spread" | "total" | "map_game" | "prop_yes_no" | "moneyline_h2h" | "other" => {
   const slug = aggregate.marketSlug.trim().toLowerCase();
