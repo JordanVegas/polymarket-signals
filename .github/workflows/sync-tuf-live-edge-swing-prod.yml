@@ -1,4 +1,4 @@
-name: Sync TUF Live Edge Swing Prod
+name: Sync Live Strategies Prod
 
 on:
   workflow_dispatch:
@@ -42,5 +42,5 @@ jobs:
             if [ -n '${{ secrets.PROD_MONGO_DB_NAME }}' ]; then
               export MONGO_DB_NAME='${{ secrets.PROD_MONGO_DB_NAME }}'
             fi
-            node "$APP_DIR/.sync-live-edge-swing-positions.mjs" --username tuf --strategy best_trades
+            node "$APP_DIR/.sync-live-edge-swing-positions.mjs"
             rm -f "$APP_DIR/.sync-live-edge-swing-positions.mjs"
