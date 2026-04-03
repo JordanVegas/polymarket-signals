@@ -36,5 +36,11 @@ jobs:
             set -a
             . <(tr -d '\r' < "$APP_DIR/.env.app-execution")
             set +a
+            if [ -n '${{ secrets.PROD_MONGO_URI }}' ]; then
+              export MONGO_URI='${{ secrets.PROD_MONGO_URI }}'
+            fi
+            if [ -n '${{ secrets.PROD_MONGO_DB_NAME }}' ]; then
+              export MONGO_DB_NAME='${{ secrets.PROD_MONGO_DB_NAME }}'
+            fi
             node "$APP_DIR/.sync-live-edge-swing-positions.mjs" --username idani --strategy edge_swing
             rm -f "$APP_DIR/.sync-live-edge-swing-positions.mjs"

@@ -38,6 +38,12 @@ jobs:
           set -a
           . <(tr -d '\r' < "$APP_DIR/.env.app-execution")
           set +a
+          if [ -n '${{ secrets.PROD_MONGO_URI }}' ]; then
+            export MONGO_URI='${{ secrets.PROD_MONGO_URI }}'
+          fi
+          if [ -n '${{ secrets.PROD_MONGO_DB_NAME }}' ]; then
+            export MONGO_DB_NAME='${{ secrets.PROD_MONGO_DB_NAME }}'
+          fi
           node "$APP_DIR/.inspect-live-equity-gap.mjs" --username tuf
           rm -f "$APP_DIR/.inspect-live-equity-gap.mjs"
           EOF

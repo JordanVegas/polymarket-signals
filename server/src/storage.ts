@@ -278,6 +278,38 @@ export class SignalStorage {
     return rows.map(({ _id: _ignored, updatedAt: _updatedAt, ...signal }) => signal);
   }
 
+  async loadActiveSignalsForMarketSlugs(marketSlugs: string[]): Promise<WhaleSignal[]> {
+    if (marketSlugs.length === 0) {
+      return [];
+    }
+
+    const cursor = this.collection().find(
+      { marketSlug: { $in: marketSlugs } },
+      {
+        sort: { timestamp: 1, id: 1 },
+        projection: { _id: 0, updatedAt: 0 },
+      },
+    );
+    const activeSignalsByPosition = new Map<string, WhaleSignal[]>();
+
+    for await (const signal of cursor) {
+      const positionKey = `${signal.wallet}:${signal.marketSlug}:${signal.outcome}`;
+
+      if (signal.side === "SELL") {
+        activeSignalsByPosition.delete(positionKey);
+        continue;
+      }
+
+      const currentSignals = activeSignalsByPosition.get(positionKey) ?? [];
+      currentSignals.push(signal);
+      activeSignalsByPosition.set(positionKey, currentSignals);
+    }
+
+    return Array.from(activeSignalsByPosition.values())
+      .flat()
+      .sort((left, right) => right.timestamp - left.timestamp || right.id.localeCompare(left.id));
+  }
+
   async saveSignal(signal: WhaleSignal): Promise<void> {
     const payload: PersistedSignal = {
       ...signal,

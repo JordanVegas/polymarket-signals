@@ -288,15 +288,20 @@ const applySignalLabelStyle = (signal: WhaleSignal): WhaleSignal => ({
 });
 
 const logFetchFailure = (context: string, error: unknown) => {
-  console.error(`[polysignals] ${context}`, error);
+  console.error(`[polysignals] ${context}`, compactErrorForLogging(error));
 };
 
 const positiveOutcomeKeywords = ["yes", "up", "above", "over", "higher", "more", "long"];
 const negativeOutcomeKeywords = ["no", "down", "below", "under", "lower", "less", "short"];
 const TRADER_MEMORY_CACHE_TTL_MS = 5 * 60_000;
 const TRADER_DB_CACHE_TTL_MS = 7 * 24 * 60 * 60_000;
+const TRADER_MEMORY_CACHE_MAX_ENTRIES = 2_000;
 const REQUEST_STATS_WINDOW_MS = 10 * 60_000;
 const MARKET_TRADE_FETCH_COOLDOWN_MS = 1_000;
+const WEBSOCKET_ASSET_SEEN_TTL_MS = 60 * 60_000;
+const MARKET_QUOTE_CACHE_TTL_MS = 10 * 60_000;
+const MARKET_TRADE_FETCH_ENTRY_TTL_MS = 60 * 60_000;
+const LIVE_COLLATERAL_BALANCE_TTL_MS = 30 * 60_000;
 const MIN_STRATEGY_ENTRY_USD = 1;
 const MIN_LIVE_TRADE_USD = 5;
 const MIN_LIVE_TRADE_CASH_PERCENT = 5;
@@ -317,6 +322,8 @@ const LIVE_ENTRY_EXECUTION_MAX_ABSOLUTE_DEVIATION = 0.04;
 const LIVE_ENTRY_EXECUTION_MAX_RELATIVE_DEVIATION = 0.5;
 const GAMMA_MARKET_SYNC_BASE_BACKOFF_MS = 15_000;
 const GAMMA_MARKET_SYNC_MAX_BACKOFF_MS = 10 * 60_000;
+const GAMMA_MARKET_SYNC_MIN_INTERVAL_MS = 60_000;
+const GAMMA_MARKET_SYNC_PAGE_DELAY_MS = 250;
 const EDGE_SWING_MID_PRICE_MIN = 0.4;
 const EDGE_SWING_MID_PRICE_MAX = 0.65;
 const EDGE_SWING_MID_PRICE_MIN_SETUP_QUALITY = 75;
@@ -413,6 +420,8 @@ export class PolymarketSignalService {
   private lastWebsocketMessageAt: number | null = null;
   private lastForcedMarketSyncAt = 0;
   private forcingMarketSync: Promise<void> | null = null;
+  private gammaMarketSyncInFlight: Promise<void> | null = null;
+  private gammaMarketSyncLastRateLimitLogAt = 0;
   private nextShardId = 1;
   private nextFetchDispatcherIndex = 0;
   private gammaMarketSyncCooldownUntil = 0;
@@ -657,6 +666,7 @@ export class PolymarketSignalService {
   }
 
   private async persistServiceStatusHeartbeat(): Promise<void> {
+    this.pruneRuntimeState();
     await this.storage.saveServiceStatus("market-intelligence", (await this.getSnapshot()).status);
   }
 
@@ -1118,6 +1128,31 @@ export class PolymarketSignalService {
   }
 
   private async syncMarkets(): Promise<void> {
+    const inFlightSync = this.gammaMarketSyncInFlight;
+    if (inFlightSync) {
+      await inFlightSync;
+      return;
+    }
+
+    if (
+      this.lastMarketSyncAt !== null &&
+      Date.now() - this.lastMarketSyncAt < GAMMA_MARKET_SYNC_MIN_INTERVAL_MS
+    ) {
+      return;
+    }
+
+    const syncPromise = this.performSyncMarkets();
+    this.gammaMarketSyncInFlight = syncPromise;
+    try {
+      await syncPromise;
+    } finally {
+      if (this.gammaMarketSyncInFlight === syncPromise) {
+        this.gammaMarketSyncInFlight = null;
+      }
+    }
+  }
+
+  private async performSyncMarkets(): Promise<void> {
     if (this.gammaMarketSyncCooldownUntil > Date.now()) {
       return;
     }
@@ -1140,15 +1175,18 @@ export class PolymarketSignalService {
       if (!response.ok) {
         if (response.status === 429) {
           const retryAfterMs = getRetryAfterMs(response);
-          const backoffMs = retryAfterMs ?? this.gammaMarketSyncBackoffMs;
+          const backoffMs = jitterBackoffMs(retryAfterMs ?? this.gammaMarketSyncBackoffMs);
           this.gammaMarketSyncCooldownUntil = Date.now() + backoffMs;
           this.gammaMarketSyncBackoffMs = Math.min(
             Math.max(this.gammaMarketSyncBackoffMs * 2, GAMMA_MARKET_SYNC_BASE_BACKOFF_MS),
             GAMMA_MARKET_SYNC_MAX_BACKOFF_MS,
           );
-          console.warn(
-            `[polysignals] gamma markets rate limited; backing off for ${Math.round(backoffMs / 1000)}s`,
-          );
+          if (Date.now() - this.gammaMarketSyncLastRateLimitLogAt >= 5_000) {
+            console.warn(
+              `[polysignals] gamma markets rate limited; backing off for ${Math.round(backoffMs / 1000)}s`,
+            );
+            this.gammaMarketSyncLastRateLimitLogAt = Date.now();
+          }
           return;
         }
         throw new Error(`Failed to sync markets: ${response.status}`);
@@ -1170,7 +1208,12 @@ export class PolymarketSignalService {
         });
       }
 
+      if (markets.length < pageSize) {
+        break;
+      }
+
       offset += pageSize;
+      await delay(jitterDelayMs(GAMMA_MARKET_SYNC_PAGE_DELAY_MS));
     }
 
     this.marketsByAssetId.clear();
@@ -2089,6 +2132,7 @@ export class PolymarketSignalService {
     fallbackName: string,
     fallbackProfileImage?: string,
   ): Promise<TraderSummary> {
+    this.pruneTraderCache();
     const cached = this.traderCache.get(wallet);
     if (cached && Date.now() - cached.fetchedAt < TRADER_MEMORY_CACHE_TTL_MS) {
       return cached.summary;
@@ -2102,6 +2146,7 @@ export class PolymarketSignalService {
         profileImage: persisted.summary.profileImage ?? fallbackProfileImage,
       };
       this.traderCache.set(wallet, { summary, fetchedAt: Date.now() });
+      this.pruneTraderCache();
       return summary;
     }
 
@@ -2146,6 +2191,7 @@ export class PolymarketSignalService {
     };
 
     this.traderCache.set(wallet, { summary, fetchedAt: Date.now() });
+    this.pruneTraderCache();
     await this.storage.saveTraderSummary(summary);
     if (summary.tier !== "none") {
       await this.storage.upsertTrackedTrader(summary);
@@ -2207,8 +2253,7 @@ export class PolymarketSignalService {
     const activeMarketSlugs = Array.from(
       new Set(Array.from(this.marketsByAssetId.values(), (market) => market.slug)),
     );
-    const signals = (await this.storage.loadSignalsForMarketSlugs(activeMarketSlugs)).map(applySignalLabelStyle);
-    const activeSignals = resolveActiveBuySignals(signals);
+    const activeSignals = (await this.storage.loadActiveSignalsForMarketSlugs(activeMarketSlugs)).map(applySignalLabelStyle);
     const aggregates = aggregateMarkets(activeSignals);
     const aggregateBySlug = new Map(aggregates.map((aggregate) => [aggregate.marketSlug, aggregate] as const));
     await this.syncBestTradeCandidates(aggregates);
@@ -2229,8 +2274,7 @@ export class PolymarketSignalService {
   }
 
   private async refreshMarketAggregate(marketSlug: string): Promise<void> {
-    const signals = (await this.storage.loadSignalsForMarketSlugs([marketSlug])).map(applySignalLabelStyle);
-    const activeSignals = resolveActiveBuySignals(signals);
+    const activeSignals = (await this.storage.loadActiveSignalsForMarketSlugs([marketSlug])).map(applySignalLabelStyle);
     const aggregate = aggregateMarkets(activeSignals)[0];
 
     if (aggregate) {
@@ -4153,6 +4197,68 @@ export class PolymarketSignalService {
     });
   }
 
+  private pruneRuntimeState(): void {
+    const now = Date.now();
+
+    this.pruneTraderCache(now);
+
+    for (const [assetId, seenAt] of this.websocketAssetSeenAt) {
+      if (now - seenAt > WEBSOCKET_ASSET_SEEN_TTL_MS) {
+        this.websocketAssetSeenAt.delete(assetId);
+      }
+    }
+
+    for (const [assetId, quote] of this.bestAskByAssetId) {
+      if (now - quote.updatedAt > MARKET_QUOTE_CACHE_TTL_MS) {
+        this.bestAskByAssetId.delete(assetId);
+      }
+    }
+
+    for (const [assetId, quote] of this.bestBidByAssetId) {
+      if (now - quote.updatedAt > MARKET_QUOTE_CACHE_TTL_MS) {
+        this.bestBidByAssetId.delete(assetId);
+      }
+    }
+
+    for (const [marketConditionId, lastFetchAt] of this.lastMarketTradeFetchAt) {
+      if (now - lastFetchAt > MARKET_TRADE_FETCH_ENTRY_TTL_MS) {
+        this.lastMarketTradeFetchAt.delete(marketConditionId);
+      }
+    }
+
+    for (const [username, balance] of this.liveCollateralBalances) {
+      if (now - balance.updatedAt > LIVE_COLLATERAL_BALANCE_TTL_MS) {
+        this.liveCollateralBalances.delete(username);
+      }
+    }
+
+    for (const [username, issue] of this.liveTradingIssues) {
+      if (issue.blockedUntil <= now) {
+        this.liveTradingIssues.delete(username);
+      }
+    }
+  }
+
+  private pruneTraderCache(now = Date.now()): void {
+    for (const [wallet, cached] of this.traderCache) {
+      if (now - cached.fetchedAt > TRADER_MEMORY_CACHE_TTL_MS * 2) {
+        this.traderCache.delete(wallet);
+      }
+    }
+
+    if (this.traderCache.size <= TRADER_MEMORY_CACHE_MAX_ENTRIES) {
+      return;
+    }
+
+    const entries = Array.from(this.traderCache.entries()).sort(
+      (left, right) => left[1].fetchedAt - right[1].fetchedAt,
+    );
+    const overflow = entries.length - TRADER_MEMORY_CACHE_MAX_ENTRIES;
+    for (const [wallet] of entries.slice(0, overflow)) {
+      this.traderCache.delete(wallet);
+    }
+  }
+
   private async sendSellSignalAlerts(signal: WhaleSignal): Promise<void> {
     const watchers = await this.storage.loadWatchersForMarket(signal.marketSlug, signal.outcome);
     if (watchers.length === 0) {
@@ -5013,11 +5119,7 @@ export class PolymarketSignalService {
       await mkdir(path.dirname(logPath), { recursive: true });
       const errorRecord =
         error instanceof Error
-          ? {
-              name: error.name,
-              message: error.message,
-              stack: error.stack,
-            }
+          ? compactErrorForLogging(error)
           : {
               value: stringifyUnknownError(error),
             };
@@ -6174,34 +6276,6 @@ const sortMarkets = (markets: MarketAggregate[], sort: MarketSortOption): Market
   return sorted;
 };
 
-const resolveActiveBuySignals = (signals: WhaleSignal[]): WhaleSignal[] => {
-  const orderedSignals = [...signals].sort((left, right) => {
-    if (left.timestamp !== right.timestamp) {
-      return left.timestamp - right.timestamp;
-    }
-
-    return left.id.localeCompare(right.id);
-  });
-  const activeSignalsByPosition = new Map<string, WhaleSignal[]>();
-
-  for (const signal of orderedSignals) {
-    const positionKey = `${signal.wallet}:${signal.marketSlug}:${signal.outcome}`;
-
-    if (signal.side === "SELL") {
-      activeSignalsByPosition.delete(positionKey);
-      continue;
-    }
-
-    const currentSignals = activeSignalsByPosition.get(positionKey) ?? [];
-    currentSignals.push(signal);
-    activeSignalsByPosition.set(positionKey, currentSignals);
-  }
-
-  return Array.from(activeSignalsByPosition.values())
-    .flat()
-    .sort((left, right) => right.timestamp - left.timestamp);
-};
-
 const filterMarkets = (markets: MarketAggregate[], query: string): MarketAggregate[] => {
   const normalizedQuery = query.trim().toLowerCase();
   if (!normalizedQuery) {
@@ -6879,6 +6953,16 @@ const getRetryAfterMs = (response: Response): number | null => {
   return null;
 };
 
+const jitterBackoffMs = (baseMs: number): number => {
+  const jitterRatio = 0.2 + Math.random() * 0.2;
+  return Math.max(baseMs, Math.round(baseMs * (1 + jitterRatio)));
+};
+
+const jitterDelayMs = (baseMs: number): number => {
+  const jitterSpan = Math.max(25, Math.round(baseMs * 0.25));
+  return baseMs + Math.floor(Math.random() * jitterSpan);
+};
+
 const classifyEdgeSwingMarketType = (aggregate: MarketAggregate): "spread" | "total" | "map_game" | "prop_yes_no" | "moneyline_h2h" | "other" => {
   const slug = aggregate.marketSlug.trim().toLowerCase();
   const question = aggregate.marketQuestion.trim().toLowerCase();
@@ -7157,3 +7241,48 @@ const sanitizeForLogging = (value: unknown): unknown => {
 
   return String(value);
 };
+
+const compactErrorForLogging = (error: unknown, depth = 0): unknown => {
+  if (depth > 2) {
+    return { message: "nested error truncated" };
+  }
+
+  if (error instanceof AggregateError) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: truncateStack(error.stack),
+      errors: error.errors.slice(0, 4).map((entry) => compactErrorForLogging(entry, depth + 1)),
+    };
+  }
+
+  if (error instanceof Error) {
+    const candidate = error as Error & {
+      code?: unknown;
+      status?: unknown;
+      statusCode?: unknown;
+      cause?: unknown;
+    };
+    return {
+      name: candidate.name,
+      message: candidate.message,
+      code: candidate.code,
+      status: candidate.status ?? candidate.statusCode,
+      stack: truncateStack(candidate.stack),
+      cause: candidate.cause ? compactErrorForLogging(candidate.cause, depth + 1) : undefined,
+    };
+  }
+
+  if (Array.isArray(error)) {
+    return error.slice(0, 4).map((entry) => compactErrorForLogging(entry, depth + 1));
+  }
+
+  if (error && typeof error === "object") {
+    return sanitizeForLogging(error);
+  }
+
+  return error;
+};
+
+const truncateStack = (stack: string | undefined): string | undefined =>
+  stack ? stack.split("\n").slice(0, 8).join("\n") : undefined;
