@@ -7,7 +7,7 @@ Type=simple
 User=root
 WorkingDirectory=/opt/polymarket-signals
 EnvironmentFile=/opt/polymarket-signals/.env.market-intelligence
-ExecStart=/usr/bin/node /opt/polymarket-signals/dist/server/server/src/market-intelligence/index.js
+ExecStart=/usr/bin/node --max-old-space-size=4096 /opt/polymarket-signals/dist/server/server/src/market-intelligence/index.js
 Restart=always
 RestartSec=5
 
