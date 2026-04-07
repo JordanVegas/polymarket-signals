@@ -75,7 +75,7 @@ const parseNumber = (value, fallback = 0) => {
 
 const toKey = (marketSlug, outcome) => `${String(marketSlug || "").trim()}:${String(outcome || "").trim()}`;
 
-const loadActiveWalletPositions = async (wallet) => {
+const loadWalletPositions = async (wallet) => {
   const url = new URL(`${DATA_API_URL}/positions`);
   url.searchParams.set("user", wallet);
   url.searchParams.set("sizeThreshold", ".1");
@@ -90,6 +90,11 @@ const loadActiveWalletPositions = async (wallet) => {
     throw new Error("Positions API returned an unexpected payload");
   }
 
+  return rows;
+};
+
+const loadActiveWalletPositions = async (wallet) => {
+  const rows = await loadWalletPositions(wallet);
   return rows.filter((row) => {
     const size = parseNumber(row.size);
     const currentPrice = parseNumber(row.curPrice);
@@ -316,7 +321,17 @@ const main = async () => {
       }
 
       const wallet = String(settings.tradingWalletAddress || "").trim();
-      const walletPositions = await loadActiveWalletPositions(wallet);
+      const allWalletPositions = await loadWalletPositions(wallet);
+      const walletPositions = allWalletPositions.filter((position) => {
+        const size = parseNumber(position.size);
+        const currentPrice = parseNumber(position.curPrice);
+        const currentValue = parseNumber(position.currentValue);
+        return size > 0 && !position.redeemable && (currentPrice > 0 || currentValue > 0);
+      });
+      const redeemablePositions = allWalletPositions.filter((position) => {
+        const size = parseNumber(position.size);
+        return size > 0 && position.redeemable === true;
+      });
       const strategyFilter = buildStrategyFilter(enabledStrategies);
       const trackedOpenPositions = strategyFilter
         ? await liveStrategyPositionsCollection.find(
@@ -375,6 +390,7 @@ const main = async () => {
         enabledStrategies,
         trackedOpenPositionCount: trackedOpenPositions.length,
         walletActivePositionCount: walletPositions.length,
+        walletRedeemablePositionCount: redeemablePositions.length,
         untrackedPositionCount: untrackedPositions.length,
         staleTrackedPositionCount: staleTrackedPositions.length,
         closedCount: closed.length,
