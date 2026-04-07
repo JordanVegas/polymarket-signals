@@ -1,2200 +1,701 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useDeferredValue, useEffect, useMemo, useState } from "react";
 import type {
-  AppSnapshot as Snapshot,
-  GapOpportunity,
+  AppSnapshot,
   GapPageResponse,
   LiveStrategyDashboardResponse,
   MarketAggregate,
   MarketPageResponse,
   MarketSortOption,
   StrategyDashboardResponse,
-  StrategyPosition,
   StrategyTrade,
   TraderSummary,
   UserProfileResponse,
-  WhaleSignal,
 } from "../shared/contracts";
 
-type Language = "en" | "he";
-type PageRoute =
-  | "/"
-  | "/best-trades"
-  | "/paper-auto-best-trades"
-  | "/live-auto-best-trades"
-  | "/paper-auto-edge-swing"
-  | "/live-auto-edge-swing"
-  | "/gaps"
-  | "/profile";
+type Route = "/" | "/radar" | "/whales" | "/gap-lab" | "/playbooks" | "/workspace";
+type ProfileState = "loading" | "authorized" | "unauthorized";
 
-const positiveOutcomeKeywords = ["yes", "up", "above", "over", "higher", "more", "long"];
-const negativeOutcomeKeywords = ["no", "down", "below", "under", "lower", "less", "short"];
-const outcomeOpposites: Record<string, string> = {
-  yes: "No",
-  no: "Yes",
-  up: "Down",
-  down: "Up",
-  above: "Below",
-  below: "Above",
-  over: "Under",
-  under: "Over",
-  higher: "Lower",
-  lower: "Higher",
-  more: "Less",
-  less: "More",
-  long: "Short",
-  short: "Long",
+const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+const moneyPrecise = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+const routeMap: Record<string, Route> = {
+  "/": "/",
+  "/radar": "/radar",
+  "/whales": "/whales",
+  "/gap-lab": "/gap-lab",
+  "/playbooks": "/playbooks",
+  "/workspace": "/workspace",
+  "/best-trades": "/radar",
+  "/gaps": "/gap-lab",
+  "/profile": "/workspace",
+  "/paper-auto-best-trades": "/playbooks",
+  "/live-auto-best-trades": "/playbooks",
+  "/paper-auto-edge-swing": "/playbooks",
+  "/live-auto-edge-swing": "/playbooks",
 };
 
-const currencyFormatter = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
-  maximumFractionDigits: 0,
-});
+const getRoute = (pathname: string): Route => routeMap[pathname] ?? "/";
 
-const preciseCurrencyFormatter = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-});
-
-const MARKET_PAGE_SIZE = 24;
-
-function getPageRoute(pathname: string): PageRoute {
-  if (
-    pathname === "/profile" ||
-    pathname === "/best-trades" ||
-    pathname === "/paper-auto-best-trades" ||
-    pathname === "/live-auto-best-trades" ||
-    pathname === "/paper-auto-edge-swing" ||
-    pathname === "/live-auto-edge-swing" ||
-    pathname === "/gaps"
-  ) {
-    return pathname;
+const fetchJson = async <T,>(url: string) => {
+  const response = await fetch(url, { credentials: "include" });
+  if (!response.ok) {
+    const error = new Error(`Request failed with ${response.status}`) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
   }
 
-  if (pathname === "/paper-auto-trade") {
-    return "/paper-auto-best-trades";
-  }
-
-  if (pathname === "/live-auto-trade") {
-    return "/live-auto-best-trades";
-  }
-
-  return "/";
-}
-
-const copy = {
-  en: {
-    profile: "Profile",
-    monitor: "Monitor",
-    bestTrades: "Best trades",
-    paperAutoBestTrades: "Paper auto best trades",
-    liveAutoBestTrades: "Live auto best trades",
-    paperAutoEdgeSwing: "Paper auto edge swing",
-    liveAutoEdgeSwing: "Live auto edge swing",
-    gaps: "Gaps",
-    menu: "Menu",
-    closeMenu: "Close menu",
-    frontendStream: "Frontend stream",
-    connected: "Connected",
-    reconnecting: "Reconnecting",
-    polymarketSocket: "Polymarket socket",
-    syncing: "Syncing",
-    shards: "shards",
-    activeAssets: "Active assets",
-    signalsSurfaced: "Signals surfaced",
-    wsCoverage: "WS coverage",
-    active: "active",
-    lastMarketSync: "Last market sync",
-    lastTradeSeen: "Last trade seen",
-    errorsLast10Minutes: "Errors (10m)",
-    pending: "Pending",
-    settings: "Settings",
-    backToMonitor: "Back to monitor",
-    discordAlerts: "Discord alerts",
-    paperTrading: "Paper trading",
-    liveTrading: "Live trading",
-    liveTradingEnabled: "Live trading armed",
-    liveTradingCredentials: "Live trading credentials",
-    liveTradingIssue: "Live trading issue",
-    liveTradingReady: "Live trading ready",
-    liveTradingNotReady: "Missing wallet or credentials",
-    liveActivity: "Live activity",
-    noLiveStrategyPositions: "No live positions yet.",
-    noLiveStrategyTrades: "No live activity yet.",
-    profileTitle: "Profile",
-    profileSuffix: "'s profile",
-    profileBody:
-      "Save your Discord webhook here once, then use Get sell alerts on any market card you want to track for exit signals.",
-    tradingProfileBody:
-      "Arm auto trade here, set your bankroll and risk, and save your Polymarket trading credentials encrypted on the server.",
-    paperTradingBody:
-      "These settings only control the simulated strategy account. They do not place real orders.",
-    liveTradingBody:
-      "These encrypted credentials power real Polymarket orders. Live trading only runs when armed.",
-    discordWebhookUrl: "Discord webhook URL",
-    monitoredWallet: "Tracked Polymarket wallet",
-    paperTradingEnabled: "Paper auto best trades armed",
-    edgeSwingPaperTradingEnabled: "Paper auto edge swing armed",
-    bestTradesLiveTradingEnabled: "Live auto best trades armed",
-    edgeSwingLiveTradingEnabled: "Live auto edge swing armed",
-    startingBalance: "Starting balance",
-    currentBalance: "Current balance",
-    riskPercent: "Risk per trade %",
-    autoBestTradesSettings: "Auto best trades",
-    autoBestTradesBody: "The original strategy only enters the highest-conviction best-trade setups.",
-    autoEdgeSwingSettings: "Auto edge swing",
-    autoEdgeSwingBody: "This broader strategy enters when the edge is at least 50 points and exits after a 50% drop from the peak edge.",
-    tradingWalletAddress: "Trading wallet address",
-    tradingSignatureType: "Signature type",
-    tradingSignatureTypeEoa: "EOA",
-    tradingSignatureTypeProxy: "Poly proxy",
-    privateKey: "Private key",
-    apiKey: "API key",
-    apiSecret: "API secret",
-    apiPassphrase: "API passphrase",
-    credentialsSaved: "Trading credentials saved",
-    replaceCredentials: "Paste all four fields to replace saved credentials",
-    clearCredentials: "Clear saved credentials",
-    saveWebhook: "Save settings",
-    saving: "Saving...",
-    discordWebhookSaved: "Profile saved",
-    removing: "Removing...",
-    activeWatches: "Active watches",
-    noActiveWatches: "No sell-alert watches are active yet.",
-    watchedOutcome: "Watched outcome",
-    watchSourceManual: "Manual",
-    watchSourcePortfolioSync: "Portfolio sync",
-    openWatchedMarket: "Open watched market",
-    removeWatch: "Remove watch",
-    signalFeed: "Signal feed",
-    vegasMonitor: "Vegas Monitor",
-    bestTradesTitle: "Best trades",
-    bestTradesSubtitle: "Highest-conviction markets surfaced by tracked smart money.",
-    bestTradesWinRate: "Best trade win rate",
-    bestTradesResolved: "Resolved",
-    bestTradesWins: "Wins",
-    bestTradesLosses: "Losses",
-    bestTradesTracked: "Tracked",
-    bestTradesWinRatePending: "Pending",
-    autoTradeTitle: "Paper auto best trades",
-    autoTradeSubtitle: "Paper positions based on the best-trade entry and thesis-break exit logic.",
-    liveAutoTradeTitle: "Live auto best trades",
-    liveAutoTradeSubtitle: "Real Polymarket orders driven by the same best-trade strategy.",
-    edgeSwingTitle: "Paper auto edge swing",
-    edgeSwingSubtitle: "Paper positions on broader edge setups with a 50-point entry edge and 50% peak-edge trailing exit.",
-    liveEdgeSwingTitle: "Live auto edge swing",
-    liveEdgeSwingSubtitle: "Real Polymarket orders driven by the broader edge-swing strategy.",
-    gapsTitle: "Gaps",
-    gapsSubtitle: "Sports no/no pairs where the executable asks add up to less than 1.",
-    gapPairType: "Pair type",
-    combinedNoAsk: "Combined asks",
-    grossEdge: "Gross edge",
-    executableStake: "Executable",
-    noAsk: "Ask",
-    gapLegA: "Leg A",
-    gapLegB: "Leg B",
-    noGaps: "No executable gaps right now.",
-    noStrategyPositions: "No strategy positions yet.",
-    cashBalance: "Cash balance",
-    openExposure: "Open exposure",
-    totalEquity: "Total equity",
-    realizedPnl: "Realized",
-    unrealizedPnl: "Unrealized",
-    openPositions: "Open positions",
-    closedPositions: "Closed positions",
-    entrySize: "Entry size",
-    positionValue: "Position value",
-    remainingShares: "Remaining shares",
-    strategyTrades: "Activity log",
-    noStrategyTrades: "No activity yet.",
-    activityTime: "Time",
-    activityDetails: "Details",
-    entryTrade: "Entry",
-    trim96: "Trim 0.96",
-    finalExit: "Final exit",
-    statusOpen: "Open",
-    statusClosed: "Closed",
-    soldPercent: "Sold",
-    remainingWeight: "Remaining weight",
-    originalWeight: "Original weight",
-    exitReason: "Exit reason",
-    openedAt: "Opened",
-    search: "Search",
-    searchPlaceholder: "Markets, outcomes, traders",
-    sort: "Sort",
-    sortRecent: "Most recent",
-    sortWeighted: "Highest weight",
-    sortBuyWeight: "Top outcome weight",
-    sortFlow: "Largest flow",
-    sortParticipants: "Most traders",
-    watchingTape: "Watching the tape",
-    emptyState:
-      "Once a wallet crosses the whale threshold, it will appear here with the market, chosen side, and trader profitability label.",
-    traders: "traders",
-    edge: "edge",
-    marketFlow: "Market flow",
-    lastPrice: "Last price",
-    weighted: "Weighted",
-    confidence: "Setup quality",
-    outcome1: "Outcome 1",
-    outcome2: "Outcome 2",
-    avgEntry: "Avg entry",
-    whySignal: "Why",
-    rationaleCluster: "cluster",
-    tierWhale: "Whale",
-    tierShark: "Shark",
-    tierPro: "Pro",
-    tierNone: "Large trader",
-    openMarket: "Open market",
-    openWhaleProfile: "Open whale profile",
-    sellAlertsOn: "Sell alerts on",
-    getSellAlerts: "Get sell alerts",
-    loadingMarkets: "Loading markets...",
-    scrollForMore: "Scroll for more",
-    whaleBuy: "🐋 Whale buy",
-    sharkBuy: "🦈 Shark buy",
-    proBuy: "😎 Pro buy",
-    whaleSell: "🐋 Whale sell",
-    sharkSell: "🦈 Shark sell",
-    proSell: "😎 Pro sell",
-    now: "now",
-    minutesAgo: "m ago",
-    hoursAgo: "h ago",
-    even: "Even",
-    unableToLoadProfile: "Unable to load profile",
-    unableToSaveProfile: "Unable to save profile",
-    unableToUpdateSellAlerts: "Unable to update sell alerts",
-  },
-  he: {
-    profile: "פרופיל",
-    monitor: "מוניטור",
-    bestTrades: "העסקאות הטובות ביותר",
-    paperAutoBestTrades: "Paper auto best trades",
-    liveAutoBestTrades: "Live auto best trades",
-    paperAutoEdgeSwing: "Paper auto edge swing",
-    liveAutoEdgeSwing: "Live auto edge swing",
-    gaps: "פערים",
-    menu: "תפריט",
-    closeMenu: "סגור תפריט",
-    frontendStream: "חיבור לשרת",
-    connected: "מחובר",
-    reconnecting: "מתחבר מחדש",
-    polymarketSocket: "סוקט פולימרקט",
-    syncing: "מסנכרן",
-    shards: "שארדים",
-    activeAssets: "נכסים פעילים",
-    signalsSurfaced: "סיגנלים מוצגים",
-    wsCoverage: "כיסוי WS",
-    active: "פעילים",
-    lastMarketSync: "סנכרון שווקים אחרון",
-    lastTradeSeen: "טרייד אחרון",
-    errorsLast10Minutes: "שגיאות (10 דק׳)",
-    pending: "ממתין",
-    settings: "הגדרות",
-    backToMonitor: "חזרה למוניטור",
-    discordAlerts: "התראות דיסקורד",
-    paperTrading: "מסחר דמו",
-    liveTrading: "מסחר אמיתי",
-    liveTradingEnabled: "מסחר אמיתי פעיל",
-    liveTradingCredentials: "פרטי מסחר אמיתי",
-    liveTradingReady: "מסחר אמיתי מוכן",
-    liveTradingNotReady: "חסרים ארנק או פרטי גישה",
-    liveActivity: "פעילות אמיתית",
-    noLiveStrategyPositions: "עדיין אין פוזיציות אמיתיות.",
-    noLiveStrategyTrades: "עדיין אין פעילות אמיתית.",
-    profileTitle: "פרופיל",
-    profileSuffix: " של",
-    profileBody:
-      "שמור כאן פעם אחת את כתובת הוובהוק של דיסקורד, ואז השתמש ב-Get sell alerts על כל כרטיס שוק שתרצה לעקוב אחריו ליציאה.",
-    tradingProfileBody:
-      "כאן אפשר להפעיל אוטו-טרייד, לקבוע בנק רול וסיכון, ולשמור את פרטי המסחר של פולימרקט כשהם מוצפנים על השרת.",
-    paperTradingBody:
-      "ההגדרות האלה שולטות רק בחשבון הדמו של האסטרטגיה. הן לא מבצעות פקודות אמיתיות.",
-    liveTradingBody:
-      "פרטי המסחר המוצפנים האלה מפעילים פקודות אמיתיות בפולימרקט. מסחר אמיתי רץ רק כשהוא מופעל.",
-    discordWebhookUrl: "כתובת וובהוק של דיסקורד",
-    monitoredWallet: "ארנק פולימרקט למעקב",
-    paperTradingEnabled: "Paper auto best trades armed",
-    edgeSwingPaperTradingEnabled: "Paper auto edge swing armed",
-    bestTradesLiveTradingEnabled: "Live auto best trades armed",
-    edgeSwingLiveTradingEnabled: "Live auto edge swing armed",
-    startingBalance: "בנק רול התחלתי",
-    currentBalance: "יתרה נוכחית",
-    riskPercent: "סיכון לעסקה %",
-    autoBestTradesSettings: "Auto best trades",
-    autoBestTradesBody: "The original strategy only enters the highest-conviction best-trade setups.",
-    autoEdgeSwingSettings: "Auto edge swing",
-    autoEdgeSwingBody: "This broader strategy enters when the edge is at least 50 points and exits after a 50% drop from the peak edge.",
-    tradingWalletAddress: "כתובת ארנק למסחר",
-    tradingSignatureType: "סוג חתימה",
-    tradingSignatureTypeEoa: "EOA",
-    tradingSignatureTypeProxy: "Poly proxy",
-    privateKey: "מפתח פרטי",
-    apiKey: "API key",
-    apiSecret: "API secret",
-    apiPassphrase: "API passphrase",
-    credentialsSaved: "פרטי המסחר נשמרו",
-    replaceCredentials: "כדי להחליף פרטים שמורים, יש להדביק את כל ארבעת השדות",
-    clearCredentials: "מחק פרטי מסחר שמורים",
-    saveWebhook: "שמור הגדרות",
-    saving: "שומר...",
-    discordWebhookSaved: "הפרופיל נשמר",
-    removing: "מסיר...",
-    activeWatches: "מעקבים פעילים",
-    noActiveWatches: "עדיין אין מעקבי התראות מכירה פעילים.",
-    watchedOutcome: "תוצאה במעקב",
-    watchSourceManual: "ידני",
-    watchSourcePortfolioSync: "מסונכרן מהתיק",
-    openWatchedMarket: "פתח שוק במעקב",
-    removeWatch: "הסר מעקב",
-    signalFeed: "פיד סיגנלים",
-    vegasMonitor: "Vegas Monitor",
-    bestTradesTitle: "העסקאות הטובות ביותר",
-    bestTradesSubtitle: "השווקים עם הכי הרבה שכנוע מצד כסף חכם במעקב.",
-    bestTradesWinRate: "אחוז הצלחה",
-    bestTradesResolved: "נסגרו",
-    bestTradesWins: "ניצחונות",
-    bestTradesLosses: "הפסדים",
-    bestTradesTracked: "במעקב",
-    bestTradesWinRatePending: "ממתין",
-    autoTradeTitle: "Paper auto best trades",
-    autoTradeSubtitle: "Paper positions based on the best-trade entry and thesis-break exit logic.",
-    liveAutoTradeTitle: "Live auto best trades",
-    liveAutoTradeSubtitle: "Real Polymarket orders driven by the same best-trade strategy.",
-    edgeSwingTitle: "Paper auto edge swing",
-    edgeSwingSubtitle: "Paper positions on broader edge setups with a 50-point entry edge and 50% peak-edge trailing exit.",
-    liveEdgeSwingTitle: "Live auto edge swing",
-    liveEdgeSwingSubtitle: "Real Polymarket orders driven by the broader edge-swing strategy.",
-    gapsTitle: "פערים",
-    gapsSubtitle: "זוגות ספורט No/No שבהם סכום האסקים קטן מ-1.",
-    gapPairType: "סוג זוג",
-    combinedNoAsk: "סך האסקים",
-    grossEdge: "פער גולמי",
-    executableStake: "סכום בר ביצוע",
-    noAsk: "אסק",
-    gapLegA: "רגל א'",
-    gapLegB: "רגל ב'",
-    noGaps: "אין כרגע פערים ברי ביצוע.",
-    noStrategyPositions: "עדיין אין פוזיציות אסטרטגיה.",
-    cashBalance: "מזומן",
-    openExposure: "חשיפה פתוחה",
-    totalEquity: "שווי כולל",
-    realizedPnl: "ממומש",
-    unrealizedPnl: "לא ממומש",
-    openPositions: "פוזיציות פתוחות",
-    closedPositions: "פוזיציות סגורות",
-    entrySize: "גודל כניסה",
-    positionValue: "שווי פוזיציה",
-    remainingShares: "שאר מניות",
-    strategyTrades: "יומן פעילות",
-    noStrategyTrades: "עדיין אין פעילות.",
-    activityTime: "זמן",
-    activityDetails: "פרטים",
-    entryTrade: "כניסה",
-    trim96: "מימוש 0.96",
-    finalExit: "יציאה סופית",
-    statusOpen: "פתוח",
-    statusClosed: "סגור",
-    soldPercent: "נמכר",
-    remainingWeight: "משקל נותר",
-    originalWeight: "משקל מקורי",
-    exitReason: "סיבת יציאה",
-    openedAt: "נפתח",
-    search: "חיפוש",
-    searchPlaceholder: "שווקים, תוצאות, טריידרים",
-    sort: "מיון",
-    sortRecent: "הכי חדש",
-    sortWeighted: "משקל גבוה",
-    sortBuyWeight: "משקל צד מוביל",
-    sortFlow: "זרימה גבוהה",
-    sortParticipants: "הכי הרבה טריידרים",
-    watchingTape: "עוקבים אחרי הזרם",
-    emptyState:
-      "ברגע שארנק עובר את סף הסיגנל, הוא יופיע כאן עם השוק, הצד שנבחר ותווית הרווחיות של הטריידר.",
-    traders: "טריידרים",
-    edge: "סיגנל",
-    marketFlow: "נפח שוק",
-    lastPrice: "מחיר אחרון",
-    weighted: "משקל",
-    confidence: "איכות הסטאפ",
-    outcome1: "תוצאה 1",
-    outcome2: "תוצאה 2",
-    avgEntry: "ממוצע כניסה",
-    whySignal: "למה",
-    rationaleCluster: "אשכול",
-    tierWhale: "לוויתן",
-    tierShark: "כריש",
-    tierPro: "מקצוען",
-    tierNone: "טריידר גדול",
-    openMarket: "פתח שוק",
-    openWhaleProfile: "פתח פרופיל",
-    sellAlertsOn: "התראות מכירה פועלות",
-    getSellAlerts: "קבל התראות מכירה",
-    loadingMarkets: "טוען שווקים...",
-    scrollForMore: "גלול לעוד",
-    whaleBuy: "🐋 עסקת לוויתן",
-    sharkBuy: "🦈 עסקת כריש",
-    proBuy: "😎 עסקת מקצוען",
-    whaleSell: "🐋 מימוש לוויתן",
-    sharkSell: "🦈 מימוש כריש",
-    proSell: "😎 מימוש מקצוען",
-    now: "עכשיו",
-    minutesAgo: " דק׳",
-    hoursAgo: " ש׳",
-    even: "שוויון",
-    unableToLoadProfile: "לא ניתן לטעון את הפרופיל",
-    unableToSaveProfile: "לא ניתן לשמור את הפרופיל",
-    unableToUpdateSellAlerts: "לא ניתן לעדכן התראות מכירה",
-  },
-} as const;
+  return response.json() as Promise<T>;
+};
 
 function App() {
-  const [currentPath, setCurrentPath] = useState<PageRoute>(() => getPageRoute(window.location.pathname));
-  const [language, setLanguage] = useState<Language>(() => {
-    const saved = window.localStorage.getItem("language");
-    return saved === "he" ? "he" : "en";
-  });
-  const [snapshot, setSnapshot] = useState<Snapshot>({
-    status: {
-      marketCount: 0,
-      websocketConnected: false,
-      websocketShardCount: 0,
-      websocketConnectedShardCount: 0,
-      lastMarketSyncAt: null,
-      lastTradeAt: null,
-      websocketSubscribedAssetCount: 0,
-      websocketAssetsSeenCount: 0,
-      websocketAssetsSeenRecentlyCount: 0,
-      lastWebsocketMessageAt: null,
-      trackedTraderCount: 0,
-      trackedTraderPollInFlight: 0,
-      recentErrorsLast10Minutes: 0,
-      requestStats: {
-        windowMinutes: 10,
-        recentFailures: 0,
-        endpoints: [],
-      },
-    },
-  });
-  const [feedConnected, setFeedConnected] = useState(false);
-  const [marketSort, setMarketSort] = useState<MarketSortOption>("recent");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
-  const [pageCount, setPageCount] = useState(1);
-  const [marketPage, setMarketPage] = useState<MarketPageResponse>({
-    items: [],
-    total: 0,
-    page: 1,
-    pageSize: MARKET_PAGE_SIZE,
-    hasMore: false,
-  });
-  const [isLoadingMarkets, setIsLoadingMarkets] = useState(false);
-  const [gapPage, setGapPage] = useState<GapPageResponse>({
-    items: [],
-    total: 0,
-    page: 1,
-    pageSize: MARKET_PAGE_SIZE,
-    hasMore: false,
-  });
-  const [isLoadingGaps, setIsLoadingGaps] = useState(false);
-  const [alertActionMarketSlug, setAlertActionMarketSlug] = useState<string | null>(null);
-  const [refreshVersion, setRefreshVersion] = useState(0);
+  const [route, setRoute] = useState<Route>(() => getRoute(window.location.pathname));
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
+  const [markets, setMarkets] = useState<MarketPageResponse | null>(null);
+  const [bestMarkets, setBestMarkets] = useState<MarketPageResponse | null>(null);
+  const [gaps, setGaps] = useState<GapPageResponse | null>(null);
+  const [profileState, setProfileState] = useState<ProfileState>("loading");
   const [profile, setProfile] = useState<UserProfileResponse | null>(null);
-  const [profileFormWebhookUrl, setProfileFormWebhookUrl] = useState("");
-  const [profileFormMonitoredWallet, setProfileFormMonitoredWallet] = useState("");
-  const [profileFormPaperTradingEnabled, setProfileFormPaperTradingEnabled] = useState(false);
-  const [profileFormLiveTradingEnabled, setProfileFormLiveTradingEnabled] = useState(false);
-  const [profileFormStartingBalanceUsd, setProfileFormStartingBalanceUsd] = useState("1000");
-  const [profileFormRiskPercent, setProfileFormRiskPercent] = useState("5");
-  const [profileFormEdgeSwingPaperTradingEnabled, setProfileFormEdgeSwingPaperTradingEnabled] = useState(false);
-  const [profileFormEdgeSwingLiveTradingEnabled, setProfileFormEdgeSwingLiveTradingEnabled] = useState(false);
-  const [profileFormEdgeSwingStartingBalanceUsd, setProfileFormEdgeSwingStartingBalanceUsd] = useState("1000");
-  const [profileFormEdgeSwingRiskPercent, setProfileFormEdgeSwingRiskPercent] = useState("5");
-  const [profileFormTradingWalletAddress, setProfileFormTradingWalletAddress] = useState("");
-  const [profileFormTradingSignatureType, setProfileFormTradingSignatureType] =
-    useState<"EOA" | "POLY_PROXY">("EOA");
-  const [profileFormPrivateKey, setProfileFormPrivateKey] = useState("");
-  const [profileFormApiKey, setProfileFormApiKey] = useState("");
-  const [profileFormApiSecret, setProfileFormApiSecret] = useState("");
-  const [profileFormApiPassphrase, setProfileFormApiPassphrase] = useState("");
-  const [profileFormClearTradingCredentials, setProfileFormClearTradingCredentials] = useState(false);
-  const [isSavingProfile, setIsSavingProfile] = useState(false);
-  const [removingWatchKey, setRemovingWatchKey] = useState<string | null>(null);
-  const [profileMessage, setProfileMessage] = useState<string | null>(null);
-  const [strategyDashboard, setStrategyDashboard] = useState<StrategyDashboardResponse>({
-    summary: {
-      cashBalanceUsd: 0,
-      openPositionCount: 0,
-      closedPositionCount: 0,
-      totalPositionCount: 0,
-      openExposureUsd: 0,
-      unrealizedUsd: 0,
-      totalEquityUsd: 0,
-    },
-    positions: [],
-    trades: [],
-  });
-  const [liveStrategyDashboard, setLiveStrategyDashboard] = useState<LiveStrategyDashboardResponse>({
-    enabled: false,
-    ready: false,
-    summary: {
-      cashBalanceUsd: 0,
-      openPositionCount: 0,
-      closedPositionCount: 0,
-      totalPositionCount: 0,
-      openExposureUsd: 0,
-      unrealizedUsd: 0,
-      totalEquityUsd: 0,
-    },
-    positions: [],
-    trades: [],
-  });
-  const [isLoadingStrategyPositions, setIsLoadingStrategyPositions] = useState(false);
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const loadMoreRef = useRef<HTMLDivElement | null>(null);
-  const deferredSearchQuery = useDeferredValue(debouncedSearchQuery);
-  const deferredRefreshVersion = useDeferredValue(refreshVersion);
-  const t = copy[language];
-  const strategyRoute =
-    currentPath === "/paper-auto-edge-swing" || currentPath === "/live-auto-edge-swing"
-      ? "edge_swing"
-      : "best_trades";
-  const isPaperStrategyPage =
-    currentPath === "/paper-auto-best-trades" || currentPath === "/paper-auto-edge-swing";
-  const isLiveStrategyPage =
-    currentPath === "/live-auto-best-trades" || currentPath === "/live-auto-edge-swing";
-  const strategyPaperMenuLabel = strategyRoute === "edge_swing" ? t.paperAutoEdgeSwing : t.paperAutoBestTrades;
-  const strategyLiveMenuLabel = strategyRoute === "edge_swing" ? t.liveAutoEdgeSwing : t.liveAutoBestTrades;
-  const strategyPaperTitle = strategyRoute === "edge_swing" ? t.edgeSwingTitle : t.autoTradeTitle;
-  const strategyPaperSubtitle = strategyRoute === "edge_swing" ? t.edgeSwingSubtitle : t.autoTradeSubtitle;
-  const strategyLiveTitle = strategyRoute === "edge_swing" ? t.liveEdgeSwingTitle : t.liveAutoTradeTitle;
-  const strategyLiveSubtitle =
-    strategyRoute === "edge_swing" ? t.liveEdgeSwingSubtitle : t.liveAutoTradeSubtitle;
-  const profileLiveTradingMessage =
-    profile?.liveTradingError ?? (profile?.liveTradingReady ? t.liveTradingReady : t.liveTradingNotReady);
-  const liveStrategyStatusMessage = liveStrategyDashboard.enabled
-    ? liveStrategyDashboard.error ?? (liveStrategyDashboard.ready ? t.liveTradingReady : t.liveTradingNotReady)
-    : t.liveTrading;
+  const [paperBest, setPaperBest] = useState<StrategyDashboardResponse | null>(null);
+  const [paperEdge, setPaperEdge] = useState<StrategyDashboardResponse | null>(null);
+  const [liveBest, setLiveBest] = useState<LiveStrategyDashboardResponse | null>(null);
+  const [liveEdge, setLiveEdge] = useState<LiveStrategyDashboardResponse | null>(null);
+  const [marketView, setMarketView] = useState<"best" | "monitor">("best");
+  const [sort, setSort] = useState<MarketSortOption>("weighted");
+  const [query, setQuery] = useState("");
+  const deferredQuery = useDeferredValue(query);
+  const [workspaceForm, setWorkspaceForm] = useState({ webhookUrl: "", monitoredWallet: "" });
+  const [workspaceMessage, setWorkspaceMessage] = useState<string | null>(null);
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const [watchBusy, setWatchBusy] = useState<string | null>(null);
 
   useEffect(() => {
-    document.documentElement.lang = language;
-    document.documentElement.dir = language === "he" ? "rtl" : "ltr";
-    window.localStorage.setItem("language", language);
-  }, [language]);
-
-  useEffect(() => {
-    const handlePopState = () => {
-      setCurrentPath(getPageRoute(window.location.pathname));
-      setIsMenuOpen(false);
-    };
-
-    window.addEventListener("popstate", handlePopState);
-    return () => {
-      window.removeEventListener("popstate", handlePopState);
-    };
+    const onPop = () => setRoute(getRoute(window.location.pathname));
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
   }, []);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      setDebouncedSearchQuery(searchQuery);
-    }, 1_500);
-
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [searchQuery]);
-
-  useEffect(() => {
-    let closed = false;
-    let reconnectTimer: number | undefined;
-    let socket: WebSocket | null = null;
-
+    let cancelled = false;
     const loadSnapshot = async () => {
-      const response = await fetch("/api/snapshot");
-      const payload = (await response.json()) as Snapshot;
-      if (!closed) {
-        setSnapshot(payload);
+      try {
+        const next = await fetchJson<AppSnapshot>("/api/snapshot");
+        if (!cancelled) {
+          setSnapshot(next);
+        }
+      } catch {
+        if (!cancelled) {
+          setSnapshot(null);
+        }
       }
-    };
-
-    const scheduleReconnect = () => {
-      if (closed || reconnectTimer) {
-        return;
-      }
-
-      reconnectTimer = window.setTimeout(() => {
-        reconnectTimer = undefined;
-        connectSocket();
-      }, 2_000);
-    };
-
-    const connectSocket = () => {
-      if (closed) {
-        return;
-      }
-
-      setFeedConnected(false);
-      const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-      socket = new WebSocket(`${protocol}://${window.location.host}/ws`);
-
-      socket.addEventListener("open", () => {
-        if (!closed) {
-          setFeedConnected(true);
-        }
-      });
-
-      socket.addEventListener("close", () => {
-        if (!closed) {
-          setFeedConnected(false);
-          scheduleReconnect();
-        }
-      });
-
-      socket.addEventListener("error", () => {
-        if (!closed) {
-          setFeedConnected(false);
-        }
-      });
-
-      socket.addEventListener("message", (event) => {
-        const message = JSON.parse(event.data) as {
-          type: "snapshot" | "signal";
-          payload: Snapshot | WhaleSignal;
-        };
-
-        if (message.type === "snapshot") {
-          setSnapshot(message.payload as Snapshot);
-          return;
-        }
-
-        setRefreshVersion((current) => current + 1);
-      });
     };
 
     void loadSnapshot();
-    connectSocket();
-
+    const timer = window.setInterval(() => void loadSnapshot(), 30000);
     return () => {
-      closed = true;
-      if (reconnectTimer) {
-        window.clearTimeout(reconnectTimer);
-      }
-      socket?.close();
+      cancelled = true;
+      window.clearInterval(timer);
     };
   }, []);
 
   useEffect(() => {
-    setPageCount(1);
-  }, [marketSort, deferredSearchQuery, currentPath]);
+    let cancelled = false;
+    const params = new URLSearchParams({ view: marketView, sort, search: deferredQuery, page: "1", pageSize: "36" });
+    void fetchJson<MarketPageResponse>(`/api/markets?${params.toString()}`)
+      .then((next) => !cancelled && setMarkets(next))
+      .catch(() => !cancelled && setMarkets(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [deferredQuery, marketView, sort]);
 
   useEffect(() => {
-    if (
-      currentPath === "/profile" ||
-      currentPath === "/paper-auto-best-trades" ||
-      currentPath === "/live-auto-best-trades" ||
-      currentPath === "/paper-auto-edge-swing" ||
-      currentPath === "/live-auto-edge-swing"
-    ) {
-      return;
-    }
-
-    let cancelled = false;
-
-    if (currentPath === "/gaps") {
-      const loadGapPages = async () => {
-        setIsLoadingGaps(true);
-
-        try {
-          const responses = await Promise.all(
-            Array.from({ length: pageCount }, async (_value, index) => {
-              const page = index + 1;
-              const url = new URL("/api/gaps", window.location.origin);
-              url.searchParams.set("page", String(page));
-              url.searchParams.set("pageSize", String(MARKET_PAGE_SIZE));
-              const response = await fetch(url);
-              return (await response.json()) as GapPageResponse;
-            }),
-          );
-
-          if (cancelled) {
-            return;
-          }
-
-          const lastResponse = responses[responses.length - 1] ?? {
-            items: [],
-            total: 0,
-            page: 1,
-            pageSize: MARKET_PAGE_SIZE,
-            hasMore: false,
-          };
-
-          setGapPage({
-            items: responses.flatMap((response) => response.items),
-            total: lastResponse.total,
-            page: lastResponse.page,
-            pageSize: lastResponse.pageSize,
-            hasMore: lastResponse.hasMore,
-          });
-        } finally {
-          if (!cancelled) {
-            setIsLoadingGaps(false);
-          }
-        }
-      };
-
-      void loadGapPages();
-
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    const loadMarketPages = async () => {
-      setIsLoadingMarkets(true);
-
-      try {
-        const responses = await Promise.all(
-          Array.from({ length: pageCount }, async (_value, index) => {
-            const page = index + 1;
-            const url = new URL("/api/markets", window.location.origin);
-            url.searchParams.set("sort", marketSort);
-            url.searchParams.set("search", deferredSearchQuery);
-            url.searchParams.set("view", currentPath === "/best-trades" ? "best" : "monitor");
-            url.searchParams.set("page", String(page));
-            url.searchParams.set("pageSize", String(MARKET_PAGE_SIZE));
-            const response = await fetch(url);
-            return (await response.json()) as MarketPageResponse;
-          }),
-        );
-
-        if (cancelled) {
+    void fetchJson<MarketPageResponse>("/api/markets?view=best&sort=weighted&page=1&pageSize=6")
+      .then(setBestMarkets)
+      .catch(() => setBestMarkets(null));
+    void fetchJson<GapPageResponse>("/api/gaps?page=1&pageSize=12")
+      .then(setGaps)
+      .catch(() => setGaps(null));
+    void fetchJson<UserProfileResponse>("/api/profile")
+      .then((next) => {
+        setProfileState("authorized");
+        setProfile(next);
+        setWorkspaceForm({ webhookUrl: next.webhookUrl, monitoredWallet: next.monitoredWallet });
+      })
+      .catch((error: Error & { status?: number }) => {
+        if (error.status === 401) {
+          setProfileState("unauthorized");
           return;
         }
 
-        const lastResponse = responses[responses.length - 1] ?? {
-          items: [],
-          total: 0,
-          page: 1,
-          pageSize: MARKET_PAGE_SIZE,
-          hasMore: false,
-          bestTradeStats: undefined,
-        };
-
-        setMarketPage({
-          items: responses.flatMap((response) => response.items),
-          total: lastResponse.total,
-          page: lastResponse.page,
-          pageSize: lastResponse.pageSize,
-          hasMore: lastResponse.hasMore,
-          bestTradeStats: lastResponse.bestTradeStats,
-        });
-      } finally {
-        if (!cancelled) {
-          setIsLoadingMarkets(false);
-        }
-      }
-    };
-
-    void loadMarketPages();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [currentPath, marketSort, deferredSearchQuery, pageCount, deferredRefreshVersion]);
+        setProfileState("unauthorized");
+      });
+  }, []);
 
   useEffect(() => {
-    if (!isPaperStrategyPage && !isLiveStrategyPage) {
+    if (profileState !== "authorized") {
       return;
     }
 
-    let cancelled = false;
-
-    const loadStrategyPositions = async () => {
-      setIsLoadingStrategyPositions(true);
-      try {
-        const [paperResponse, liveResponse] = await Promise.all([
-          fetch(`/api/strategy-positions?strategy=${strategyRoute}`),
-          fetch(`/api/live-strategy-positions?strategy=${strategyRoute}`),
-        ]);
-        const [paperPayload, livePayload] = (await Promise.all([
-          paperResponse.json(),
-          liveResponse.json(),
-        ])) as [StrategyDashboardResponse | { error?: string }, LiveStrategyDashboardResponse | { error?: string }];
-        if (!paperResponse.ok) {
-          throw new Error((paperPayload as { error?: string }).error || "Unable to load strategy positions");
-        }
-        if (!liveResponse.ok) {
-          throw new Error((livePayload as { error?: string }).error || "Unable to load live strategy positions");
-        }
-
-        if (!cancelled) {
-          setStrategyDashboard(paperPayload as StrategyDashboardResponse);
-          setLiveStrategyDashboard(livePayload as LiveStrategyDashboardResponse);
-        }
-      } finally {
-        if (!cancelled) {
-          setIsLoadingStrategyPositions(false);
-        }
-      }
-    };
-
-    void loadStrategyPositions();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [deferredRefreshVersion, isLiveStrategyPage, isPaperStrategyPage, strategyRoute]);
-
-  useEffect(() => {
-    if (currentPath !== "/profile") {
-      return;
-    }
-
-    let cancelled = false;
-
-    const loadProfile = async () => {
-      const response = await fetch("/api/profile");
-      const payload = (await response.json()) as UserProfileResponse & { error?: string };
-      if (!response.ok) {
-        throw new Error(payload.error || t.unableToLoadProfile);
-      }
-
-      if (!cancelled) {
-        setProfile(payload);
-        setProfileFormWebhookUrl(payload.webhookUrl);
-        setProfileFormMonitoredWallet(payload.monitoredWallet);
-        setProfileFormPaperTradingEnabled(payload.paperTradingEnabled);
-        setProfileFormLiveTradingEnabled(payload.liveTradingEnabled);
-        setProfileFormStartingBalanceUsd(String(payload.startingBalanceUsd));
-        setProfileFormRiskPercent(String(payload.riskPercent));
-        setProfileFormEdgeSwingPaperTradingEnabled(payload.edgeSwingPaperTradingEnabled);
-        setProfileFormEdgeSwingLiveTradingEnabled(payload.edgeSwingLiveTradingEnabled);
-        setProfileFormEdgeSwingStartingBalanceUsd(String(payload.edgeSwingStartingBalanceUsd));
-        setProfileFormEdgeSwingRiskPercent(String(payload.edgeSwingRiskPercent));
-        setProfileFormTradingWalletAddress(payload.tradingWalletAddress);
-        setProfileFormTradingSignatureType(payload.tradingSignatureType);
-        setProfileFormPrivateKey("");
-        setProfileFormClearTradingCredentials(false);
-      }
-    };
-
-    void loadProfile().catch((error) => {
-      if (!cancelled) {
-        setProfileMessage(error instanceof Error ? error.message : t.unableToLoadProfile);
-      }
+    void Promise.allSettled([
+      fetchJson<StrategyDashboardResponse>("/api/strategy-positions?strategy=best_trades"),
+      fetchJson<StrategyDashboardResponse>("/api/strategy-positions?strategy=edge_swing"),
+      fetchJson<LiveStrategyDashboardResponse>("/api/live-strategy-positions?strategy=best_trades"),
+      fetchJson<LiveStrategyDashboardResponse>("/api/live-strategy-positions?strategy=edge_swing"),
+    ]).then(([a, b, c, d]) => {
+      setPaperBest(a.status === "fulfilled" ? a.value : null);
+      setPaperEdge(b.status === "fulfilled" ? b.value : null);
+      setLiveBest(c.status === "fulfilled" ? c.value : null);
+      setLiveEdge(d.status === "fulfilled" ? d.value : null);
     });
+  }, [profileState]);
 
-    return () => {
-      cancelled = true;
-    };
-  }, [currentPath, t.unableToLoadProfile]);
+  const navigate = (next: Route) => {
+    startTransition(() => {
+      window.history.pushState({}, "", next);
+      setRoute(next);
+      setMenuOpen(false);
+    });
+  };
 
-  useEffect(() => {
-    const sentinel = loadMoreRef.current;
-    const hasMore = currentPath === "/gaps" ? gapPage.hasMore : marketPage.hasMore;
-    const isLoading = currentPath === "/gaps" ? isLoadingGaps : isLoadingMarkets;
-    if (!sentinel || !hasMore || isLoading) {
+  const featured = bestMarkets?.items ?? [];
+  const board = markets?.items ?? [];
+  const gapBoard = [...(gaps?.items ?? [])].sort((a, b) => (b.grossEdge ?? -1) - (a.grossEdge ?? -1));
+  const whaleBoard = useMemo(() => {
+    const seen = new Map<string, TraderSummary>();
+    for (const market of board) {
+      const trader = market.latestSignal.trader;
+      const current = seen.get(trader.wallet);
+      if (!current || trader.totalPnl > current.totalPnl) {
+        seen.set(trader.wallet, trader);
+      }
+    }
+    return [...seen.values()].sort((a, b) => b.totalPnl - a.totalPnl).slice(0, 10);
+  }, [board]);
+  const journal = useMemo(
+    () =>
+      [
+        ...wrapTrades("Best trades archive", paperBest?.trades),
+        ...wrapTrades("Edge swing archive", paperEdge?.trades),
+        ...wrapTrades("Best trades execution", liveBest?.trades),
+        ...wrapTrades("Edge swing execution", liveEdge?.trades),
+      ]
+        .sort((a, b) => b.trade.timestamp - a.trade.timestamp)
+        .slice(0, 12),
+    [liveBest?.trades, liveEdge?.trades, paperBest?.trades, paperEdge?.trades],
+  );
+
+  const saveWorkspace = async () => {
+    if (!profile) {
       return;
     }
 
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const [entry] = entries;
-        if (!entry?.isIntersecting) {
-          return;
-        }
-
-        setPageCount((current) => current + 1);
-      },
-      {
-        rootMargin: "240px 0px",
-      },
-    );
-
-    observer.observe(sentinel);
-    return () => {
-      observer.disconnect();
-    };
-  }, [currentPath, gapPage.hasMore, isLoadingGaps, isLoadingMarkets, marketPage.hasMore]);
-
-  const visibleMarkets = useMemo(() => marketPage.items, [marketPage.items]);
-  const visibleGaps = useMemo(() => gapPage.items, [gapPage.items]);
-
-  const navigateTo = (path: PageRoute) => {
-    if (window.location.pathname !== path) {
-      window.history.pushState({}, "", path);
-    }
-    setCurrentPath(path);
-    setIsMenuOpen(false);
-    setProfileMessage(null);
-  };
-
-  const toggleSellAlerts = async (market: MarketAggregate) => {
-    setAlertActionMarketSlug(market.marketSlug);
-    const watchedOutcome = market.outcomeWeights[0]?.outcome ?? market.latestSignal.outcome;
-
-    try {
-      if (market.isWatched) {
-        const url = new URL(`/api/market-alerts/watch/${encodeURIComponent(market.marketSlug)}`, window.location.origin);
-        url.searchParams.set("outcome", watchedOutcome);
-        const response = await fetch(url, {
-          method: "DELETE",
-        });
-        const payload = (await response.json()) as { error?: string };
-        if (!response.ok) {
-          throw new Error(payload.error || t.unableToUpdateSellAlerts);
-        }
-      } else {
-        const response = await fetch("/api/market-alerts/watch", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            marketSlug: market.marketSlug,
-            outcome: watchedOutcome,
-          }),
-        });
-        const payload = (await response.json()) as { error?: string };
-        if (!response.ok) {
-          throw new Error(payload.error || t.unableToUpdateSellAlerts);
-        }
-      }
-
-      setRefreshVersion((current) => current + 1);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : t.unableToUpdateSellAlerts;
-      if (message.includes("Discord webhook URL")) {
-        setProfileMessage(message);
-        navigateTo("/profile");
-      } else {
-        window.alert(message);
-      }
-    } finally {
-      setAlertActionMarketSlug(null);
-    }
-  };
-
-  const saveProfile = async () => {
-    setIsSavingProfile(true);
-    setProfileMessage(null);
-
+    setWorkspaceMessage(null);
+    setWorkspaceError(null);
     try {
       const response = await fetch("/api/profile", {
         method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
-          webhookUrl: profileFormWebhookUrl,
-          monitoredWallet: profileFormMonitoredWallet,
-          paperTradingEnabled: profileFormPaperTradingEnabled,
-          liveTradingEnabled: profileFormLiveTradingEnabled,
-          startingBalanceUsd: Number(profileFormStartingBalanceUsd || 0),
-          riskPercent: Number(profileFormRiskPercent || 0),
-          edgeSwingPaperTradingEnabled: profileFormEdgeSwingPaperTradingEnabled,
-          edgeSwingLiveTradingEnabled: profileFormEdgeSwingLiveTradingEnabled,
-          edgeSwingStartingBalanceUsd: Number(profileFormEdgeSwingStartingBalanceUsd || 0),
-          edgeSwingRiskPercent: Number(profileFormEdgeSwingRiskPercent || 0),
-          tradingWalletAddress: profileFormTradingWalletAddress,
-          tradingSignatureType: profileFormTradingSignatureType,
-          privateKey: profileFormPrivateKey,
-           apiKey: "",
-           apiSecret: "",
-           apiPassphrase: "",
-           clearTradingCredentials: profileFormClearTradingCredentials,
+          webhookUrl: workspaceForm.webhookUrl,
+          monitoredWallet: workspaceForm.monitoredWallet,
+          paperTradingEnabled: profile.paperTradingEnabled,
+          liveTradingEnabled: profile.liveTradingEnabled,
+          startingBalanceUsd: profile.startingBalanceUsd,
+          riskPercent: profile.riskPercent,
+          edgeSwingPaperTradingEnabled: profile.edgeSwingPaperTradingEnabled,
+          edgeSwingLiveTradingEnabled: profile.edgeSwingLiveTradingEnabled,
+          edgeSwingStartingBalanceUsd: profile.edgeSwingStartingBalanceUsd,
+          edgeSwingRiskPercent: profile.edgeSwingRiskPercent,
+          tradingWalletAddress: profile.tradingWalletAddress,
+          tradingSignatureType: profile.tradingSignatureType,
+          privateKey: "",
+          apiKey: "",
+          apiSecret: "",
+          apiPassphrase: "",
+          clearTradingCredentials: false,
         }),
       });
-      const payload = (await response.json()) as UserProfileResponse & { error?: string };
+
       if (!response.ok) {
-        throw new Error(payload.error || t.unableToSaveProfile);
+        throw new Error("Unable to save workspace");
       }
 
-      setProfile(payload);
-      setProfileFormWebhookUrl(payload.webhookUrl);
-      setProfileFormMonitoredWallet(payload.monitoredWallet);
-      setProfileFormPaperTradingEnabled(payload.paperTradingEnabled);
-      setProfileFormLiveTradingEnabled(payload.liveTradingEnabled);
-      setProfileFormStartingBalanceUsd(String(payload.startingBalanceUsd));
-      setProfileFormRiskPercent(String(payload.riskPercent));
-      setProfileFormEdgeSwingPaperTradingEnabled(payload.edgeSwingPaperTradingEnabled);
-      setProfileFormEdgeSwingLiveTradingEnabled(payload.edgeSwingLiveTradingEnabled);
-      setProfileFormEdgeSwingStartingBalanceUsd(String(payload.edgeSwingStartingBalanceUsd));
-      setProfileFormEdgeSwingRiskPercent(String(payload.edgeSwingRiskPercent));
-      setProfileFormTradingWalletAddress(payload.tradingWalletAddress);
-      setProfileFormTradingSignatureType(payload.tradingSignatureType);
-      setProfileFormPrivateKey("");
-      setProfileFormClearTradingCredentials(false);
-      setProfileMessage(
-        payload.hasTradingCredentials ? `${t.discordWebhookSaved}. ${t.credentialsSaved}.` : t.discordWebhookSaved,
-      );
+      const next = (await response.json()) as UserProfileResponse;
+      setProfile(next);
+      setWorkspaceMessage("Workspace saved.");
     } catch (error) {
-      setProfileMessage(error instanceof Error ? error.message : t.unableToSaveProfile);
-    } finally {
-      setIsSavingProfile(false);
+      setWorkspaceError(error instanceof Error ? error.message : "Unable to save workspace");
     }
   };
 
-  const removeWatch = async (marketSlug: string, outcome: string) => {
-    const watchKey = `${marketSlug}:${outcome}`;
-    setRemovingWatchKey(watchKey);
-    setProfileMessage(null);
+  const toggleWatch = async (market: MarketAggregate) => {
+    if (profileState !== "authorized") {
+      navigate("/workspace");
+      return;
+    }
 
+    const key = `${market.marketSlug}:${market.latestSignal.outcome}`;
+    setWatchBusy(key);
     try {
-      const url = new URL(`/api/market-alerts/watch/${encodeURIComponent(marketSlug)}`, window.location.origin);
-      url.searchParams.set("outcome", outcome);
-      const response = await fetch(url, {
-        method: "DELETE",
-      });
-      const payload = (await response.json()) as { error?: string };
-      if (!response.ok) {
-        throw new Error(payload.error || t.unableToUpdateSellAlerts);
+      if (market.isWatched) {
+        await fetch(`/api/market-alerts/watch/${market.marketSlug}?outcome=${encodeURIComponent(market.latestSignal.outcome)}`, { method: "DELETE", credentials: "include" });
+      } else {
+        await fetch("/api/market-alerts/watch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ marketSlug: market.marketSlug, outcome: market.latestSignal.outcome }),
+        });
       }
 
-      setProfile((current) =>
-        current
+      const patch = (page: MarketPageResponse | null) =>
+        page
           ? {
-              ...current,
-              watches: current.watches.filter(
-                (watch) => !(watch.marketSlug === marketSlug && watch.outcome === outcome),
+              ...page,
+              items: page.items.map((entry) =>
+                entry.marketSlug === market.marketSlug ? { ...entry, isWatched: !entry.isWatched } : entry,
               ),
             }
-          : current,
-      );
-      setRefreshVersion((current) => current + 1);
-    } catch (error) {
-      setProfileMessage(error instanceof Error ? error.message : t.unableToUpdateSellAlerts);
+          : page;
+      setMarkets((current) => patch(current));
+      setBestMarkets((current) => patch(current));
     } finally {
-      setRemovingWatchKey(null);
+      setWatchBusy(null);
     }
   };
 
-  const profileTitle = profile?.username
-    ? language === "he"
-      ? `${t.profileTitle} ${profile.username}`
-      : `${profile.username}${t.profileSuffix}`
-    : t.profileTitle;
-  const isBestTradesPage = currentPath === "/best-trades";
-  const feedTitle = isBestTradesPage ? t.bestTradesTitle : t.vegasMonitor;
-  const feedKicker = isBestTradesPage ? t.bestTrades : t.signalFeed;
-  const feedSubtitle = isBestTradesPage ? t.bestTradesSubtitle : null;
-
   return (
-    <div className={`app-shell app-shell-${language}`}>
+    <div className="app-shell">
       <div className="ambient ambient-left" />
       <div className="ambient ambient-right" />
-
+      <div className={`menu-backdrop ${menuOpen ? "menu-backdrop-open" : ""}`} onClick={() => setMenuOpen(false)} />
+      <aside className={`side-menu ${menuOpen ? "side-menu-open" : ""}`}>
+        <p className="side-kicker">Polymarket consultant</p>
+        {(["/", "/radar", "/whales", "/gap-lab", "/playbooks", "/workspace"] as Route[]).map((entry) => (
+          <button key={entry} type="button" className={`side-menu-link ${route === entry ? "side-menu-link-active" : ""}`} onClick={() => navigate(entry)}>
+            {routeLabel(entry)}
+          </button>
+        ))}
+      </aside>
       <main className="page">
-        <div className="page-topbar">
-          <div className="page-topbar-left">
-            <button
-              type="button"
-              className="menu-button"
-              aria-label={t.menu}
-              aria-expanded={isMenuOpen}
-              onClick={() => setIsMenuOpen((current) => !current)}
-            >
-              <span />
-              <span />
-              <span />
-            </button>
-            <div className="page-brand" aria-label="Whale shark pro">
-            🐋 &gt; 🦈 &gt; 😎
-            </div>
-          </div>
-          <div className="page-topbar-actions">
-            <button
-              type="button"
-              className="nav-button"
-              onClick={() => setLanguage((current) => (current === "en" ? "he" : "en"))}
-            >
-              {language === "en" ? "עברית" : "English"}
-            </button>
-            <button type="button" className="nav-button" onClick={() => navigateTo("/profile")}>
-              {t.profile}
-            </button>
-          </div>
-        </div>
-
-        <div
-          className={`menu-backdrop ${isMenuOpen ? "menu-backdrop-open" : ""}`}
-          onClick={() => setIsMenuOpen(false)}
-        />
-        <aside className={`side-menu ${isMenuOpen ? "side-menu-open" : ""}`} aria-hidden={!isMenuOpen}>
-          <div className="side-menu-header">
-            <div className="page-brand" aria-label="Whale shark pro">
-              🐋 &gt; 🦈 &gt; 😎
-            </div>
-            <button type="button" className="nav-button" onClick={() => setIsMenuOpen(false)}>
-              {t.closeMenu}
-            </button>
-          </div>
-          <nav className="side-menu-nav">
-            <button
-              type="button"
-              className={`side-menu-link ${currentPath === "/" ? "side-menu-link-active" : ""}`}
-              onClick={() => navigateTo("/")}
-            >
-              {t.monitor}
-            </button>
-            <button
-              type="button"
-              className={`side-menu-link ${currentPath === "/best-trades" ? "side-menu-link-active" : ""}`}
-              onClick={() => navigateTo("/best-trades")}
-            >
-              {t.bestTrades}
-            </button>
-            <button
-              type="button"
-              className={`side-menu-link ${currentPath === "/paper-auto-best-trades" ? "side-menu-link-active" : ""}`}
-              onClick={() => navigateTo("/paper-auto-best-trades")}
-            >
-              {t.paperAutoBestTrades}
-            </button>
-            <button
-              type="button"
-              className={`side-menu-link ${currentPath === "/live-auto-best-trades" ? "side-menu-link-active" : ""}`}
-              onClick={() => navigateTo("/live-auto-best-trades")}
-            >
-              {t.liveAutoBestTrades}
-            </button>
-            <button
-              type="button"
-              className={`side-menu-link ${currentPath === "/paper-auto-edge-swing" ? "side-menu-link-active" : ""}`}
-              onClick={() => navigateTo("/paper-auto-edge-swing")}
-            >
-              {t.paperAutoEdgeSwing}
-            </button>
-            <button
-              type="button"
-              className={`side-menu-link ${currentPath === "/live-auto-edge-swing" ? "side-menu-link-active" : ""}`}
-              onClick={() => navigateTo("/live-auto-edge-swing")}
-            >
-              {t.liveAutoEdgeSwing}
-            </button>
-            <button
-              type="button"
-              className={`side-menu-link ${currentPath === "/gaps" ? "side-menu-link-active" : ""}`}
-              onClick={() => navigateTo("/gaps")}
-            >
-              {t.gaps}
-            </button>
-            <button
-              type="button"
-              className={`side-menu-link ${currentPath === "/profile" ? "side-menu-link-active" : ""}`}
-              onClick={() => navigateTo("/profile")}
-            >
-              {t.profile}
-            </button>
-          </nav>
-        </aside>
-
-        <section className="hero">
-          <div className="hero-panel">
-            <StatusRow
-              label={t.frontendStream}
-              value={feedConnected ? t.connected : t.reconnecting}
-              tone={feedConnected ? "green" : "blue"}
-            />
-            <StatusRow
-              label={t.polymarketSocket}
-              value={
-                snapshot.status.websocketConnected
-                  ? `${snapshot.status.websocketConnectedShardCount}/${snapshot.status.websocketShardCount} ${t.shards}`
-                  : t.syncing
-              }
-              tone={snapshot.status.websocketConnected ? "green" : "blue"}
-            />
-            <StatusRow
-              label={t.signalsSurfaced}
-              value={marketPage.total.toString()}
-              tone="neutral"
-            />
-              <StatusRow
-                label={t.wsCoverage}
-                value={`${snapshot.status.websocketAssetsSeenRecentlyCount}/${snapshot.status.websocketSubscribedAssetCount} ${t.active}`}
-                tone="neutral"
-              />
-            <StatusRow
-              label={t.lastTradeSeen}
-              value={formatTimestamp(snapshot.status.lastTradeAt, t.pending)}
-              tone="neutral"
-            />
-            <StatusRow
-              label={t.errorsLast10Minutes}
-              value={snapshot.status.recentErrorsLast10Minutes.toString()}
-              tone={snapshot.status.recentErrorsLast10Minutes > 0 ? "blue" : "green"}
-            />
-          </div>
-        </section>
-
-        {currentPath === "/profile" ? (
-          <section className="profile-section">
-            <div className="feed-header">
+        <header className="masthead">
+          <div className="masthead-bar">
+            <button className="menu-button" type="button" onClick={() => setMenuOpen(true)}><span /><span /><span /></button>
+            <div className="brand-block">
+              <span className="brand-pill">VEGAS MONITOR</span>
               <div>
-                <p className="section-kicker">{t.settings}</p>
-                <h2>{t.profile}</h2>
-              </div>
-              <div className="feed-controls">
-                <button type="button" className="nav-button" onClick={() => navigateTo("/")}>
-                  {t.backToMonitor}
-                </button>
+                <h1>Trader Desk</h1>
+                <p>Statistics first. Consultant second. Auto-trading left in the background.</p>
               </div>
             </div>
+            <button type="button" className="route-button" onClick={() => navigate("/workspace")}>{profileState === "authorized" ? "Workspace" : "Sign in"}</button>
+          </div>
+          <div className="ticker-grid">
+            <Stat label="Markets" value={String(snapshot?.status.marketCount ?? "—")} note="Tracked research universe" />
+            <Stat label="Coverage" value={snapshot ? `${snapshot.status.websocketAssetsSeenRecentlyCount}/${snapshot.status.websocketSubscribedAssetCount}` : "—"} note="Recently seen assets" />
+            <Stat label="Errors" value={String(snapshot?.status.recentErrorsLast10Minutes ?? "—")} note="Last 10 minutes" />
+            <Stat label="Traders" value={String(snapshot?.status.trackedTraderCount ?? "—")} note="Tracked wallets" />
+          </div>
+        </header>
+        {route === "/" ? (
+          <>
+            <section className="hero-grid">
+              <article className="hero-card hero-card-primary">
+                <p className="eyebrow">Desk summary</p>
+                <h2>Make decisions like a Polymarket consultant.</h2>
+                <p className="lead-copy">
+                  The product now centers on board reading, whale behavior, pricing dislocations, and statistical playbooks instead of order execution.
+                </p>
+                <div className="hero-metrics">
+                  <Stat label="Best-trade win rate" value={bestMarkets?.bestTradeStats?.winRate !== null && bestMarkets?.bestTradeStats?.winRate !== undefined ? `${(bestMarkets.bestTradeStats.winRate * 100).toFixed(1)}%` : "Pending"} note="Resolved consultant calls" />
+                  <Stat label="Resolved calls" value={String(bestMarkets?.bestTradeStats?.resolvedCount ?? "—")} note="Historical record" />
+                  <Stat label="Signal tape" value={String(board.slice(0, 8).length)} note="Fresh clustered moves" />
+                  <Stat label="Gap setups" value={String(gapBoard.slice(0, 4).length)} note="Manual arb candidates" />
+                </div>
+                <div className="hero-actions">
+                  <button type="button" className="primary-button" onClick={() => navigate("/radar")}>Open radar</button>
+                  <button type="button" className="secondary-button" onClick={() => navigate("/whales")}>Read smart money</button>
+                </div>
+              </article>
+              <article className="hero-card hero-card-feature">
+                <p className="eyebrow">Lead setup</p>
+                {featured[0] ? (
+                  <>
+                    <h3>{featured[0].marketQuestion}</h3>
+                    <p className="feature-copy">
+                      {featured[0].latestSignal.displayName} is leaning <strong>{featured[0].latestSignal.outcome}</strong> with {money.format(featured[0].totalUsd)} in tracked flow.
+                    </p>
+                    <div className="bar-list">
+                      {featured[0].outcomeWeights.slice(0, 3).map((outcome) => (
+                        <Bar key={`${featured[0].marketSlug}:${outcome.outcome}`} outcome={outcome.outcome} value={outcome.weight} />
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <Empty title="Loading lead setup" body="Waiting for the first conviction snapshot." />
+                )}
+              </article>
+            </section>
 
-            <div className="profile-panel">
-              <div className="profile-copy">
-                <p className="section-kicker">{t.discordAlerts}</p>
-                <h3>{profileTitle}</h3>
-                <p>{t.profileBody}</p>
+            <section className="section-shell">
+              <SectionHeader kicker="Conviction board" title="Setups worth attention now" description="The strongest clustered markets based on weight, breadth, and price context." action="Full radar" onAction={() => navigate("/radar")} />
+              <div className="compact-grid">
+                {featured.slice(0, 4).map((market) => (
+                  <CompactCard key={market.marketSlug} market={market} watchBusy={watchBusy} onToggleWatch={toggleWatch} />
+                ))}
               </div>
+            </section>
 
-              <label className="profile-field">
-                <span>{t.discordWebhookUrl}</span>
-                <input
-                  type="url"
-                  value={profileFormWebhookUrl}
-                  onChange={(event) => setProfileFormWebhookUrl(event.target.value)}
-                  placeholder="https://discord.com/api/webhooks/..."
-                />
-              </label>
-
-              <label className="profile-field">
-                <span>{t.monitoredWallet}</span>
-                <input
-                  type="text"
-                  value={profileFormMonitoredWallet}
-                  onChange={(event) => setProfileFormMonitoredWallet(event.target.value)}
-                  placeholder="0x..."
-                />
-              </label>
-
-              <div className="profile-copy">
-                <p className="section-kicker">{t.paperTrading}</p>
-                <h3>{t.autoBestTradesSettings}</h3>
-                <p>{t.autoBestTradesBody}</p>
+            <section className="split-grid">
+              <div className="section-shell">
+                <SectionHeader kicker="Smart money tape" title="Who moved most recently" description="A running tape of the latest clustered decisions from tracked traders." />
+                <div className="list-stack">
+                  {board.slice(0, 8).map((market) => (
+                    <article className="list-card" key={`tape:${market.marketSlug}`}>
+                      <div>
+                        <strong>{market.latestSignal.displayName}</strong>
+                        <p>{market.marketQuestion}</p>
+                      </div>
+                      <div className="list-meta">
+                        <span>{market.latestSignal.outcome}</span>
+                        <span>{money.format(market.latestSignal.totalUsd)}</span>
+                        <span>{timeAgo(market.latestTimestamp)}</span>
+                      </div>
+                    </article>
+                  ))}
+                </div>
               </div>
-
-              <label className="profile-toggle">
-                <input
-                  type="checkbox"
-                  checked={profileFormPaperTradingEnabled}
-                  onChange={(event) => setProfileFormPaperTradingEnabled(event.target.checked)}
-                />
-                <span>{t.paperTradingEnabled}</span>
-              </label>
-
-              <label className="profile-toggle">
-                <input
-                  type="checkbox"
-                  checked={profileFormLiveTradingEnabled}
-                  onChange={(event) => setProfileFormLiveTradingEnabled(event.target.checked)}
-                />
-                <span>{t.bestTradesLiveTradingEnabled}</span>
-              </label>
-
-              <div className="profile-field-grid">
-                <label className="profile-field">
-                  <span>{t.startingBalance}</span>
-                  <input
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={profileFormStartingBalanceUsd}
-                    onChange={(event) => setProfileFormStartingBalanceUsd(event.target.value)}
-                  />
-                </label>
-
-                <label className="profile-field">
-                  <span>{t.currentBalance}</span>
-                  <input type="text" value={currencyFormatter.format(profile?.currentBalanceUsd ?? 0)} disabled />
-                </label>
-
-                <label className="profile-field">
-                  <span>{t.riskPercent}</span>
-                  <input
-                    type="number"
-                    min="0.1"
-                    max="100"
-                    step="0.1"
-                    value={profileFormRiskPercent}
-                    onChange={(event) => setProfileFormRiskPercent(event.target.value)}
-                  />
-                </label>
+              <div className="section-shell">
+                <SectionHeader kicker="Gap lab" title="Dislocations and pairings" description="No/no and paired-market inefficiencies that deserve manual review." action="Open gap lab" onAction={() => navigate("/gap-lab")} />
+                <div className="list-stack">
+                  {gapBoard.slice(0, 4).map((gap) => (
+                    <GapCard key={gap.id} gap={gap} />
+                  ))}
+                </div>
               </div>
+            </section>
+          </>
+        ) : null}
 
-              <div className="profile-copy">
-                <p className="section-kicker">{t.paperTrading}</p>
-                <h3>{t.autoEdgeSwingSettings}</h3>
-                <p>{t.autoEdgeSwingBody}</p>
+        {route === "/radar" ? (
+          <section className="section-shell">
+            <SectionHeader kicker="Market radar" title="Research the board like a desk" description="Search, sort, and compare where tracked money is concentrating right now." />
+            <div className="control-row">
+              <div className="segment">
+                <button type="button" className={marketView === "best" ? "segment-active" : ""} onClick={() => setMarketView("best")}>Highest conviction</button>
+                <button type="button" className={marketView === "monitor" ? "segment-active" : ""} onClick={() => setMarketView("monitor")}>Full monitor</button>
               </div>
-
-              <label className="profile-toggle">
-                <input
-                  type="checkbox"
-                  checked={profileFormEdgeSwingPaperTradingEnabled}
-                  onChange={(event) => setProfileFormEdgeSwingPaperTradingEnabled(event.target.checked)}
-                />
-                <span>{t.edgeSwingPaperTradingEnabled}</span>
+              <label className="field">
+                <span>Search</span>
+                <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Markets, outcomes, traders" />
               </label>
-
-              <label className="profile-toggle">
-                <input
-                  type="checkbox"
-                  checked={profileFormEdgeSwingLiveTradingEnabled}
-                  onChange={(event) => setProfileFormEdgeSwingLiveTradingEnabled(event.target.checked)}
-                />
-                <span>{t.edgeSwingLiveTradingEnabled}</span>
-              </label>
-
-              <div className="profile-field-grid">
-                <label className="profile-field">
-                  <span>{t.startingBalance}</span>
-                  <input
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={profileFormEdgeSwingStartingBalanceUsd}
-                    onChange={(event) => setProfileFormEdgeSwingStartingBalanceUsd(event.target.value)}
-                  />
-                </label>
-
-                <label className="profile-field">
-                  <span>{t.currentBalance}</span>
-                  <input type="text" value={currencyFormatter.format(profile?.edgeSwingCurrentBalanceUsd ?? 0)} disabled />
-                </label>
-
-                <label className="profile-field">
-                  <span>{t.riskPercent}</span>
-                  <input
-                    type="number"
-                    min="0.1"
-                    max="100"
-                    step="0.1"
-                    value={profileFormEdgeSwingRiskPercent}
-                    onChange={(event) => setProfileFormEdgeSwingRiskPercent(event.target.value)}
-                  />
-                </label>
-              </div>
-
-              <div className="profile-copy">
-                <p className="section-kicker">{t.liveTrading}</p>
-                <h3>{t.liveTradingCredentials}</h3>
-                <p>{t.liveTradingBody}</p>
-              </div>
-
-              <p className={`profile-helper${profile?.liveTradingError ? " profile-helper-error" : ""}`}>
-                {profileLiveTradingMessage}
-              </p>
-
-              <label className="profile-field">
-                <span>{t.tradingWalletAddress}</span>
-                <input
-                  type="text"
-                  value={profileFormTradingWalletAddress}
-                  onChange={(event) => setProfileFormTradingWalletAddress(event.target.value)}
-                  placeholder="0x..."
-                />
-              </label>
-
-              <label className="profile-field">
-                <span>{t.tradingSignatureType}</span>
-                <select
-                  value={profileFormTradingSignatureType}
-                  onChange={(event) =>
-                    setProfileFormTradingSignatureType(
-                      event.target.value === "POLY_PROXY" ? "POLY_PROXY" : "EOA",
-                    )
-                  }
-                >
-                  <option value="EOA">{t.tradingSignatureTypeEoa}</option>
-                  <option value="POLY_PROXY">{t.tradingSignatureTypeProxy}</option>
+              <label className="field field-small">
+                <span>Sort</span>
+                <select value={sort} onChange={(event) => setSort(event.target.value as MarketSortOption)}>
+                  <option value="weighted">Weighted score</option>
+                  <option value="buyWeight">Outcome weight</option>
+                  <option value="flow">Largest flow</option>
+                  <option value="participants">Participants</option>
+                  <option value="recent">Recent</option>
                 </select>
               </label>
+            </div>
+            <div className="radar-grid">
+              {board.map((market) => (
+                <MarketCard key={market.marketSlug} market={market} watchBusy={watchBusy} onToggleWatch={toggleWatch} />
+              ))}
+            </div>
+          </section>
+        ) : null}
 
-              <div className="profile-field-grid">
-                <label className="profile-field">
-                  <span>{t.privateKey}</span>
-                  <input
-                    type="password"
-                    value={profileFormPrivateKey}
-                    onChange={(event) => setProfileFormPrivateKey(event.target.value)}
-                    placeholder={profile?.hasTradingCredentials ? "••••••••" : "0x..."}
-                  />
-                </label>
-
-                <label className="profile-field">
-                  <span>{t.apiKey}</span>
-                  <input
-                    type="password"
-                    value={profileFormApiKey}
-                    onChange={(event) => setProfileFormApiKey(event.target.value)}
-                    placeholder={profile?.hasTradingCredentials ? "••••••••" : ""}
-                  />
-                </label>
-
-                <label className="profile-field">
-                  <span>{t.apiSecret}</span>
-                  <input
-                    type="password"
-                    value={profileFormApiSecret}
-                    onChange={(event) => setProfileFormApiSecret(event.target.value)}
-                    placeholder={profile?.hasTradingCredentials ? "••••••••" : ""}
-                  />
-                </label>
-
-                <label className="profile-field">
-                  <span>{t.apiPassphrase}</span>
-                  <input
-                    type="password"
-                    value={profileFormApiPassphrase}
-                    onChange={(event) => setProfileFormApiPassphrase(event.target.value)}
-                    placeholder={profile?.hasTradingCredentials ? "••••••••" : ""}
-                  />
-                </label>
+        {route === "/whales" ? (
+          <section className="split-grid">
+            <div className="section-shell">
+              <SectionHeader kicker="Smart money" title="Whale leaderboard" description="A quick ranking of the most profitable tracked traders currently influencing the board." />
+              <div className="list-stack">
+                {whaleBoard.map((trader, index) => (
+                  <article className="leader-card" key={`${trader.wallet}:${index}`}>
+                    <span className="leader-rank">{String(index + 1).padStart(2, "0")}</span>
+                    <div>
+                      <strong>{trader.displayName}</strong>
+                      <p>{tierLabel(trader.tier)} tier</p>
+                    </div>
+                    <div className="leader-metrics">
+                      <span>{money.format(trader.totalPnl)}</span>
+                      <span>{trader.tradeCount} trades</span>
+                    </div>
+                  </article>
+                ))}
               </div>
-
-              <p className="profile-helper">{t.replaceCredentials}</p>
-
-              <label className="profile-toggle">
-                <input
-                  type="checkbox"
-                  checked={profileFormClearTradingCredentials}
-                  onChange={(event) => setProfileFormClearTradingCredentials(event.target.checked)}
-                />
-                <span>{t.clearCredentials}</span>
-              </label>
-
-              {profileMessage ? <p className="profile-message">{profileMessage}</p> : null}
-
-              <div className="profile-actions">
-                <button
-                  type="button"
-                  className="watch-button watch-button-active"
-                  onClick={() => void saveProfile()}
-                  disabled={isSavingProfile}
-                >
-                  {isSavingProfile ? t.saving : t.saveWebhook}
-                </button>
+            </div>
+            <div className="section-shell">
+              <SectionHeader kicker="Flow" title="Recent clustered signals" description="Read the markets where concentrated traders just left a visible footprint." />
+              <div className="list-stack">
+                {board.slice(0, 10).map((market) => (
+                  <article className="flow-card" key={`flow:${market.marketSlug}`}>
+                    <span className="eyebrow">{timeAgo(market.latestTimestamp)}</span>
+                    <h3>{market.marketQuestion}</h3>
+                    <p>{market.latestSignal.displayName} leaned {market.latestSignal.outcome} at {market.latestSignal.averagePrice.toFixed(3)} with {money.format(market.latestSignal.totalUsd)} in tracked volume.</p>
+                    <div className="bar-list">
+                      {market.outcomeWeights.slice(0, 2).map((outcome) => (
+                        <Bar key={`${market.marketSlug}:${outcome.outcome}`} outcome={outcome.outcome} value={outcome.weight} />
+                      ))}
+                    </div>
+                  </article>
+                ))}
               </div>
+            </div>
+          </section>
+        ) : null}
 
-              <div className="profile-watches">
-                <div className="profile-watches-header">
-                  <p className="section-kicker">{t.activeWatches}</p>
+        {route === "/gap-lab" ? (
+          <section className="section-shell">
+            <SectionHeader kicker="Gap lab" title="Manual arb and dislocation board" description="This is where paired pricing gaps live so traders can inspect them with discretion." />
+            <div className="list-stack">
+              {gapBoard.map((gap) => (
+                <GapCard key={gap.id} gap={gap} expanded />
+              ))}
+            </div>
+          </section>
+        ) : null}
+
+        {route === "/playbooks" ? (
+          <section className="section-shell">
+            <SectionHeader kicker="Playbooks" title="Historical signal archives" description="The old automation surfaces are now framed as study material and execution review." />
+            {profileState !== "authorized" ? (
+              <Empty title="Sign in to unlock archives" body="Research playbooks use your saved strategy history and execution records." action="Open workspace" onAction={() => navigate("/workspace")} />
+            ) : (
+              <>
+                <div className="compact-grid">
+                  <ResearchCard title="Best trades archive" body="Paper record for the highest-conviction ideas." dashboard={paperBest} />
+                  <ResearchCard title="Edge swing archive" body="Paper record for broad edge-capture setups." dashboard={paperEdge} />
+                  <ResearchCard title="Best trades execution" body="Execution history for the live best-trades stream." dashboard={liveBest} />
+                  <ResearchCard title="Edge swing execution" body="Execution history for the live edge-swing stream." dashboard={liveEdge} />
                 </div>
-                {profile?.watches?.length ? (
-                  <div className="profile-watch-list">
-                    {profile.watches.map((watch) => (
-                      <article className="profile-watch-item" key={`${watch.marketSlug}:${watch.outcome}`}>
-                        <div className="profile-watch-copy">
-                          <strong>{watch.marketQuestion}</strong>
-                          <span>
-                            {t.watchedOutcome}: {watch.outcome}
-                          </span>
-                          <span>
-                            {watch.source === "portfolio_sync"
-                              ? t.watchSourcePortfolioSync
-                              : t.watchSourceManual}
-                          </span>
+                <div className="section-shell nested-shell">
+                  <SectionHeader kicker="Journal" title="Cross-playbook activity" description="A single place to read what the systems did, without turning the app into a trading cockpit." />
+                  <div className="list-stack">
+                    {journal.map((entry) => (
+                      <article className="list-card" key={`${entry.label}:${entry.trade.id}`}>
+                        <div>
+                          <strong>{entry.trade.marketQuestion}</strong>
+                          <p>{entry.label}</p>
                         </div>
-                        <div className="profile-watch-actions">
-                          <a href={normalizeSecureUrl(watch.marketUrl) ?? watch.marketUrl} target="_blank" rel="noreferrer">
-                            {t.openWatchedMarket}
-                          </a>
-                          <button
-                            type="button"
-                            className="profile-watch-remove"
-                            onClick={() => void removeWatch(watch.marketSlug, watch.outcome)}
-                            disabled={removingWatchKey === `${watch.marketSlug}:${watch.outcome}`}
-                          >
-                            {removingWatchKey === `${watch.marketSlug}:${watch.outcome}`
-                              ? t.removing
-                              : t.removeWatch}
-                          </button>
+                        <div className="list-meta">
+                          <span>{entry.trade.side}</span>
+                          <span>{entry.trade.reason}</span>
+                          <span>{moneyPrecise.format(entry.trade.usd)} @ {entry.trade.price.toFixed(3)}</span>
                         </div>
                       </article>
                     ))}
                   </div>
-                ) : (
-                  <p className="profile-empty">{t.noActiveWatches}</p>
-                )}
-              </div>
-            </div>
-          </section>
-        ) : isPaperStrategyPage ? (
-          <section className="feed-section">
-            <div className="feed-header">
-              <div>
-                <p className="section-kicker">{strategyPaperMenuLabel}</p>
-                <h2>{strategyPaperTitle}</h2>
-                <p className="feed-subtitle">{strategyPaperSubtitle}</p>
-              </div>
-            </div>
-
-            <div className="hero-panel auto-trade-stats">
-              <StatusRow label={t.cashBalance} value={currencyFormatter.format(strategyDashboard.summary.cashBalanceUsd)} tone="neutral" />
-              <StatusRow label={t.openExposure} value={currencyFormatter.format(strategyDashboard.summary.openExposureUsd)} tone="neutral" />
-              <StatusRow label={t.totalEquity} value={currencyFormatter.format(strategyDashboard.summary.totalEquityUsd)} tone="green" />
-              <StatusRow label={t.realizedPnl} value={currencyFormatter.format(strategyDashboard.summary.realizedUsd)} tone={strategyDashboard.summary.realizedUsd >= 0 ? "green" : "blue"} />
-              <StatusRow label={t.openPositions} value={strategyDashboard.summary.openPositionCount.toString()} tone="neutral" />
-              <StatusRow label={t.closedPositions} value={strategyDashboard.summary.closedPositionCount.toString()} tone="neutral" />
-              <StatusRow label={t.unrealizedPnl} value={currencyFormatter.format(strategyDashboard.summary.unrealizedUsd)} tone={strategyDashboard.summary.unrealizedUsd >= 0 ? "green" : "blue"} />
-            </div>
-
-            {strategyDashboard.positions.length === 0 && !isLoadingStrategyPositions ? (
-              <div className="empty-state">
-                <div className="empty-pulse" />
-                <h3>{strategyPaperTitle}</h3>
-                <p>{t.noStrategyPositions}</p>
-              </div>
-            ) : (
-              <div className="signal-grid">
-                {strategyDashboard.positions.map((position) => (
-                  <article className="signal-card" key={position.id}>
-                    <div className="signal-media">
-                      {normalizeSecureUrl(position.marketImage) ? (
-                        <img src={normalizeSecureUrl(position.marketImage)!} alt={position.marketQuestion} />
-                      ) : (
-                        <div className="image-fallback">{position.outcome[0]}</div>
-                      )}
-                      <div className={`pill ${position.status === "open" ? "pill-cyan" : "pill-neutral"}`}>
-                        {position.status === "open" ? t.statusOpen : t.statusClosed}
-                      </div>
-                    </div>
-
-                    <div className="signal-body">
-                      <div className="signal-topline">
-                        <span>{formatRelativeTime(position.updatedAt, t)}</span>
-                        <span>{t.openedAt}: {formatTimestamp(position.openedAt, t.pending)}</span>
-                      </div>
-
-                      <h3>{position.marketQuestion}</h3>
-                      <p className="signal-thesis">
-                        <strong>{position.outcome}</strong>
-                        <span className="signal-thesis-trade">
-                          <span>{t.confidence}</span>
-                          <span className="outcome-chip outcome-chip-positive">{position.setupQuality}/100</span>
-                        </span>
-                      </p>
-
-                      <div className="metric-row">
-                        <Metric label={t.avgEntry} value={position.entryPrice.toFixed(3)} />
-                        <Metric label={t.lastPrice} value={position.lastPrice.toFixed(3)} />
-                        <Metric label={t.soldPercent} value={`${position.soldPercent}%`} />
-                      </div>
-
-                      <div className="metric-row">
-                        <Metric label={t.entrySize} value={currencyFormatter.format(position.entryNotionalUsd)} />
-                        <Metric label={t.positionValue} value={currencyFormatter.format(position.remainingShares * position.lastPrice)} />
-                        <Metric label={t.remainingShares} value={position.remainingShares.toFixed(2)} />
-                      </div>
-
-                      <div className="metric-row">
-                        <Metric label={t.originalWeight} value={position.originalSmartMoneyWeight.toString()} />
-                        <Metric label={t.remainingWeight} value={position.remainingSmartMoneyWeight.toString()} />
-                        <Metric label={t.traders} value={position.originalParticipants.length.toString()} />
-                      </div>
-
-                      {position.exitReason ? (
-                        <p className="signal-rationale">
-                          <span>{t.exitReason}</span>
-                          <strong>{position.exitReason}</strong>
-                        </p>
-                      ) : null}
-
-                      <div className="signal-actions">
-                        <a href={normalizeSecureUrl(position.marketUrl) ?? position.marketUrl} target="_blank" rel="noreferrer">
-                          {t.openMarket}
-                        </a>
-                      </div>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            )}
-
-            <div className="profile-watches">
-              <div className="profile-watches-header">
-                <p className="section-kicker">{t.strategyTrades}</p>
-              </div>
-              {strategyDashboard.trades.length ? (
-                <div className="profile-watch-list">
-                  {strategyDashboard.trades.map((trade) => (
-                    <article className="profile-watch-item" key={trade.id}>
-                      <div className="profile-watch-copy">
-                        <strong>{trade.marketQuestion}</strong>
-                        <span>{`${trade.side} ${trade.outcome}`}</span>
-                        <span>{`${t.activityTime}: ${formatRelativeTime(trade.timestamp, t)} - ${formatTimestamp(trade.timestamp, t.pending)}`}</span>
-                        <span>{`${trade.reason} - ${formatRelativeTime(trade.timestamp, t)}`}</span>
-                        <span>{`${t.activityDetails}: ${trade.shares.toFixed(2)} shares - ${preciseCurrencyFormatter.format(trade.usd)} @ ${trade.price.toFixed(3)}`}</span>
-                      </div>
-                      <div className="profile-watch-actions">
-                        <span className="strategy-trade-amount">
-                          {preciseCurrencyFormatter.format(trade.usd)} @ {trade.price.toFixed(3)}
-                        </span>
-                        <a href={normalizeSecureUrl(trade.marketUrl) ?? trade.marketUrl} target="_blank" rel="noreferrer">
-                          {t.openMarket}
-                        </a>
-                      </div>
-                    </article>
-                  ))}
                 </div>
+              </>
+            )}
+          </section>
+        ) : null}
+
+        {route === "/workspace" ? (
+          <section className="split-grid">
+            <div className="section-shell">
+              <SectionHeader kicker="Workspace" title="Alerts and personal context" description="Keep this area focused on alerts, tracked wallets, and your private research context." />
+              {profileState === "unauthorized" ? (
+                <Empty title="Sign in for a workspace" body="Store a webhook, save a tracked wallet, and keep a personal watchlist." action="Go to sign in" onAction={() => { window.location.href = "/login"; }} />
               ) : (
-                <p className="profile-empty">{t.noStrategyTrades}</p>
+                <div className="workspace-panel">
+                  <label className="field">
+                    <span>Discord webhook URL</span>
+                    <input type="url" value={workspaceForm.webhookUrl} onChange={(event) => setWorkspaceForm((current) => ({ ...current, webhookUrl: event.target.value }))} placeholder="https://discord.com/api/webhooks/..." />
+                  </label>
+                  <label className="field">
+                    <span>Tracked Polymarket wallet</span>
+                    <input type="text" value={workspaceForm.monitoredWallet} onChange={(event) => setWorkspaceForm((current) => ({ ...current, monitoredWallet: event.target.value }))} placeholder="0x..." />
+                  </label>
+                  {workspaceMessage ? <p className="flash-success">{workspaceMessage}</p> : null}
+                  {workspaceError ? <p className="flash-error">{workspaceError}</p> : null}
+                  <div className="hero-actions">
+                    <button type="button" className="primary-button" onClick={() => void saveWorkspace()}>Save workspace</button>
+                    {profileState === "authorized" ? <a className="secondary-button link-button" href="/logout">Sign out</a> : null}
+                  </div>
+                </div>
               )}
             </div>
-
-          </section>
-        ) : isLiveStrategyPage ? (
-          <section className="feed-section">
-            <div className="feed-header">
-              <div>
-                <p className="section-kicker">{strategyLiveMenuLabel}</p>
-                <h2>{strategyLiveTitle}</h2>
-                <p className="feed-subtitle">{strategyLiveSubtitle}</p>
-              </div>
-            </div>
-
-            <div className="hero-panel auto-trade-stats">
-              <StatusRow label={t.cashBalance} value={currencyFormatter.format(liveStrategyDashboard.summary.cashBalanceUsd)} tone="neutral" />
-              <StatusRow label={t.openExposure} value={currencyFormatter.format(liveStrategyDashboard.summary.openExposureUsd)} tone="neutral" />
-              <StatusRow label={t.totalEquity} value={currencyFormatter.format(liveStrategyDashboard.summary.totalEquityUsd)} tone="green" />
-              <StatusRow label={t.realizedPnl} value={currencyFormatter.format(liveStrategyDashboard.summary.realizedUsd)} tone={liveStrategyDashboard.summary.realizedUsd >= 0 ? "green" : "blue"} />
-              <StatusRow label={t.openPositions} value={liveStrategyDashboard.summary.openPositionCount.toString()} tone="neutral" />
-              <StatusRow label={t.closedPositions} value={liveStrategyDashboard.summary.closedPositionCount.toString()} tone="neutral" />
-              <StatusRow label={t.unrealizedPnl} value={currencyFormatter.format(liveStrategyDashboard.summary.unrealizedUsd)} tone={liveStrategyDashboard.summary.unrealizedUsd >= 0 ? "green" : "blue"} />
-            </div>
-            {liveStrategyDashboard.error ? (
-              <div className="inline-alert inline-alert-error" role="alert">
-                <span className="inline-alert-label">{t.liveTrading}</span>
-                <strong>{liveStrategyDashboard.error}</strong>
-              </div>
-            ) : null}
-            <p className={`profile-helper${liveStrategyDashboard.error ? " profile-helper-error" : ""}`}>
-              {liveStrategyStatusMessage}
-            </p>
-            {liveStrategyDashboard.positions.length ? (
-              <div className="signal-grid">
-                {liveStrategyDashboard.positions.map((position) => (
-                  <article className="signal-card" key={position.id}>
-                    <div className="signal-media">
-                      {normalizeSecureUrl(position.marketImage) ? (
-                        <img src={normalizeSecureUrl(position.marketImage)!} alt={position.marketQuestion} />
-                      ) : (
-                        <div className="image-fallback">{position.outcome[0]}</div>
-                      )}
-                      <div className={`pill ${position.status === "open" ? "pill-cyan" : "pill-neutral"}`}>
-                        {position.status === "open" ? t.statusOpen : t.statusClosed}
-                      </div>
+            <div className="section-shell">
+              <SectionHeader kicker="Watchlist" title="Watched markets" description="Use the radar screen to add markets you want notifications for." />
+              <div className="list-stack">
+                {profile?.watches?.length ? profile.watches.map((watch) => (
+                  <article className="list-card" key={`${watch.marketSlug}:${watch.outcome}`}>
+                    <div>
+                      <strong>{watch.marketQuestion}</strong>
+                      <p>{watch.outcome}</p>
                     </div>
-
-                    <div className="signal-body">
-                      <div className="signal-topline">
-                        <span>{formatRelativeTime(position.updatedAt, t)}</span>
-                        <span>{t.openedAt}: {formatTimestamp(position.openedAt, t.pending)}</span>
-                      </div>
-
-                      <h3>{position.marketQuestion}</h3>
-                      <p className="signal-thesis">
-                        <strong>{position.outcome}</strong>
-                        <span className="signal-thesis-trade">
-                          <span>{t.confidence}</span>
-                          <span className="outcome-chip outcome-chip-positive">{position.setupQuality}/100</span>
-                        </span>
-                      </p>
-
-                      <div className="metric-row">
-                        <Metric label={t.avgEntry} value={position.entryPrice.toFixed(3)} />
-                        <Metric label={t.lastPrice} value={position.lastPrice.toFixed(3)} />
-                        <Metric label={t.soldPercent} value={`${position.soldPercent}%`} />
-                      </div>
-
-                      <div className="metric-row">
-                        <Metric label={t.entrySize} value={currencyFormatter.format(position.entryNotionalUsd)} />
-                        <Metric label={t.positionValue} value={currencyFormatter.format(position.remainingShares * position.lastPrice)} />
-                        <Metric label={t.remainingShares} value={position.remainingShares.toFixed(2)} />
-                      </div>
-
-                      {position.exitReason ? (
-                        <p className="signal-rationale">
-                          <span>{t.exitReason}</span>
-                          <strong>{position.exitReason}</strong>
-                        </p>
-                      ) : null}
+                    <div className="list-meta">
+                      <span>{watch.source}</span>
+                      <a href={watch.marketUrl} target="_blank" rel="noreferrer">Open market</a>
                     </div>
                   </article>
-                ))}
-              </div>
-            ) : (
-              <p className="profile-empty">{t.noLiveStrategyPositions}</p>
-            )}
-            {liveStrategyDashboard.trades.length ? (
-              <div className="profile-watch-list">
-                {liveStrategyDashboard.trades.map((trade) => (
-                  <article className="profile-watch-item" key={trade.id}>
-                    <div className="profile-watch-copy">
-                      <strong>{trade.marketQuestion}</strong>
-                      <span>{`${trade.side} ${trade.outcome}`}</span>
-                      <span>{`${t.activityTime}: ${formatRelativeTime(trade.timestamp, t)} - ${formatTimestamp(trade.timestamp, t.pending)}`}</span>
-                      <span>
-                        {`${trade.reason}${trade.status ? ` - ${trade.status}` : ""}${trade.orderId ? ` - ${trade.orderId}` : ""}`}
-                      </span>
-                        <span>{`${t.activityDetails}: ${trade.shares.toFixed(2)} shares - ${preciseCurrencyFormatter.format(trade.usd)} @ ${trade.price.toFixed(3)}`}</span>
-                    </div>
-                    <div className="profile-watch-actions">
-                      <span className="strategy-trade-amount">
-                          {preciseCurrencyFormatter.format(trade.usd)} @ {trade.price.toFixed(3)}
-                      </span>
-                      <a href={normalizeSecureUrl(trade.marketUrl) ?? trade.marketUrl} target="_blank" rel="noreferrer">
-                        {t.openMarket}
-                      </a>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            ) : (
-              <p className="profile-empty">{t.noLiveStrategyTrades}</p>
-            )}
-          </section>
-        ) : currentPath === "/gaps" ? (
-          <section className="feed-section">
-            <div className="feed-header">
-              <div>
-                <p className="section-kicker">{t.gaps}</p>
-                <h2>{t.gapsTitle}</h2>
-                <p className="feed-subtitle">{t.gapsSubtitle}</p>
+                )) : <Empty title="No watched markets yet" body="Add any market from the radar to build your alert book." />}
               </div>
             </div>
-
-            {visibleGaps.length === 0 && !isLoadingGaps ? (
-              <div className="empty-state">
-                <div className="empty-pulse" />
-                <h3>{t.gapsTitle}</h3>
-                <p>{t.noGaps}</p>
-              </div>
-            ) : (
-              <>
-                <div className="gaps-grid">
-                  {visibleGaps.map((gap) => (
-                    <article className="gap-card" key={gap.id}>
-                      <div className="gap-card-body">
-                        <div className="signal-topline">
-                          <span>{formatRelativeTime(gap.updatedAt, t)}</span>
-                          <span>{gap.pairLabel}</span>
-                        </div>
-
-                        <h3>{gap.eventTitle}</h3>
-
-                        <div className="metric-row">
-                          <Metric label={t.combinedNoAsk} value={gap.combinedNoAsk !== null ? gap.combinedNoAsk.toFixed(3) : "-"} />
-                          <Metric label={t.grossEdge} value={gap.grossEdge !== null ? `${(gap.grossEdge * 100).toFixed(2)}%` : "-"} />
-                          <Metric label={t.executableStake} value={gap.executableStake !== null ? currencyFormatter.format(gap.executableStake) : "-"} />
-                        </div>
-
-                        <div className="gap-legs">
-                          {gap.legs.map((leg, index) => (
-                            <article className="gap-leg" key={`${gap.id}:${leg.marketSlug}`}>
-                              <div className="gap-leg-copy">
-                                <strong>{index === 0 ? t.gapLegA : t.gapLegB}</strong>
-                                <span>{leg.marketQuestion}</span>
-                                <span>{`${t.noAsk}: ${leg.noAsk !== null ? leg.noAsk.toFixed(3) : "-"}`}</span>
-                                <span>{`${t.executableStake}: ${leg.noAskSize !== null && leg.noAsk !== null ? currencyFormatter.format(leg.noAskSize * leg.noAsk) : "-"}`}</span>
-                              </div>
-                              <div className="gap-leg-actions">
-                                <a href={normalizeSecureUrl(leg.marketUrl) ?? leg.marketUrl} target="_blank" rel="noreferrer">
-                                  {t.openMarket}
-                                </a>
-                              </div>
-                            </article>
-                          ))}
-                        </div>
-                      </div>
-                    </article>
-                  ))}
-                </div>
-                {gapPage.hasMore || isLoadingGaps ? (
-                  <div className="load-more-sentinel" ref={loadMoreRef}>
-                    {isLoadingGaps ? t.loadingMarkets : t.scrollForMore}
-                  </div>
-                ) : null}
-              </>
-            )}
           </section>
-        ) : (
-          <section className="feed-section">
-            <div className="feed-header">
-              <div>
-                <p className="section-kicker">{feedKicker}</p>
-                <h2>{feedTitle}</h2>
-                {feedSubtitle ? <p className="feed-subtitle">{feedSubtitle}</p> : null}
-              </div>
-              <label className="search-control">
-                <span>{t.search}</span>
-                <input
-                  type="search"
-                  value={searchQuery}
-                  onChange={(event) => setSearchQuery(event.target.value)}
-                  placeholder={t.searchPlaceholder}
-                />
-              </label>
-              <div className="feed-controls">
-                <label className="sort-control">
-                  <span>{t.sort}</span>
-                  <select value={marketSort} onChange={(event) => setMarketSort(event.target.value as MarketSortOption)}>
-                    <option value="recent">{t.sortRecent}</option>
-                    <option value="weighted">{t.sortWeighted}</option>
-                    <option value="buyWeight">{t.sortBuyWeight}</option>
-                    <option value="flow">{t.sortFlow}</option>
-                    <option value="participants">{t.sortParticipants}</option>
-                  </select>
-                </label>
-              </div>
-            </div>
-
-            {isBestTradesPage && marketPage.bestTradeStats ? (
-              <div className="hero-panel auto-trade-stats best-trades-stats">
-                <StatusRow
-                  label={t.bestTradesWinRate}
-                  value={
-                    marketPage.bestTradeStats.winRate === null
-                      ? t.bestTradesWinRatePending
-                      : `${(marketPage.bestTradeStats.winRate * 100).toFixed(1)}%`
-                  }
-                  tone={marketPage.bestTradeStats.winRate !== null && marketPage.bestTradeStats.winRate >= 0.5 ? "green" : "neutral"}
-                />
-                <StatusRow
-                  label={t.bestTradesResolved}
-                  value={marketPage.bestTradeStats.resolvedCount.toString()}
-                  tone="neutral"
-                />
-                <StatusRow
-                  label={t.bestTradesWins}
-                  value={marketPage.bestTradeStats.winCount.toString()}
-                  tone="green"
-                />
-                <StatusRow
-                  label={t.bestTradesLosses}
-                  value={marketPage.bestTradeStats.lossCount.toString()}
-                  tone="blue"
-                />
-                <StatusRow
-                  label={t.bestTradesTracked}
-                  value={marketPage.bestTradeStats.trackedCount.toString()}
-                  tone="neutral"
-                />
-              </div>
-            ) : null}
-
-            {visibleMarkets.length === 0 && !isLoadingMarkets ? (
-              <div className="empty-state">
-                <div className="empty-pulse" />
-                <h3>{t.watchingTape}</h3>
-                <p>{t.emptyState}</p>
-              </div>
-            ) : (
-              <>
-                <div className="signal-grid">
-                  {visibleMarkets.map((market) => {
-                    const signal = market.latestSignal;
-                    const primaryOutcome = market.outcomeWeights[0];
-                    const secondaryOutcome =
-                      market.outcomeWeights[1] ??
-                      inferMissingOutcome(primaryOutcome?.outcome, market.outcomeWeights);
-                    const visibleOutcomeWeights = [primaryOutcome, secondaryOutcome].filter(Boolean) as Array<{
-                      outcome: string;
-                      weight: number;
-                    }>;
-                    const edgeLabel = formatOutcomeEdge(visibleOutcomeWeights, t.even);
-                    const confidenceScore = getSetupQuality(market);
-                    const signalRationale = getSignalRationale(signal, t);
-
-                    return (
-                      <article className="signal-card" key={market.marketSlug}>
-                        <div className="signal-media">
-                          {normalizeSecureUrl(market.marketImage) ? (
-                            <img src={normalizeSecureUrl(market.marketImage)!} alt={market.marketQuestion} />
-                          ) : (
-                            <div className="image-fallback">{signal.outcome[0]}</div>
-                          )}
-                          <div className={`pill pill-${signal.labelTone}`}>{getSignalLabel(signal, t)}</div>
-                        </div>
-
-                        <div className="signal-body">
-                          <div className="signal-topline">
-                            <span>{formatRelativeTime(market.latestTimestamp, t)}</span>
-                            <span>{market.participantCount} {t.traders}</span>
-                          </div>
-
-                          <h3>{market.marketQuestion}</h3>
-                          <p className="signal-thesis">
-                            <strong>{signal.displayName}</strong>
-                            <span className="signal-thesis-trade">
-                              <span>{t.edge}</span>
-                              <span className={`outcome-chip outcome-chip-${getOutcomeTone(edgeLabel)}`}>
-                                {edgeLabel}
-                              </span>
-                            </span>
-                          </p>
-
-                          <p className="signal-rationale">
-                            <span>{t.whySignal}</span>
-                            <strong>{signalRationale}</strong>
-                          </p>
-
-                          <div className="metric-row">
-                            <Metric label={t.marketFlow} value={currencyFormatter.format(market.totalUsd)} />
-                            <Metric label={t.lastPrice} value={signal.averagePrice.toFixed(3)} />
-                            <Metric label={t.confidence} value={`${confidenceScore}/100`} />
-                          </div>
-
-                          <div className="metric-row">
-                            <Metric
-                              label={primaryOutcome?.outcome ?? t.outcome1}
-                              value={(primaryOutcome?.weight ?? 0).toString()}
-                            />
-                            <Metric
-                              label={secondaryOutcome?.outcome ?? t.outcome2}
-                              value={(secondaryOutcome?.weight ?? 0).toString()}
-                            />
-                            <Metric
-                              label={t.avgEntry}
-                              value={market.observedAvgEntry !== null ? market.observedAvgEntry.toFixed(3) : "—"}
-                            />
-                          </div>
-
-                          <div className="signal-actions">
-                            <a href={normalizeSecureUrl(market.marketUrl) ?? market.marketUrl} target="_blank" rel="noreferrer">
-                              {t.openMarket}
-                            </a>
-                            <a href={normalizeSecureUrl(signal.profileUrl) ?? signal.profileUrl} target="_blank" rel="noreferrer">
-                              {t.openWhaleProfile}
-                            </a>
-                            <button
-                              type="button"
-                              className={`watch-button ${market.isWatched ? "watch-button-active" : ""}`}
-                              onClick={() => void toggleSellAlerts(market)}
-                              disabled={alertActionMarketSlug === market.marketSlug}
-                            >
-                              {alertActionMarketSlug === market.marketSlug
-                                ? t.saving
-                                : market.isWatched
-                                  ? t.sellAlertsOn
-                                  : t.getSellAlerts}
-                            </button>
-                          </div>
-                        </div>
-                      </article>
-                    );
-                  })}
-                </div>
-                {marketPage.hasMore || isLoadingMarkets ? (
-                  <div className="load-more-sentinel" ref={loadMoreRef}>
-                    {isLoadingMarkets ? t.loadingMarkets : t.scrollForMore}
-                  </div>
-                ) : null}
-              </>
-            )}
-          </section>
-        )}
+        ) : null}
       </main>
     </div>
   );
 }
 
-function StatusRow({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone: "green" | "blue" | "neutral";
-}) {
+function Stat({ label, value, note }: { label: string; value: string; note: string }) {
+  return <article className="stat-card"><span>{label}</span><strong>{value}</strong><p>{note}</p></article>;
+}
+
+function SectionHeader({ kicker, title, description, action, onAction }: { kicker: string; title: string; description: string; action?: string; onAction?: () => void }) {
   return (
-    <div className="status-row">
-      <span>{label}</span>
-      <span className={`status-value status-${tone}`}>{value}</span>
+    <div className="section-header">
+      <div>
+        <p className="eyebrow">{kicker}</p>
+        <h2>{title}</h2>
+        <p>{description}</p>
+      </div>
+      {action && onAction ? <button type="button" className="secondary-button" onClick={onAction}>{action}</button> : null}
     </div>
+  );
+}
+
+function CompactCard({ market, watchBusy, onToggleWatch }: { market: MarketAggregate; watchBusy: string | null; onToggleWatch: (market: MarketAggregate) => void }) {
+  return (
+    <article className="compact-card">
+      <div className="card-top"><span>{timeAgo(market.latestTimestamp)}</span><span>{money.format(market.totalUsd)}</span></div>
+      <h3>{market.marketQuestion}</h3>
+      <div className="bar-list">{market.outcomeWeights.slice(0, 3).map((entry) => <Bar key={`${market.marketSlug}:${entry.outcome}`} outcome={entry.outcome} value={entry.weight} />)}</div>
+      <div className="card-actions">
+        <span>{market.participantCount} participants</span>
+        <button type="button" className={`watch-button ${market.isWatched ? "watch-button-active" : ""}`} onClick={() => onToggleWatch(market)}>
+          {watchBusy === `${market.marketSlug}:${market.latestSignal.outcome}` ? "Saving..." : market.isWatched ? "Watching" : "Watch"}
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function MarketCard({ market, watchBusy, onToggleWatch }: { market: MarketAggregate; watchBusy: string | null; onToggleWatch: (market: MarketAggregate) => void }) {
+  return (
+    <article className="market-card">
+      <div className="card-top"><span>{timeAgo(market.latestTimestamp)}</span><span>{market.participantCount} wallets</span></div>
+      <h3>{market.marketQuestion}</h3>
+      <p>{market.latestSignal.displayName} leaned <strong>{market.latestSignal.outcome}</strong> with {money.format(market.latestSignal.totalUsd)} in tracked volume.</p>
+      <div className="metric-grid">
+        <Metric label="Quality" value={`${quality(market)}/100`} />
+        <Metric label="Flow" value={money.format(market.totalUsd)} />
+        <Metric label="Avg entry" value={market.observedAvgEntry ? market.observedAvgEntry.toFixed(3) : "—"} />
+        <Metric label="Last" value={market.latestSignal.averagePrice.toFixed(3)} />
+      </div>
+      <div className="bar-list">{market.outcomeWeights.slice(0, 4).map((entry) => <Bar key={`${market.marketSlug}:${entry.outcome}`} outcome={entry.outcome} value={entry.weight} />)}</div>
+      <div className="card-actions">
+        <a href={market.marketUrl} target="_blank" rel="noreferrer">Open market</a>
+        <a href={market.latestSignal.profileUrl} target="_blank" rel="noreferrer">Whale profile</a>
+        <button type="button" className={`watch-button ${market.isWatched ? "watch-button-active" : ""}`} onClick={() => onToggleWatch(market)}>
+          {watchBusy === `${market.marketSlug}:${market.latestSignal.outcome}` ? "Saving..." : market.isWatched ? "Watching" : "Watch"}
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function GapCard({ gap, expanded = false }: { gap: GapPageResponse["items"][number]; expanded?: boolean }) {
+  return (
+    <article className={`gap-card ${expanded ? "gap-card-expanded" : ""}`}>
+      <div className="card-top"><span>{gap.pairLabel}</span><span>{timeAgo(gap.updatedAt)}</span></div>
+      <h3>{gap.eventTitle}</h3>
+      <div className="metric-grid">
+        <Metric label="Combined ask" value={gap.combinedNoAsk !== null ? gap.combinedNoAsk.toFixed(3) : "—"} />
+        <Metric label="Gross edge" value={gap.grossEdge !== null ? `${(gap.grossEdge * 100).toFixed(2)}%` : "—"} />
+        <Metric label="Executable" value={gap.executableStake !== null ? money.format(gap.executableStake) : "—"} />
+      </div>
+      <div className="gap-legs">
+        {gap.legs.map((leg) => <a key={`${gap.id}:${leg.marketSlug}`} className="gap-leg" href={leg.marketUrl} target="_blank" rel="noreferrer"><strong>{leg.marketQuestion}</strong><span>No ask {leg.noAsk !== null ? leg.noAsk.toFixed(3) : "—"}</span></a>)}
+      </div>
+    </article>
+  );
+}
+
+function ResearchCard({ title, body, dashboard }: { title: string; body: string; dashboard: StrategyDashboardResponse | LiveStrategyDashboardResponse | null }) {
+  return (
+    <article className="compact-card">
+      <p className="eyebrow">{title}</p>
+      <h3>{body}</h3>
+      {dashboard ? (
+        <div className="metric-grid">
+          <Metric label="Open" value={String(dashboard.summary.openPositionCount)} />
+          <Metric label="Closed" value={String(dashboard.summary.closedPositionCount)} />
+          <Metric label="Realized" value={money.format(dashboard.summary.realizedUsd)} />
+          <Metric label="Equity" value={money.format(dashboard.summary.totalEquityUsd)} />
+        </div>
+      ) : (
+        <p>No archive data yet.</p>
+      )}
+    </article>
   );
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
+  return <div className="metric-card"><span>{label}</span><strong>{value}</strong></div>;
+}
+
+function Bar({ outcome, value }: { outcome: string; value: number }) {
   return (
-    <div className="metric">
-      <span>{label}</span>
-      <strong>{value}</strong>
+    <div className="bar-row">
+      <div className="bar-copy"><span>{outcome}</span><strong>{value}</strong></div>
+      <div className="bar-track"><div className="bar-fill" style={{ width: `${Math.max(6, Math.min(100, value))}%` }} /></div>
     </div>
   );
 }
 
-function formatTimestamp(value: number | null, pendingLabel: string) {
-  if (!value) {
-    return pendingLabel;
-  }
-
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).format(value);
+function Empty({ title, body, action, onAction }: { title: string; body: string; action?: string; onAction?: () => void }) {
+  return (
+    <div className="empty-card">
+      <div className="empty-orbit" />
+      <h3>{title}</h3>
+      <p>{body}</p>
+      {action && onAction ? <button type="button" className="secondary-button" onClick={onAction}>{action}</button> : null}
+    </div>
+  );
 }
 
-function formatRelativeTime(timestamp: number, t: (typeof copy)["en"]) {
-  const diffMs = Date.now() - timestamp;
-  const diffMinutes = Math.floor(diffMs / 60_000);
-
-  if (diffMinutes < 1) {
-    return t.now;
-  }
-
-  if (diffMinutes < 60) {
-    return `${diffMinutes}${t.minutesAgo}`;
-  }
-
-  return `${Math.floor(diffMinutes / 60)}${t.hoursAgo}`;
+function wrapTrades(label: string, trades?: StrategyTrade[]) {
+  return (trades ?? []).map((trade) => ({ label, trade }));
 }
 
-function formatOutcomeEdge(outcomeWeights: Array<{ outcome: string; weight: number }>, evenLabel: string) {
-  const first = outcomeWeights[0];
-  const second = outcomeWeights[1];
-
-  if (!first) {
-    return evenLabel;
-  }
-
-  if (!second) {
-    return `${first.outcome} +${first.weight}`;
-  }
-
-  if (first.weight === second.weight) {
-    return evenLabel;
-  }
-
-  return `${first.outcome} +${first.weight - second.weight}`;
+function routeLabel(route: Route) {
+  if (route === "/") return "Overview";
+  if (route === "/radar") return "Market radar";
+  if (route === "/whales") return "Smart money";
+  if (route === "/gap-lab") return "Gap lab";
+  if (route === "/playbooks") return "Playbooks";
+  return "Workspace";
 }
 
-function normalizeSecureUrl(value?: string) {
-  if (!value) {
-    return undefined;
-  }
-
-  if (value.startsWith("http://")) {
-    return `https://${value.slice("http://".length)}`;
-  }
-
-  return value;
+function quality(market: MarketAggregate) {
+  const lead = market.outcomeWeights[0]?.weight ?? 0;
+  const freshnessPenalty = Math.min(35, (Date.now() - market.latestTimestamp) / 600000);
+  const priceContext = market.observedAvgEntry ? Math.max(0, 15 - Math.abs(market.latestSignal.averagePrice - market.observedAvgEntry) * 100) : 7;
+  return Math.max(1, Math.min(99, Math.round(market.weightedScore * 0.45 + lead * 0.3 + market.participantCount * 2 + priceContext - freshnessPenalty)));
 }
 
-function getOutcomeTone(outcome: string) {
-  const normalized = outcome.trim().toLowerCase();
-
-  if (positiveOutcomeKeywords.some((keyword) => normalized === keyword || normalized.includes(keyword))) {
-    return "positive";
-  }
-
-  if (negativeOutcomeKeywords.some((keyword) => normalized === keyword || normalized.includes(keyword))) {
-    return "negative";
-  }
-
-  return "neutral";
+function tierLabel(tier: TraderSummary["tier"]) {
+  if (tier === "whale") return "Whale";
+  if (tier === "shark") return "Shark";
+  if (tier === "pro") return "Pro";
+  return "Large trader";
 }
 
-function getSetupQuality(market: MarketAggregate) {
-  const totalWeight = Math.max(0, market.weightedScore);
-  const leadingWeight = Math.max(0, market.outcomeWeights[0]?.weight ?? 0);
-  const dominanceRatio = totalWeight > 0 ? leadingWeight / totalWeight : 0;
-  const participantCount = Math.max(0, market.participantCount);
-  const lastPrice = market.latestSignal.averagePrice;
-  const avgEntry = market.observedAvgEntry;
-  const ageMinutes = Math.max(0, (Date.now() - market.latestTimestamp) / 60_000);
-
-  const weightScore = Math.min(100, (totalWeight / 120) * 100);
-  const dominanceScore = Math.max(0, Math.min(100, ((dominanceRatio - 0.5) / 0.5) * 100));
-  const participantScore = Math.min(100, (participantCount / 10) * 100);
-  const proximityScore =
-    avgEntry && avgEntry > 0
-      ? Math.max(0, 100 - (Math.abs(lastPrice - avgEntry) / avgEntry) * 2000)
-      : 0;
-  const freshnessScore = Math.max(0, 100 - ageMinutes / 14.4);
-  const priceScore =
-    lastPrice < 0.9 ? Math.max(0, Math.min(100, ((0.9 - lastPrice) / 0.9) * 100)) : 0;
-
-  const weightedScore =
-    weightScore * 0.3 +
-    dominanceScore * 0.25 +
-    participantScore * 0.15 +
-    proximityScore * 0.15 +
-    freshnessScore * 0.1 +
-    priceScore * 0.05;
-
-  return Math.max(1, Math.min(99, Math.round(weightedScore)));
-}
-
-function getTierLabel(tier: TraderSummary["tier"], t: (typeof copy)["en"]) {
-  if (tier === "whale") {
-    return t.tierWhale;
-  }
-
-  if (tier === "shark") {
-    return t.tierShark;
-  }
-
-  if (tier === "pro") {
-    return t.tierPro;
-  }
-
-  return t.tierNone;
-}
-
-function getSignalRationale(signal: WhaleSignal, t: (typeof copy)["en"]) {
-  return [
-    getTierLabel(signal.trader.tier, t),
-    currencyFormatter.format(signal.trader.totalPnl),
-    `${signal.trader.tradeCount} trades`,
-    `${currencyFormatter.format(signal.totalUsd)} ${t.rationaleCluster}`,
-  ].join(", ");
-}
-
-function getSignalLabel(signal: WhaleSignal, t: (typeof copy)["en"]) {
-  if (signal.trader.tier === "whale") {
-    return signal.side === "BUY" ? t.whaleBuy : t.whaleSell;
-  }
-
-  if (signal.trader.tier === "shark") {
-    return signal.side === "BUY" ? t.sharkBuy : t.sharkSell;
-  }
-
-  if (signal.trader.tier === "pro") {
-    return signal.side === "BUY" ? t.proBuy : t.proSell;
-  }
-
-  return signal.label;
-}
-
-function inferMissingOutcome(
-  primaryOutcome: string | undefined,
-  currentOutcomes: Array<{ outcome: string; weight: number }>,
-) {
-  if (!primaryOutcome) {
-    return undefined;
-  }
-
-  const normalized = primaryOutcome.trim().toLowerCase();
-  const opposite = outcomeOpposites[normalized];
-  if (!opposite) {
-    return undefined;
-  }
-
-  const alreadyExists = currentOutcomes.some((entry) => entry.outcome.trim().toLowerCase() === opposite.toLowerCase());
-  if (alreadyExists) {
-    return undefined;
-  }
-
-  return { outcome: opposite, weight: 0 };
+function timeAgo(timestamp: number) {
+  const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60000));
+  if (minutes < 1) return "now";
+  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 1440) return `${Math.floor(minutes / 60)}h ago`;
+  return `${Math.floor(minutes / 1440)}d ago`;
 }
 
 export default App;
