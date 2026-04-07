@@ -4,17 +4,22 @@ import { MongoClient } from "mongodb";
 import { Wallet } from "@ethersproject/wallet";
 import { Contract } from "@ethersproject/contracts";
 import { JsonRpcProvider } from "@ethersproject/providers";
-import { getContractConfig } from "@polymarket/clob-client";
+import {
+  ClobClient,
+  SignatureType,
+  getContractConfig,
+} from "@polymarket/clob-client";
 
 const require = createRequire(import.meta.url);
 const { RelayClient, RelayerTxType } = require("@polymarket/builder-relayer-client");
 const { BuilderConfig } = require("@polymarket/builder-signing-sdk");
 
 const DATA_API_URL = "https://data-api.polymarket.com";
+const CLOB_API_URL = "https://clob.polymarket.com";
 const ZERO_BYTES32 = `0x${"0".repeat(64)}`;
 const ALGORITHM = "aes-256-gcm";
 const POLYGON_CHAIN_ID = 137;
-const DEFAULT_POLYGON_RPC_URL = "https://polygon-rpc.com";
+const DEFAULT_POLYGON_RPC_URL = "https://polygon-bor-rpc.publicnode.com";
 const DEFAULT_RELAYER_URLS = [
   "https://relayer-v2.polymarket.com",
   "https://relayer.polymarket.com",
@@ -28,6 +33,7 @@ const parseArgs = (argv) => {
     username: null,
     execute: false,
     minShares: 0.1,
+    limit: null,
   };
 
   for (let index = 2; index < argv.length; index += 1) {
@@ -47,6 +53,15 @@ const parseArgs = (argv) => {
       const parsed = Number(argv[index + 1]);
       if (Number.isFinite(parsed) && parsed >= 0) {
         args.minShares = parsed;
+      }
+      index += 1;
+      continue;
+    }
+
+    if (current === "--limit" && argv[index + 1]) {
+      const parsed = Number(argv[index + 1]);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        args.limit = Math.floor(parsed);
       }
       index += 1;
     }
@@ -138,6 +153,12 @@ const createBuilderConfig = () => {
     },
   });
 };
+
+const createTradingApiCreds = (settings, tradingEncryptionSecret) => ({
+  key: decryptSecret(settings.encryptedApiKey, tradingEncryptionSecret),
+  secret: decryptSecret(settings.encryptedApiSecret, tradingEncryptionSecret),
+  passphrase: decryptSecret(settings.encryptedApiPassphrase, tradingEncryptionSecret),
+});
 
 const createRedeemTransactions = (contractConfig, group) => ([{
   to: contractConfig.conditionalTokens,
@@ -266,6 +287,52 @@ const createWalletSigner = (settings, tradingEncryptionSecret, provider) => {
   return new Wallet(privateKey, provider);
 };
 
+const createTradingAuthClient = (settings, signer, tradingEncryptionSecret) => {
+  const signatureType =
+    settings.tradingSignatureType === "POLY_PROXY" ? SignatureType.POLY_PROXY : SignatureType.EOA;
+
+  return new ClobClient(
+    CLOB_API_URL,
+    POLYGON_CHAIN_ID,
+    signer,
+    createTradingApiCreds(settings, tradingEncryptionSecret),
+    signatureType,
+    settings.tradingWalletAddress ?? undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    true,
+  );
+};
+
+const ensureBuilderConfigForUser = async (settings, signer, tradingEncryptionSecret, fallbackBuilderConfig) => {
+  if (fallbackBuilderConfig) {
+    return {
+      builderConfig: fallbackBuilderConfig,
+      source: "env",
+    };
+  }
+
+  if (!settings.encryptedApiKey || !settings.encryptedApiSecret || !settings.encryptedApiPassphrase) {
+    return {
+      builderConfig: null,
+      source: "missing-trading-api-creds",
+    };
+  }
+
+  const authClient = createTradingAuthClient(settings, signer, tradingEncryptionSecret);
+  const created = await authClient.createBuilderApiKey();
+  return {
+    builderConfig: new BuilderConfig({
+      localBuilderCreds: created,
+    }),
+    source: "generated",
+  };
+};
+
 const executeDirectRedeem = async (contractConfig, signer, group) => {
   const contract = new Contract(
     contractConfig.conditionalTokens,
@@ -328,7 +395,7 @@ const executeProxyRedeem = async (contractConfig, signer, group, relayerUrls, bu
 };
 
 const main = async () => {
-  const { username, execute, minShares } = parseArgs(process.argv);
+  const { username, execute, minShares, limit } = parseArgs(process.argv);
   const mongoUri = process.env.MONGO_URI || "mongodb://127.0.0.1:27017";
   const dbName = process.env.MONGO_DB_NAME || "polymarket_signals";
   const tradingEncryptionSecret =
@@ -358,6 +425,9 @@ const main = async () => {
           tradingWalletAddress: 1,
           tradingSignatureType: 1,
           encryptedPrivateKey: 1,
+          encryptedApiKey: 1,
+          encryptedApiSecret: 1,
+          encryptedApiPassphrase: 1,
         },
       },
     ).toArray();
@@ -398,6 +468,7 @@ const main = async () => {
       );
 
       const { groups, skipped } = buildRedeemPlan(redeemablePositions, marketCatalogBySlug, minShares);
+      const scopedGroups = limit ? groups.slice(0, limit) : groups;
       const summary = {
         ok: true,
         username: normalizedUsername,
@@ -406,31 +477,46 @@ const main = async () => {
         execute,
         redeemablePositionCount: redeemablePositions.length,
         redeemableGroupCount: groups.length,
+        redeemableGroupExecutionCount: scopedGroups.length,
         skippedCount: skipped.length,
-        groups,
+        groups: scopedGroups,
         skipped,
         relayerUrls,
         builderAuthConfigured: Boolean(builderConfig),
+        builderAuthSource: builderConfig ? "env" : "none",
         executed: [],
         failures: [],
       };
 
-      if (execute && groups.length > 0) {
+      if (execute && scopedGroups.length > 0) {
         try {
           const signer = createWalletSigner(settings, tradingEncryptionSecret, provider);
           const signerAddress = await signer.getAddress();
           const signatureType = String(settings.tradingSignatureType || "EOA");
+          let effectiveBuilderConfig = builderConfig;
 
-          if (signatureType === "POLY_PROXY" && !builderConfig) {
+          if (signatureType === "POLY_PROXY") {
+            const resolvedBuilder = await ensureBuilderConfigForUser(
+              settings,
+              signer,
+              tradingEncryptionSecret,
+              builderConfig,
+            );
+            effectiveBuilderConfig = resolvedBuilder.builderConfig;
+            summary.builderAuthConfigured = Boolean(effectiveBuilderConfig);
+            summary.builderAuthSource = resolvedBuilder.source;
+          }
+
+          if (signatureType === "POLY_PROXY" && !effectiveBuilderConfig) {
             throw new Error(
-              "POLY_PROXY redemption requires builder relayer credentials. Set POLYMARKET_BUILDER_API_KEY, POLYMARKET_BUILDER_SECRET, and POLYMARKET_BUILDER_PASSPHRASE in the environment.",
+              "POLY_PROXY redemption requires builder relayer credentials and automatic builder-key creation was unavailable.",
             );
           }
 
-          for (const group of groups) {
+          for (const group of scopedGroups) {
             try {
               const execution = signatureType === "POLY_PROXY"
-                ? await executeProxyRedeem(contractConfig, signer, group, relayerUrls, builderConfig)
+                ? await executeProxyRedeem(contractConfig, signer, group, relayerUrls, effectiveBuilderConfig)
                 : await executeDirectRedeem(contractConfig, signer, group);
               summary.executed.push({
                 conditionId: group.conditionId,
@@ -467,6 +553,7 @@ const main = async () => {
       execute,
       usernameScope: username ?? "all_wallet_users",
       minShares,
+      limit,
       polygonRpcUrl,
       usersProcessed: summaries.length,
       summaries,
