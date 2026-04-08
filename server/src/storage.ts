@@ -960,6 +960,30 @@ export class SignalStorage {
     );
   }
 
+  async disableAllAutoTrading(): Promise<number> {
+    const result = await this.userWebhookCollection().updateMany(
+      {
+        $or: [
+          { autoTradeEnabled: true },
+          { liveTradeEnabled: true },
+          { edgeSwingPaperTradingEnabled: true },
+          { edgeSwingLiveTradingEnabled: true },
+        ],
+      },
+      {
+        $set: {
+          autoTradeEnabled: false,
+          liveTradeEnabled: false,
+          edgeSwingPaperTradingEnabled: false,
+          edgeSwingLiveTradingEnabled: false,
+          updatedAt: new Date(),
+        },
+      },
+    );
+
+    return result.modifiedCount;
+  }
+
   async getUserSettings(
     username: string,
   ): Promise<{

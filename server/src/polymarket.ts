@@ -468,8 +468,10 @@ export class PolymarketSignalService {
 
   async startAppExecution(): Promise<void> {
     await this.storage.connect();
+    const disabledUserCount = await this.storage.disableAllAutoTrading();
     await this.loadStoredMarkets();
     this.logExecutionAction("service", "app_execution_started", {
+      disabledUserCount,
       activeAssetCount: this.activeAssetIds.size,
       marketCount: new Set(Array.from(this.marketsByAssetId.values(), (market) => market.slug)).size,
     });
@@ -781,8 +783,8 @@ export class PolymarketSignalService {
       username: normalizedUsername,
       webhookUrl: settings.webhookUrl ?? "",
       monitoredWallet: settings.monitoredWallet ?? "",
-      paperTradingEnabled: settings.autoTradeEnabled ?? false,
-      liveTradingEnabled: settings.liveTradeEnabled ?? false,
+      paperTradingEnabled: false,
+      liveTradingEnabled: false,
       startingBalanceUsd: settings.startingBalanceUsd ?? 1_000,
       currentBalanceUsd: await this.calculatePaperCashBalance(
         normalizedUsername,
@@ -790,8 +792,8 @@ export class PolymarketSignalService {
         "best_trades",
       ),
       riskPercent: settings.riskPercent ?? 5,
-      edgeSwingPaperTradingEnabled: settings.edgeSwingPaperTradingEnabled ?? false,
-      edgeSwingLiveTradingEnabled: settings.edgeSwingLiveTradingEnabled ?? false,
+      edgeSwingPaperTradingEnabled: false,
+      edgeSwingLiveTradingEnabled: false,
       edgeSwingStartingBalanceUsd: settings.edgeSwingStartingBalanceUsd ?? 1_000,
       edgeSwingCurrentBalanceUsd: await this.calculatePaperCashBalance(
         normalizedUsername,
@@ -807,15 +809,8 @@ export class PolymarketSignalService {
           settings.encryptedApiSecret &&
           settings.encryptedApiPassphrase,
       ),
-      liveTradingReady: Boolean(
-        settings.liveTradeEnabled &&
-          settings.tradingWalletAddress &&
-          settings.encryptedPrivateKey &&
-          settings.encryptedApiKey &&
-          settings.encryptedApiSecret &&
-          settings.encryptedApiPassphrase,
-      ),
-      liveTradingError: this.getLiveTradingIssue(normalizedUsername),
+      liveTradingReady: false,
+      liveTradingError: null,
       watches: watchedMarkets.map((watch) => {
         const market = activeMarketsBySlug.get(watch.marketSlug);
         return {
@@ -930,6 +925,10 @@ export class PolymarketSignalService {
       clearTradingCredentials: boolean;
     },
   ): Promise<UserProfileResponse> {
+    updates.paperTradingEnabled = false;
+    updates.liveTradingEnabled = false;
+    updates.edgeSwingPaperTradingEnabled = false;
+    updates.edgeSwingLiveTradingEnabled = false;
     const normalizedUsername = username.trim();
     const normalizedWebhookUrl = updates.webhookUrl.trim();
     const normalizedMonitoredWallet = updates.monitoredWallet.trim();
@@ -4458,18 +4457,18 @@ export class PolymarketSignalService {
     settings: Awaited<ReturnType<SignalStorage["getUserSettings"]>>,
     strategyKey: StrategyKey,
   ): boolean {
-    return strategyKey === "edge_swing"
-      ? settings.edgeSwingPaperTradingEnabled ?? false
-      : settings.autoTradeEnabled ?? false;
+    void settings;
+    void strategyKey;
+    return false;
   }
 
   private isLiveStrategyEnabled(
     settings: Awaited<ReturnType<SignalStorage["getUserSettings"]>>,
     strategyKey: StrategyKey,
   ): boolean {
-    return strategyKey === "edge_swing"
-      ? settings.edgeSwingLiveTradingEnabled ?? false
-      : settings.liveTradeEnabled ?? false;
+    void settings;
+    void strategyKey;
+    return false;
   }
 
   private async getPaperEntryPrice(
