@@ -336,27 +336,45 @@ function App() {
               <div className="subpanel">
                 <h3>Top conviction</h3>
                 <div className="stack">
-                  {topMarkets.map((market) => (
-                    <MarketRow key={market.marketSlug} market={market} watchBusy={watchBusy} onToggleWatch={toggleWatch} />
-                  ))}
+                  {topMarkets.length ? (
+                    topMarkets.map((market) => (
+                      <MarketRow key={market.marketSlug} market={market} watchBusy={watchBusy} onToggleWatch={toggleWatch} />
+                    ))
+                  ) : (
+                    <div className="empty-state">
+                      <p>No conviction signals yet.</p>
+                    </div>
+                  )}
                 </div>
               </div>
 
               <div className="subpanel">
                 <h3>Top gaps</h3>
                 <div className="stack">
-                  {topGaps.map((gap) => (
-                    <GapRow key={gap.id} gap={gap} />
-                  ))}
+                  {topGaps.length ? (
+                    topGaps.map((gap) => (
+                      <GapRow key={gap.id} gap={gap} />
+                    ))
+                  ) : (
+                    <div className="empty-state">
+                      <p>No active gap setups right now.</p>
+                    </div>
+                  )}
                 </div>
               </div>
 
               <div className="subpanel">
                 <h3>Top traders</h3>
                 <div className="stack">
-                  {topTraders.map((trader, index) => (
-                    <TraderRow key={trader.wallet} trader={trader} index={index} />
-                  ))}
+                  {topTraders.length ? (
+                    topTraders.map((trader, index) => (
+                      <TraderRow key={trader.wallet} trader={trader} index={index} />
+                    ))
+                  ) : (
+                    <div className="empty-state">
+                      <p>No trader leaderboard data yet.</p>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

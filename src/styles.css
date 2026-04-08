@@ -269,26 +269,35 @@ select {
 .subpanel {
   display: grid;
   gap: 12px;
+  align-content: start;
+  min-width: 0;
 }
 
 .row {
   padding: 14px;
   display: grid;
   gap: 10px;
+  min-width: 0;
 }
 
 .row-market {
-  grid-template-columns: minmax(0, 1.6fr) auto auto;
-  align-items: center;
+  grid-template-columns: 1fr;
 }
 
 .row-gap {
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: 1fr;
 }
 
 .row-main strong {
   display: block;
   line-height: 1.35;
+  font-size: 1.02rem;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.row-main {
+  min-width: 0;
 }
 
 .row-titleline {
@@ -339,14 +348,17 @@ select {
 }
 
 .row-meta {
-  display: grid;
-  gap: 6px;
-  justify-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  justify-items: start;
   font-family: "IBM Plex Mono", monospace;
+  min-width: 0;
 }
 
 .row-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -405,11 +417,6 @@ select {
   .overview-grid,
   .playbook-grid,
   .workspace-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .row-market,
-  .row-gap {
     grid-template-columns: 1fr;
   }
 
