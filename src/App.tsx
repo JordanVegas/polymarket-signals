@@ -12,6 +12,7 @@ import type {
 
 type Route = "/" | "/radar" | "/gaps" | "/playbooks" | "/workspace";
 type ProfileState = "loading" | "authorized" | "unauthorized";
+type Tone = "neutral" | "cyan" | "blue" | "green" | "yellow";
 
 const money = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -179,7 +180,9 @@ function App() {
 
   const markets = marketPage?.items ?? [];
   const topMarkets = markets.slice(0, 5);
-  const topGaps = [...(gapPage?.items ?? [])].sort((a, b) => (b.grossEdge ?? -1) - (a.grossEdge ?? -1)).slice(0, 6);
+  const topGaps = [...(gapPage?.items ?? [])]
+    .sort((a, b) => (b.grossEdge ?? -1) - (a.grossEdge ?? -1))
+    .slice(0, 6);
   const topTraders = useMemo(() => {
     const traderMap = new Map<string, TraderSummary>();
     for (const market of markets) {
@@ -283,6 +286,8 @@ function App() {
 
   return (
     <div className="app-shell">
+      <div className="ambient ambient-left" />
+      <div className="ambient ambient-right" />
       <div className="page">
         <header className="topbar">
           <div>
@@ -304,7 +309,7 @@ function App() {
         </header>
 
         <section className="summary-grid">
-          <MetricCard label="Tracked markets" value={String(snapshot?.status.marketCount ?? "—")} />
+          <MetricCard label="Tracked markets" value={String(snapshot?.status.marketCount ?? "—")} tone="blue" />
           <MetricCard
             label="WS coverage"
             value={
@@ -312,9 +317,10 @@ function App() {
                 ? `${snapshot.status.websocketAssetsSeenRecentlyCount}/${snapshot.status.websocketSubscribedAssetCount}`
                 : "—"
             }
+            tone="cyan"
           />
-          <MetricCard label="Tracked traders" value={String(snapshot?.status.trackedTraderCount ?? "—")} />
-          <MetricCard label="Recent errors" value={String(snapshot?.status.recentErrorsLast10Minutes ?? "—")} />
+          <MetricCard label="Tracked traders" value={String(snapshot?.status.trackedTraderCount ?? "—")} tone="green" />
+          <MetricCard label="Recent errors" value={String(snapshot?.status.recentErrorsLast10Minutes ?? "—")} tone="yellow" />
         </section>
 
         {route === "/" ? (
@@ -495,11 +501,11 @@ function App() {
                     {profile?.watches?.length ? (
                       profile.watches.map((watch) => (
                         <article className="row" key={`${watch.marketSlug}:${watch.outcome}`}>
-                          <div>
+                          <div className="row-main">
                             <strong>{watch.marketQuestion}</strong>
                             <p>{watch.outcome}</p>
                           </div>
-                          <a href={watch.marketUrl} target="_blank" rel="noreferrer">
+                          <a className="row-link" href={watch.marketUrl} target="_blank" rel="noreferrer">
                             Open
                           </a>
                         </article>
@@ -520,9 +526,17 @@ function App() {
   );
 }
 
-function MetricCard({ label, value }: { label: string; value: string }) {
+function MetricCard({
+  label,
+  value,
+  tone = "neutral",
+}: {
+  label: string;
+  value: string;
+  tone?: Tone;
+}) {
   return (
-    <article className="metric-card">
+    <article className={`metric-card metric-card-${tone}`}>
       <span>{label}</span>
       <strong>{value}</strong>
     </article>
@@ -541,6 +555,14 @@ function MarketRow({
   return (
     <article className="row row-market">
       <div className="row-main">
+        <div className="row-titleline">
+          <span className={`signal-pill signal-pill-${tierTone(market.latestSignal.trader.tier)}`}>
+            {tierLabel(market.latestSignal.trader.tier)}
+          </span>
+          <span className={`signal-pill signal-pill-${market.isWatched ? "green" : "blue"}`}>
+            {market.isWatched ? "Watching" : "Radar"}
+          </span>
+        </div>
         <strong>{market.marketQuestion}</strong>
         <p>
           {market.latestSignal.displayName} leaned {market.latestSignal.outcome} with{" "}
@@ -578,6 +600,12 @@ function GapRow({
   return (
     <article className="row row-gap">
       <div className="row-main">
+        <div className="row-titleline">
+          <span className="signal-pill signal-pill-yellow">{gap.pairLabel}</span>
+          <span className={`signal-pill ${gap.grossEdge !== null && gap.grossEdge > 0 ? "signal-pill-green" : "signal-pill-neutral"}`}>
+            {gap.grossEdge !== null ? `${(gap.grossEdge * 100).toFixed(2)}%` : "No edge"}
+          </span>
+        </div>
         <strong>{gap.eventTitle}</strong>
         <p>{gap.pairLabel}</p>
       </div>
@@ -603,6 +631,9 @@ function TraderRow({ trader, index }: { trader: TraderSummary; index: number }) 
   return (
     <article className="row">
       <div className="row-main">
+        <div className="row-titleline">
+          <span className={`signal-pill signal-pill-${tierTone(trader.tier)}`}>{tierLabel(trader.tier)}</span>
+        </div>
         <strong>
           {String(index + 1).padStart(2, "0")} {trader.displayName}
         </strong>
@@ -628,10 +659,10 @@ function PlaybookCard({
       <h3>{title}</h3>
       {dashboard ? (
         <div className="summary-grid summary-grid-compact">
-          <MetricCard label="Open" value={String(dashboard.summary.openPositionCount)} />
-          <MetricCard label="Closed" value={String(dashboard.summary.closedPositionCount)} />
-          <MetricCard label="Realized" value={money.format(dashboard.summary.realizedUsd)} />
-          <MetricCard label="Equity" value={money.format(dashboard.summary.totalEquityUsd)} />
+          <MetricCard label="Open" value={String(dashboard.summary.openPositionCount)} tone="blue" />
+          <MetricCard label="Closed" value={String(dashboard.summary.closedPositionCount)} tone="cyan" />
+          <MetricCard label="Realized" value={money.format(dashboard.summary.realizedUsd)} tone="green" />
+          <MetricCard label="Equity" value={money.format(dashboard.summary.totalEquityUsd)} tone="yellow" />
         </div>
       ) : (
         <div className="empty-state">
@@ -656,6 +687,19 @@ function tierLabel(tier: TraderSummary["tier"]) {
   }
 
   return "Large trader";
+}
+
+function tierTone(tier: TraderSummary["tier"]): Tone {
+  if (tier === "whale") {
+    return "cyan";
+  }
+  if (tier === "shark") {
+    return "blue";
+  }
+  if (tier === "pro") {
+    return "yellow";
+  }
+  return "neutral";
 }
 
 function timeAgo(timestamp: number) {
