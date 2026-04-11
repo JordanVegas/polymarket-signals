@@ -38,10 +38,73 @@ const withDatabaseName = (mongoUri: string, databaseName: string): string => {
   }
 };
 
-const defaultMongoUri = process.env.MONGO_URI || "mongodb://127.0.0.1:27017";
 const configFilePath = fileURLToPath(import.meta.url);
 const configDir = path.dirname(configFilePath);
-const appRootDir = path.resolve(configDir, "..", "..");
+const resolveAppRootDir = (currentDir: string): string => {
+  const candidates = [
+    path.resolve(currentDir, "..", ".."),
+    path.resolve(currentDir, "..", "..", ".."),
+    path.resolve(currentDir, "..", "..", "..", ".."),
+    path.resolve(currentDir, "..", "..", "..", "..", ".."),
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(path.join(candidate, "package.json"))) {
+      return candidate;
+    }
+  }
+
+  return candidates[0];
+};
+
+const appRootDir = resolveAppRootDir(configDir);
+const fileEnv: Record<string, string> = {};
+
+const loadEnvFile = (filePath: string) => {
+  if (!fs.existsSync(filePath)) {
+    return;
+  }
+
+  const contents = fs.readFileSync(filePath, "utf8");
+  for (const rawLine of contents.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) {
+      continue;
+    }
+
+    const separator = line.indexOf("=");
+    if (separator === -1) {
+      continue;
+    }
+
+    const key = line.slice(0, separator).trim();
+    const value = line.slice(separator + 1).trim();
+    if (key) {
+      fileEnv[key] = value;
+      if (process.env[key] === undefined || !String(process.env[key]).trim()) {
+        process.env[key] = value;
+      }
+    }
+  }
+};
+
+loadEnvFile(path.resolve(appRootDir, ".env"));
+loadEnvFile(path.resolve(appRootDir, ".env.market-intelligence"));
+loadEnvFile(path.resolve(appRootDir, ".env.app-execution"));
+
+const envValue = (key: string): string | undefined => {
+  const fileValue = fileEnv[key];
+  if (typeof fileValue === "string" && fileValue.trim()) {
+    return fileValue;
+  }
+  const runtime = process.env[key];
+  if (typeof runtime === "string" && runtime.trim()) {
+    return runtime;
+  }
+  return undefined;
+};
+
+const defaultMongoUri = envValue("MONGO_URI") || "mongodb://127.0.0.1:27017";
 
 const normalizeProxyUrl = (value: string): string => {
   const trimmed = value.trim();
@@ -57,8 +120,8 @@ const normalizeProxyUrl = (value: string): string => {
 };
 
 const parseProxyUrls = (): string[] => {
-  const inline = process.env.POLYMARKET_PROXY_URLS || process.env.API_PROXY_URLS || "";
-  const filePath = process.env.POLYMARKET_PROXY_FILE || process.env.API_PROXY_FILE || "";
+  const inline = envValue("POLYMARKET_PROXY_URLS") || envValue("API_PROXY_URLS") || "";
+  const filePath = envValue("POLYMARKET_PROXY_FILE") || envValue("API_PROXY_FILE") || "";
 
   const urls = new Set<string>();
 
@@ -79,7 +142,7 @@ const parseProxyUrls = (): string[] => {
     }
   }
 
-  const single = normalizeProxyUrl(process.env.POLYMARKET_PROXY_URL || process.env.API_PROXY_URL || "");
+  const single = normalizeProxyUrl(envValue("POLYMARKET_PROXY_URL") || envValue("API_PROXY_URL") || "");
   if (single) {
     urls.add(single);
   }
@@ -88,55 +151,58 @@ const parseProxyUrls = (): string[] => {
 };
 
 const proxyEnabled = parseBoolean(
-  process.env.POLYMARKET_PROXY_ENABLED ?? process.env.API_PROXY_ENABLED,
+  envValue("POLYMARKET_PROXY_ENABLED") ?? envValue("API_PROXY_ENABLED"),
   true,
 );
 
 export const config = {
-  port: parseNumber(process.env.PORT, 3001),
-  marketIntelligencePort: parseNumber(process.env.MARKET_INTELLIGENCE_PORT, 3002),
+  port: parseNumber(process.env.PORT || envValue("PORT"), 3001),
+  marketIntelligencePort: parseNumber(
+    process.env.MARKET_INTELLIGENCE_PORT || envValue("MARKET_INTELLIGENCE_PORT"),
+    3002,
+  ),
   mongoUri: defaultMongoUri,
-  mongoDbName: process.env.MONGO_DB_NAME || "polymarket_signals",
-  mongoSignalsCollection: process.env.MONGO_SIGNALS_COLLECTION || "signals",
-  authMongoUri: process.env.AUTH_MONGO_URI || withDatabaseName(defaultMongoUri, "authentication"),
-  webSessionSecret: process.env.WEB_SESSION_SECRET || "change-me",
+  mongoDbName: envValue("MONGO_DB_NAME") || "polymarket_signals",
+  mongoSignalsCollection: envValue("MONGO_SIGNALS_COLLECTION") || "signals",
+  authMongoUri: envValue("AUTH_MONGO_URI") || withDatabaseName(defaultMongoUri, "authentication"),
+  webSessionSecret: envValue("WEB_SESSION_SECRET") || "change-me",
   tradingEncryptionSecret:
-    process.env.TRADING_ENCRYPTION_SECRET || process.env.WEB_SESSION_SECRET || "change-me",
-  webSessionCookieName: process.env.WEB_SESSION_COOKIE_NAME || "tuf_session",
-  webCookieDomain: process.env.WEB_COOKIE_DOMAIN || "",
-  minSignalClusterUsd: parseNumber(process.env.MIN_SIGNAL_CLUSTER_USD, 1_000),
-  minWsTradeFetchUsd: parseNumber(process.env.MIN_WS_TRADE_FETCH_USD, 10),
-  tradeWindowMs: parseNumber(process.env.TRADE_WINDOW_MS, 60_000),
-  marketRefreshMs: parseNumber(process.env.MARKET_REFRESH_MS, 10 * 60_000),
-  tradePollMs: parseNumber(process.env.TRADE_POLL_MS, 2_500),
-  trackedTraderPollConcurrency: parseNumber(process.env.TRACKED_TRADER_POLL_CONCURRENCY, 3),
+    envValue("TRADING_ENCRYPTION_SECRET") || envValue("WEB_SESSION_SECRET") || "change-me",
+  webSessionCookieName: envValue("WEB_SESSION_COOKIE_NAME") || "tuf_session",
+  webCookieDomain: envValue("WEB_COOKIE_DOMAIN") || "",
+  minSignalClusterUsd: parseNumber(envValue("MIN_SIGNAL_CLUSTER_USD"), 1_000),
+  minWsTradeFetchUsd: parseNumber(envValue("MIN_WS_TRADE_FETCH_USD"), 10),
+  tradeWindowMs: parseNumber(envValue("TRADE_WINDOW_MS"), 60_000),
+  marketRefreshMs: parseNumber(envValue("MARKET_REFRESH_MS"), 10 * 60_000),
+  tradePollMs: parseNumber(envValue("TRADE_POLL_MS"), 2_500),
+  trackedTraderPollConcurrency: parseNumber(envValue("TRACKED_TRADER_POLL_CONCURRENCY"), 3),
   apiProxyUrls: proxyEnabled ? parseProxyUrls() : [],
-  recentCatchupLookbackMinutes: parseNumber(process.env.RECENT_CATCHUP_LOOKBACK_MINUTES, 30),
-  recentCatchupMaxOffset: parseNumber(process.env.RECENT_CATCHUP_MAX_OFFSET, 3_000),
-  historicalFetchEnabled: parseBoolean(process.env.HISTORICAL_FETCH_ENABLED, false),
+  recentCatchupLookbackMinutes: parseNumber(envValue("RECENT_CATCHUP_LOOKBACK_MINUTES"), 30),
+  recentCatchupMaxOffset: parseNumber(envValue("RECENT_CATCHUP_MAX_OFFSET"), 3_000),
+  historicalFetchEnabled: parseBoolean(envValue("HISTORICAL_FETCH_ENABLED"), false),
   startupHistoricalBackfillEnabled: parseBoolean(
-    process.env.STARTUP_HISTORICAL_BACKFILL_ENABLED,
+    envValue("STARTUP_HISTORICAL_BACKFILL_ENABLED"),
     false,
   ),
   marketHistoryCatchupEnabled: parseBoolean(
-    process.env.MARKET_HISTORY_CATCHUP_ENABLED,
+    envValue("MARKET_HISTORY_CATCHUP_ENABLED"),
     false,
   ),
   traderHistoryCatchupEnabled: parseBoolean(
-    process.env.TRADER_HISTORY_CATCHUP_ENABLED,
+    envValue("TRADER_HISTORY_CATCHUP_ENABLED"),
     false,
   ),
-  historicalBackfillLimit: parseNumber(process.env.HISTORICAL_BACKFILL_LIMIT, 2_000),
+  historicalBackfillLimit: parseNumber(envValue("HISTORICAL_BACKFILL_LIMIT"), 2_000),
   historicalBackfillLookbackHours: parseNumber(
-    process.env.HISTORICAL_BACKFILL_LOOKBACK_HOURS,
+    envValue("HISTORICAL_BACKFILL_LOOKBACK_HOURS"),
     168,
   ),
   liveExecutionErrorLogPath:
-    process.env.LIVE_EXECUTION_ERROR_LOG_PATH
-      ? path.resolve(appRootDir, process.env.LIVE_EXECUTION_ERROR_LOG_PATH)
+    envValue("LIVE_EXECUTION_ERROR_LOG_PATH")
+      ? path.resolve(appRootDir, envValue("LIVE_EXECUTION_ERROR_LOG_PATH") as string)
       : path.resolve(appRootDir, "logs", "live-execution-errors.log"),
   appExecutionActionLogPath:
-    process.env.APP_EXECUTION_ACTION_LOG_PATH
-      ? path.resolve(appRootDir, process.env.APP_EXECUTION_ACTION_LOG_PATH)
+    envValue("APP_EXECUTION_ACTION_LOG_PATH")
+      ? path.resolve(appRootDir, envValue("APP_EXECUTION_ACTION_LOG_PATH") as string)
       : path.resolve(appRootDir, "logs", "app-execution-actions.log"),
 };

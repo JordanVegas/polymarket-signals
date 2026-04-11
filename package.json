@@ -4,17 +4,17 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently \"npm:dev:market-intelligence\" \"npm:dev:app-execution\" \"npm:dev:client\"",
+    "dev": "concurrently \"npm:dev:client\" \"npm:dev:market-intelligence\" \"npm:dev:app-execution\"",
     "dev:client": "vite",
     "dev:market-intelligence": "tsx watch server/src/market-intelligence/index.ts",
     "dev:app-execution": "tsx watch server/src/app-execution/index.ts",
     "build": "npm run build:client && npm run build:server",
-    "build:client": "vite build",
+    "build:client": "vite build --outDir dist/client",
     "build:server": "tsc -p tsconfig.server.json",
-    "preview": "vite preview",
+    "preview": "npm run start:app-execution",
     "start": "concurrently \"npm:start:market-intelligence\" \"npm:start:app-execution\"",
-    "start:market-intelligence": "node dist/server/market-intelligence/index.js",
-    "start:app-execution": "node dist/server/app-execution/index.js"
+    "start:market-intelligence": "node dist/server/server/src/market-intelligence/index.js",
+    "start:app-execution": "node dist/server/server/src/app-execution/index.js"
   },
   "dependencies": {
     "@ethersproject/contracts": "^5.8.0",

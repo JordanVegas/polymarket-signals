@@ -4,34 +4,42 @@ import { createServer } from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { WebSocketServer } from "ws";
-import { SharedAuthService } from "../auth.js";
 import { config } from "../config.js";
-import { AppExecutionService } from "./service.js";
+import { MoneyRadarService } from "../money-radar.js";
 
 const app = express();
-const auth = new SharedAuthService();
+const moneyRadar = new MoneyRadarService();
+const authCookieName = config.webSessionCookieName;
+
 app.use(cors());
-app.set("trust proxy", 1);
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: false }));
-app.use((_request, response, next) => {
-  response.setHeader(
-    "Content-Security-Policy",
-    "default-src 'self'; connect-src 'self' https: wss:; img-src 'self' https: data: blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; script-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; upgrade-insecure-requests; block-all-mixed-content",
-  );
-  next();
-});
-app.use(auth.createSessionMiddleware());
-app.use(auth.attachSessionUser());
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-function resolveClientDistDir(currentDir: string): string | null {
+const resolvePublicDir = (currentDir: string): string => {
   const candidates = [
-    path.resolve(currentDir, "../../../dist"),
-    path.resolve(currentDir, "../../../../"),
+    path.resolve(currentDir, "../../../public"),
+    path.resolve(currentDir, "../../../../public"),
+    path.resolve(currentDir, "../../../../../public"),
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(path.join(candidate, "index.html"))) {
+      return candidate;
+    }
+  }
+
+  return candidates[0];
+};
+
+const publicDir = resolvePublicDir(__dirname);
+const resolveClientDistDir = (currentDir: string): string | null => {
+  const candidates = [
+    path.resolve(currentDir, "../../../dist/client"),
+    path.resolve(currentDir, "../../../../dist/client"),
+    path.resolve(currentDir, "../../../../../dist/client"),
   ];
 
   for (const candidate of candidates) {
@@ -41,13 +49,52 @@ function resolveClientDistDir(currentDir: string): string | null {
   }
 
   return null;
-}
+};
 
 const clientDistDir = resolveClientDistDir(__dirname);
-const builtClientIndex = clientDistDir ? path.join(clientDistDir, "index.html") : null;
-const hasBuiltClient = Boolean(clientDistDir && builtClientIndex);
+const clientIndexFile = clientDistDir ? path.join(clientDistDir, "index.html") : null;
 
-const service = new AppExecutionService();
+const serveStaticPage = (page: string) => (_request: express.Request, response: express.Response) => {
+  response.sendFile(path.join(publicDir, page));
+};
+const serveClientApp = (_request: express.Request, response: express.Response) => {
+  if (clientIndexFile) {
+    response.sendFile(clientIndexFile);
+    return;
+  }
+
+  response.sendFile(path.join(publicDir, "index.html"));
+};
+
+const resolveCookieDomain = (request: express.Request): string | undefined => {
+  const host = String(request.headers.host ?? "").split(":")[0].toLowerCase();
+  const configured = config.webCookieDomain.trim().replace(/^\./, "").toLowerCase();
+  if (!configured || !host) {
+    return undefined;
+  }
+
+  return host === configured || host.endsWith(`.${configured}`) ? config.webCookieDomain : undefined;
+};
+
+const setAuthCookie = (request: express.Request, response: express.Response, session: unknown) => {
+  response.cookie(authCookieName, typeof session === "string" ? session : JSON.stringify(session), {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: false,
+    path: "/",
+    ...(resolveCookieDomain(request) ? { domain: resolveCookieDomain(request) } : {}),
+    maxAge: 1000 * 60 * 60 * 24 * 30,
+  });
+};
+
+const clearAuthCookie = (request: express.Request, response: express.Response) => {
+  response.clearCookie(authCookieName, {
+    sameSite: "lax",
+    secure: false,
+    path: "/",
+    ...(resolveCookieDomain(request) ? { domain: resolveCookieDomain(request) } : {}),
+  });
+};
 
 app.get("/api/health", (_request, response) => {
   response.json({ ok: true, service: "app-execution" });
@@ -57,236 +104,268 @@ app.get("/health", (_request, response) => {
   response.json({ ok: true, service: "app-execution" });
 });
 
-app.get("/login", (request, response) => {
-  auth.handleLoginPage(request, response);
+app.get("/api/batch-signals", async (request, response) => {
+  response.json(
+    await moneyRadar.getBatchSignals({
+      category: typeof request.query.category === "string" ? request.query.category : undefined,
+      israelFilter: String(request.query.israelFilter ?? "").toLowerCase() === "true",
+      limit: Number(request.query.limit ?? 25),
+      sortBy: typeof request.query.sortBy === "string" ? request.query.sortBy : undefined,
+    }),
+  );
 });
 
-app.post("/login", async (request, response) => {
-  await auth.handleLogin(request, response);
+app.get("/api/smart-traders", async (request, response) => {
+  response.json(await moneyRadar.getSmartTraders(Math.max(1, Number(request.query.limit ?? 20))));
 });
 
-app.get("/logout", (request, response) => {
-  auth.handleLogout(request, response);
+app.post("/api/analyze", async (request, response) => {
+  response.json(
+    await moneyRadar.analyzeMarket({
+      url: String(request.body.url ?? ""),
+      context: String(request.body.context ?? ""),
+      selectedMarketSlug: String(request.body.selectedMarketSlug ?? ""),
+    }),
+  );
 });
 
-app.get("/api/snapshot", async (_request, response) => {
-  response.json(await service.getSnapshot());
+app.get("/api/signal-detail", async (request, response) => {
+  response.json(await moneyRadar.getSignalDetail(String(request.query.slug ?? "")));
 });
 
-app.get("/api/profile", async (request, response) => {
-  try {
-    if (!request.sessionUser?.username) {
-      response.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-
-    response.json(await service.getUserProfile(request.sessionUser.username));
-  } catch (error) {
-    response.status(400).json({
-      error: error instanceof Error ? error.message : "Unable to load profile",
-    });
-  }
-});
-
-app.put("/api/profile", async (request, response) => {
-  try {
-    if (!request.sessionUser?.username) {
-      response.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-
-    const webhookUrl = String(request.body.webhookUrl ?? "");
-    const monitoredWallet = String(request.body.monitoredWallet ?? "");
-    const paperTradingEnabled = Boolean(request.body.paperTradingEnabled);
-    const liveTradingEnabled = Boolean(request.body.liveTradingEnabled);
-    const startingBalanceUsd = Number(request.body.startingBalanceUsd ?? 1000);
-    const riskPercent = Number(request.body.riskPercent ?? 5);
-    const edgeSwingPaperTradingEnabled = Boolean(request.body.edgeSwingPaperTradingEnabled);
-    const edgeSwingLiveTradingEnabled = Boolean(request.body.edgeSwingLiveTradingEnabled);
-    const edgeSwingStartingBalanceUsd = Number(request.body.edgeSwingStartingBalanceUsd ?? 1000);
-    const edgeSwingRiskPercent = Number(request.body.edgeSwingRiskPercent ?? 5);
-    const tradingWalletAddress = String(request.body.tradingWalletAddress ?? "");
-    const tradingSignatureType =
-      String(request.body.tradingSignatureType ?? "EOA") === "POLY_PROXY" ? "POLY_PROXY" : "EOA";
-    const privateKey = String(request.body.privateKey ?? "");
-    const apiKey = String(request.body.apiKey ?? "");
-    const apiSecret = String(request.body.apiSecret ?? "");
-    const apiPassphrase = String(request.body.apiPassphrase ?? "");
-    const clearTradingCredentials = Boolean(request.body.clearTradingCredentials);
-    response.json(
-      await service.updateUserProfile(request.sessionUser.username, {
-        webhookUrl,
-        monitoredWallet,
-        paperTradingEnabled,
-        liveTradingEnabled,
-        startingBalanceUsd,
-        riskPercent,
-        edgeSwingPaperTradingEnabled,
-        edgeSwingLiveTradingEnabled,
-        edgeSwingStartingBalanceUsd,
-        edgeSwingRiskPercent,
-        tradingWalletAddress,
-        tradingSignatureType,
-        privateKey,
-        apiKey,
-        apiSecret,
-        apiPassphrase,
-        clearTradingCredentials,
-      }),
-    );
-  } catch (error) {
-    response.status(400).json({
-      error: error instanceof Error ? error.message : "Unable to save profile",
-    });
-  }
+app.get("/api/history-prices", async (request, response) => {
+  response.json(await moneyRadar.getHistoryPrices(String(request.query.slug ?? "")));
 });
 
 app.get("/api/markets", async (request, response) => {
-  const sortParam = String(request.query.sort ?? "recent");
-  const sort = (
-    ["recent", "weighted", "buyWeight", "flow", "participants"].includes(sortParam)
-      ? sortParam
-      : "recent"
-  ) as "recent" | "weighted" | "buyWeight" | "flow" | "participants";
-  const view = String(request.query.view ?? "monitor") === "best" ? "best" : "monitor";
-  const search = String(request.query.search ?? "");
-  const page = Number(request.query.page ?? 1);
-  const pageSize = Number(request.query.pageSize ?? 24);
-  response.json(await service.getMarketPage(sort, search, view, page, pageSize, request.sessionUser?.username));
+  response.json(
+    await moneyRadar.getMarkets({
+      offset: Number(request.query.offset ?? 0),
+      limit: Number(request.query.limit ?? 1000),
+      category: typeof request.query.category === "string" ? request.query.category : undefined,
+    }),
+  );
 });
 
-app.get("/api/gaps", async (request, response) => {
-  const page = Number(request.query.page ?? 1);
-  const pageSize = Number(request.query.pageSize ?? 24);
-  response.json(await service.getGapPage(page, pageSize));
+app.post("/api/markets", async (request, response) => {
+  const slug = String(request.body.slug ?? "");
+  response.json(await moneyRadar.getMarketDetail(slug));
 });
 
-app.get("/api/strategy-positions", async (request, response) => {
-  if (!request.sessionUser?.username) {
-    response.status(401).json({ error: "Unauthorized" });
-    return;
-  }
-
-  const strategyKey = String(request.query.strategy ?? "best_trades") === "edge_swing" ? "edge_swing" : "best_trades";
-  response.json(await service.getStrategyPositions(request.sessionUser.username, strategyKey));
+app.post("/api/markets/prices", async (request, response) => {
+  const slugs = Array.isArray(request.body.slugs)
+    ? request.body.slugs.map((entry: unknown) => String(entry ?? "")).filter(Boolean)
+    : [];
+  response.json(await moneyRadar.getMarketPrices(slugs));
 });
 
-app.get("/api/live-strategy-positions", async (request, response) => {
-  if (!request.sessionUser?.username) {
-    response.status(401).json({ error: "Unauthorized" });
-    return;
-  }
-
-  const strategyKey = String(request.query.strategy ?? "best_trades") === "edge_swing" ? "edge_swing" : "best_trades";
-  response.json(await service.getLiveStrategyPositions(request.sessionUser.username, strategyKey));
+app.post("/api/markets/refresh", async (_request, response) => {
+  response.json(await moneyRadar.refreshMarkets());
 });
 
-app.post("/api/market-alerts/watch", async (request, response) => {
-  try {
-    const marketSlug = String(request.body.marketSlug ?? "").trim();
-    const outcome = String(request.body.outcome ?? "").trim();
-
-    if (!request.sessionUser?.username) {
-      response.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-
-    if (!marketSlug || !outcome) {
-      response.status(400).json({ error: "Market slug and outcome are required" });
-      return;
-    }
-
-    response.json(await service.watchMarket(request.sessionUser.username, marketSlug, outcome));
-  } catch (error) {
-    response.status(400).json({
-      error: error instanceof Error ? error.message : "Unable to update watch",
-    });
-  }
+app.get("/api/me", async (request, response) => {
+  response.json(await moneyRadar.getSession(request.headers.cookie ?? ""));
 });
 
-app.delete("/api/market-alerts/watch/:marketSlug", async (request, response) => {
-  try {
-    const marketSlug = String(request.params.marketSlug ?? "").trim();
-    const outcome = String(request.query.outcome ?? "").trim();
-
-    if (!request.sessionUser?.username) {
-      response.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-
-    if (!marketSlug || !outcome) {
-      response.status(400).json({ error: "Market slug and outcome are required" });
-      return;
-    }
-
-    response.json(await service.unwatchMarket(request.sessionUser.username, marketSlug, outcome));
-  } catch (error) {
-    response.status(400).json({
-      error: error instanceof Error ? error.message : "Unable to update watch",
-    });
-  }
-});
-
-if (hasBuiltClient && clientDistDir && builtClientIndex) {
-  app.use(express.static(clientDistDir));
-
-  app.get("*", (request, response, next) => {
-    if (request.path.startsWith("/api") || request.path === "/ws") {
-      next();
-      return;
-    }
-
-    response.sendFile(builtClientIndex);
+app.post("/api/login", async (request, response) => {
+  const result = await moneyRadar.login({
+    email: String(request.body.email ?? ""),
+    password: String(request.body.password ?? ""),
   });
+
+  if (!result.success) {
+    response.status(401).json(result);
+    return;
+  }
+
+  if ("session" in result && result.session && typeof result.session === "object" && "id" in result.session) {
+    setAuthCookie(request, response, String((result.session as { id: unknown }).id ?? ""));
+  }
+
+  response.json(result);
+});
+
+app.post("/api/logout", (request, response) => {
+  clearAuthCookie(request, response);
+  response.json({ success: true });
+});
+
+app.post("/api/check-subscription", async (request, response) => {
+  response.json(await moneyRadar.checkSubscription(request.headers.cookie ?? ""));
+});
+
+app.post("/api/signup", async (request, response) => {
+  const result = await moneyRadar.signup({
+    email: String(request.body.email ?? ""),
+    password: String(request.body.password ?? ""),
+  });
+
+  if (!result.success) {
+    response.status(400).json(result);
+    return;
+  }
+
+  if ("session" in result && result.session && typeof result.session === "object" && "id" in result.session) {
+    setAuthCookie(request, response, String((result.session as { id: unknown }).id ?? ""));
+  }
+
+  response.json(result);
+});
+
+app.post("/api/request-password-reset", async (request, response) => {
+  const result = await moneyRadar.requestPasswordReset({
+    email: String(request.body.email ?? ""),
+  });
+
+  response.status(result.success ? 200 : 400).json(result);
+});
+
+app.get("/api/reset-password/validate", async (request, response) => {
+  const result = await moneyRadar.validatePasswordResetToken(String(request.query.token ?? ""));
+  response.status(result.success ? 200 : 400).json(result);
+});
+
+app.post("/api/reset-password", async (request, response) => {
+  const result = await moneyRadar.resetPassword({
+    token: String(request.body.token ?? ""),
+    password: String(request.body.password ?? ""),
+  });
+
+  if (!result.success) {
+    response.status(400).json(result);
+    return;
+  }
+
+  if ("session" in result && result.session && typeof result.session === "object" && "id" in result.session) {
+    setAuthCookie(request, response, String((result.session as { id: unknown }).id ?? ""));
+  }
+
+  response.json(result);
+});
+
+app.post("/api/credit-request", async (_request, response) => {
+  response.json(await moneyRadar.requestCredits());
+});
+
+app.post("/api/accept-terms", async (request, response) => {
+  const result = await moneyRadar.acceptTerms(request.headers.cookie ?? "");
+  response.status(result.success ? 200 : 401).json(result);
+});
+
+app.get("/api/broadcast", async (_request, response) => {
+  response.json(await moneyRadar.broadcast());
+});
+
+app.post("/api/broadcast", async (request, response) => {
+  const result = await moneyRadar.postBroadcast(request.headers.cookie ?? "", {
+    message: String(request.body.message ?? ""),
+  });
+
+  response.status(result.success ? 200 : 400).json(result);
+});
+
+app.get("/api/favorites/markets", async (request, response) => {
+  response.json(await moneyRadar.getFavoriteMarkets(request.headers.cookie ?? ""));
+});
+
+app.post("/api/favorites/markets", async (request, response) => {
+  const result = await moneyRadar.saveFavoriteMarket(request.headers.cookie ?? "", {
+    market_id: String(request.body.market_id ?? ""),
+    slug: String(request.body.slug ?? ""),
+    question: String(request.body.question ?? ""),
+    category: String(request.body.category ?? ""),
+    url: String(request.body.url ?? ""),
+    saved_price: Number(request.body.saved_price ?? Number.NaN),
+  });
+
+  if ("error" in result) {
+    response.status(401).json(result);
+    return;
+  }
+
+  response.json(result);
+});
+
+app.delete("/api/favorites/markets", async (request, response) => {
+  response.json(
+    await moneyRadar.deleteFavoriteMarket(request.headers.cookie ?? "", String(request.query.market_id ?? "")),
+  );
+});
+
+app.get("/api/favorites/trades", async (request, response) => {
+  response.json(await moneyRadar.getFavoriteTrades(request.headers.cookie ?? ""));
+});
+
+app.post("/api/favorites/trades", async (request, response) => {
+  const result = await moneyRadar.saveFavoriteTrade(request.headers.cookie ?? "", {
+    ...(request.body as Record<string, unknown>),
+    trade_id: String(request.body.trade_id ?? ""),
+  });
+
+  if ("error" in result) {
+    response.status(401).json(result);
+    return;
+  }
+
+  response.json(result);
+});
+
+app.delete("/api/favorites/trades", async (request, response) => {
+  response.json(
+    await moneyRadar.deleteFavoriteTrade(request.headers.cookie ?? "", String(request.query.trade_id ?? "")),
+  );
+});
+
+app.get("/legacy", serveStaticPage("index.html"));
+app.get("/legacy/", serveStaticPage("index.html"));
+app.get("/legacy/login", serveStaticPage("login.html"));
+app.get("/legacy/about", serveStaticPage("about.html"));
+app.get("/legacy/faq", serveStaticPage("faq.html"));
+app.get("/legacy/privacy", serveStaticPage("privacy.html"));
+app.get("/legacy/terms", serveStaticPage("terms.html"));
+app.get("/legacy/signals", serveStaticPage("loginc1b0.html"));
+app.get("/legacy/markets", serveStaticPage("logind029.html"));
+app.get("/legacy/smart-traders", serveStaticPage("loginfb40.html"));
+app.get("/legacy/chat", serveStaticPage("login8fb7.html"));
+app.get("/legacy/history", serveStaticPage("login3a6b.html"));
+app.get("/legacy/auth/callback", serveStaticPage("login.html"));
+app.get("/legacy/auth/confirm", serveStaticPage("login.html"));
+app.get("/legacy/reset-password", serveStaticPage("login.html"));
+
+app.get("/", serveClientApp);
+app.get("/login", serveClientApp);
+app.get("/about", serveClientApp);
+app.get("/faq", serveClientApp);
+app.get("/privacy", serveClientApp);
+app.get("/terms", serveClientApp);
+app.get("/signals", serveClientApp);
+app.get("/markets", serveClientApp);
+app.get("/smart-traders", serveClientApp);
+app.get("/chat", serveClientApp);
+app.get("/history", serveClientApp);
+app.get("/auth/callback", serveClientApp);
+app.get("/auth/confirm", serveClientApp);
+app.get("/reset-password", serveClientApp);
+
+app.use("/static", express.static(path.join(publicDir, "static")));
+app.use(express.static(publicDir, { extensions: ["html"] }));
+if (clientDistDir) {
+  app.use(express.static(clientDistDir));
 }
 
-const server = createServer(app);
-const wss = new WebSocketServer({ noServer: true });
-
-wss.on("connection", (socket) => {
-  let unsubscribeSignal = () => {};
-
-  void (async () => {
-    socket.send(JSON.stringify({ type: "snapshot", payload: await service.getSnapshot() }));
-
-    unsubscribeSignal = service.onSignal((signal) => {
-      socket.send(JSON.stringify({ type: "signal", payload: signal }));
-    });
-  })();
-
-  socket.on("close", () => {
-    unsubscribeSignal();
-  });
-});
-
-server.on("upgrade", (request, socket, head) => {
-  if (request.url !== "/ws") {
-    socket.destroy();
+app.get("*", (_request, response) => {
+  if (clientIndexFile) {
+    response.sendFile(clientIndexFile);
     return;
   }
 
-  void (async () => {
-    const sessionUser = await auth.getRequestUser(request);
-    if (!sessionUser) {
-      socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
-      socket.destroy();
-      return;
-    }
-
-    wss.handleUpgrade(request, socket, head, (websocket) => {
-      wss.emit("connection", websocket, request);
-    });
-  })().catch(() => {
-    socket.write("HTTP/1.1 500 Internal Server Error\r\n\r\n");
-    socket.destroy();
-  });
+  response.sendFile(path.join(publicDir, "index.html"));
 });
 
-void (async () => {
-  await auth.connect();
-  await service.start();
-})();
+const server = createServer(app);
+
+void moneyRadar.start();
 
 server.listen(config.port, () => {
-  console.log(`App execution listening on http://localhost:${config.port}`);
+  console.log(`Money Radar clone listening on http://localhost:${config.port}`);
 });

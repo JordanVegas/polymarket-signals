@@ -1,0 +1,22 @@
+fetch("https://www.themoneyradar.com/api/markets/prices", {
+  "headers": {
+    "accept": "*/*",
+    "accept-language": "en-US,en;q=0.5",
+    "content-type": "application/json",
+    "priority": "u=1, i",
+    "sec-ch-ua": "\"Chromium\";v=\"146\", \"Not-A.Brand\";v=\"24\", \"Brave\";v=\"146\"",
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": "\"Windows\"",
+    "sec-fetch-dest": "empty",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "same-origin",
+    "sec-gpc": "1"
+  },
+  "referrer": "https://www.themoneyradar.com/",
+  "body": "{\"slugs\":[\"will-mark-cuban-win-the-2028-democratic-presidential-nomination-329\",\"will-corey-booker-win-the-2028-democratic-presidential-nomination-125\",\"will-usa-win-the-2026-fifa-world-cup-467\",\"will-uruguay-win-the-2026-fifa-world-cup-932\",\"will-jesus-christ-return-before-2027\",\"will-elon-musk-win-the-2028-republican-presidential-nomination\",\"will-england-win-the-2026-fifa-world-cup-937\",\"will-vivek-ramaswamy-win-the-2028-republican-presidential-nomination\",\"will-john-fetterman-win-the-2028-democratic-presidential-nomination-941\",\"will-tulsi-gabbard-win-the-2028-republican-presidential-nomination\",\"will-michelle-obama-win-the-2028-democratic-presidential-nomination-777\",\"will-germany-win-the-2026-fifa-world-cup-467\",\"will-croatia-win-the-2026-fifa-world-cup\",\"will-jon-stewart-win-the-2028-democratic-presidential-nomination-518\",\"will-argentina-win-the-2026-fifa-world-cup-245\",\"will-the-iranian-regime-fall-by-june-30\",\"will-colombia-win-the-2026-fifa-world-cup-734\",\"will-france-win-the-2026-fifa-world-cup-924\",\"will-brazil-win-the-2026-fifa-world-cup-183\",\"will-switzerland-win-the-2026-fifa-world-cup\"]}",
+  "method": "POST",
+  "mode": "cors",
+  "credentials": "omit"
+});
+
+{"success":true,"prices":{"will-england-win-the-2026-fifa-world-cup-937":{"yesPrice":0.1135,"noPrice":0.8865},"will-france-win-the-2026-fifa-world-cup-924":{"yesPrice":0.1375,"noPrice":0.8625},"will-brazil-win-the-2026-fifa-world-cup-183":{"yesPrice":0.0855,"noPrice":0.9145},"will-argentina-win-the-2026-fifa-world-cup-245":{"yesPrice":0.091,"noPrice":0.909},"will-germany-win-the-2026-fifa-world-cup-467":{"yesPrice":0.0535,"noPrice":0.9465},"will-usa-win-the-2026-fifa-world-cup-467":{"yesPrice":0.0145,"noPrice":0.9855},"will-uruguay-win-the-2026-fifa-world-cup-932":{"yesPrice":0.0115,"noPrice":0.9885},"will-colombia-win-the-2026-fifa-world-cup-734":{"yesPrice":0.0175,"noPrice":0.9825},"will-switzerland-win-the-2026-fifa-world-cup":{"yesPrice":0.0105,"noPrice":0.9895},"will-croatia-win-the-2026-fifa-world-cup":{"yesPrice":0.0105,"noPrice":0.9895},"will-mark-cuban-win-the-2028-democratic-presidential-nomination-329":{"yesPrice":0.0105,"noPrice":0.9895},"will-corey-booker-win-the-2028-democratic-presidential-nomination-125":{"yesPrice":0.0105,"noPrice":0.9895},"will-michelle-obama-win-the-2028-democratic-presidential-nomination-777":{"yesPrice":0.0135,"noPrice":0.9865},"will-john-fetterman-win-the-2028-democratic-presidential-nomination-941":{"yesPrice":0.0115,"noPrice":0.9885},"will-jon-stewart-win-the-2028-democratic-presidential-nomination-518":{"yesPrice":0.0225,"noPrice":0.9775},"will-tulsi-gabbard-win-the-2028-republican-presidential-nomination":{"yesPrice":0.0115,"noPrice":0.9885},"will-vivek-ramaswamy-win-the-2028-republican-presidential-nomination":{"yesPrice":0.0115,"noPrice":0.9885},"will-elon-musk-win-the-2028-republican-presidential-nomination":{"yesPrice":0.011,"noPrice":0.989},"will-jesus-christ-return-before-2027":{"yesPrice":0.0385,"noPrice":0.9615},"will-the-iranian-regime-fall-by-june-30":{"yesPrice":0.075,"noPrice":0.925}}}
