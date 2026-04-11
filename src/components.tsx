@@ -149,7 +149,7 @@ export function Sidebar({
           </a>
           <div>
             <strong>רדאר הכסף</strong>
-            <small>React-native clone</small>
+            <small>×ž×—×§×¨ ×©×•×•×§×™×</small>
           </div>
         </div>
 

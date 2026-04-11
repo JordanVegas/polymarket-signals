@@ -250,7 +250,7 @@ export function HomePage({
     <div className="page-stack">
       <section className="hero-panel">
         <div className="hero-copy">
-          <span className="eyebrow">Money Radar React</span>
+          <span className="eyebrow">Money Radar</span>
           <h1>
             רדאר שוק React-native
             <br />
@@ -1319,10 +1319,22 @@ export function AuthStatusPage({
   mode: "callback" | "confirm";
   navigate: (route: AppRoute) => void;
 }) {
-  const params = new URLSearchParams(window.location.search);
-  const token = params.get("token") ?? params.get("access_token") ?? "";
-  const nextPath = params.get("next");
-  const type = params.get("type");
+  const searchParams = new URLSearchParams(window.location.search);
+  const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  const token =
+    searchParams.get("token")
+    ?? hashParams.get("token")
+    ?? searchParams.get("access_token")
+    ?? hashParams.get("access_token")
+    ?? "";
+  const nextPath = searchParams.get("next") ?? hashParams.get("next");
+  const type = searchParams.get("type") ?? hashParams.get("type");
+  const callbackError =
+    searchParams.get("error_description")
+    ?? hashParams.get("error_description")
+    ?? searchParams.get("error")
+    ?? hashParams.get("error");
+  const hasSessionHint = Boolean(token || searchParams.get("access_token") || hashParams.get("access_token"));
   const title = mode === "callback" ? "אימות חשבון" : "אישור גישה";
   const description =
     mode === "callback"
@@ -1339,12 +1351,16 @@ export function AuthStatusPage({
             אם נחבר בהמשך auth מלא ל-Supabase או למערכת משתמשים אחרת, זה יהיה המסך שיציג סטטוס אמת, שגיאות,
             והמשך אוטומטי לאפליקציה.
           </p>
+          {callbackError ? <div className="error-banner">{callbackError}</div> : null}
           {type === "recovery" && token ? (
             <div className="notice-banner">
               Recovery token detected.
               {" "}
               <a href={`/reset-password?token=${encodeURIComponent(token)}`}>Continue to password reset</a>
             </div>
+          ) : null}
+          {hasSessionHint && !callbackError && mode === "callback" ? (
+            <div className="notice-banner">Authentication details were received. Redirecting into the app.</div>
           ) : null}
           {nextPath ? <div className="notice-banner">Next destination: {nextPath}</div> : null}
           <div className="button-row">

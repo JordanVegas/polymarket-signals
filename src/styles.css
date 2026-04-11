@@ -1025,3 +1025,251 @@ textarea:focus {
     border-radius: 1.2rem;
   }
 }
+
+/* Lighter, closer-to-original shell */
+:root {
+  background: #0c1117;
+  color: #eef4fb;
+  --line: #243041;
+  --text: #eef4fb;
+  --text-soft: #b2c0d2;
+  --text-muted: #8393a8;
+  --accent: #37a8ff;
+  --shadow: none;
+}
+
+body.money-radar-react {
+  background: #0c1117;
+}
+
+.app-shell {
+  display: block;
+  min-height: 100vh;
+}
+
+.sidebar {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 16rem;
+  gap: 1rem;
+  padding: 1rem;
+  background: #11161d;
+  border-left: 1px solid var(--line);
+  backdrop-filter: none;
+  box-shadow: none;
+}
+
+.sidebar-brand {
+  gap: 0.5rem;
+  padding-bottom: 0.75rem;
+}
+
+.sidebar-brand img {
+  width: 8.5rem;
+  height: 8.5rem;
+}
+
+.sidebar-link {
+  gap: 0.75rem;
+  padding: 0.75rem 0.9rem;
+  border-radius: 0.85rem;
+  color: var(--text-soft);
+}
+
+.sidebar-link:hover,
+.sidebar-link-active {
+  color: #ffffff;
+  border-color: #2d3a4d;
+  background: #1a2230;
+}
+
+.sidebar-icon {
+  width: 1.9rem;
+  height: 1.9rem;
+  border-radius: 0.7rem;
+  background: #18202b;
+}
+
+.main-shell {
+  margin-right: 16rem;
+  padding: 1.5rem;
+}
+
+.page-stack {
+  max-width: 1280px;
+  margin: 0 auto;
+  gap: 1rem;
+}
+
+.page-intro,
+.hero-panel,
+.hero-card,
+.toolbar-card,
+.detail-panel,
+.chat-panel,
+.market-table,
+.legacy-bridge .detail-panel,
+.signal-card,
+.modal-card,
+.market-row,
+.chat-message,
+.selection-item,
+.history-item {
+  background: #141b24;
+  border: 1px solid var(--line);
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.page-intro,
+.hero-card,
+.toolbar-card,
+.detail-panel,
+.chat-panel,
+.legacy-bridge .detail-panel {
+  padding: 1rem 1.1rem;
+}
+
+.hero-panel {
+  grid-template-columns: 1fr;
+  gap: 1rem;
+  padding: 1.25rem 1rem 1rem;
+  text-align: center;
+}
+
+.hero-copy h1,
+.page-intro h1 {
+  font-size: clamp(2rem, 4vw, 3.2rem);
+  line-height: 1.05;
+}
+
+.hero-accent {
+  color: var(--accent);
+}
+
+.hero-grid {
+  display: none;
+}
+
+.hero-actions,
+.tab-strip {
+  justify-content: center;
+}
+
+.tab-chip {
+  padding: 0.7rem 0.95rem;
+  background: #1a2230;
+  border: 1px solid #263446;
+  color: var(--text-soft);
+}
+
+.tab-chip:hover,
+.tab-chip-active {
+  background: linear-gradient(90deg, #2563eb, #1d4ed8);
+  border-color: transparent;
+  color: #ffffff;
+}
+
+.section-heading,
+.page-intro,
+.panel-head,
+.modal-head {
+  align-items: center;
+}
+
+.card-grid {
+  gap: 0.85rem;
+}
+
+.signal-card {
+  border-radius: 0.95rem;
+}
+
+.signal-image {
+  aspect-ratio: auto;
+  height: 170px;
+  background: #10161f;
+}
+
+.signal-overlay {
+  padding: 0.75rem;
+  background: linear-gradient(180deg, transparent, rgba(12, 17, 23, 0.84));
+}
+
+.signal-body {
+  gap: 0.7rem;
+  padding: 0.9rem;
+}
+
+.signal-body p {
+  min-height: 0;
+}
+
+.signal-meter {
+  height: 0.4rem;
+}
+
+.market-table {
+  gap: 0.65rem;
+  padding: 0.8rem;
+}
+
+.market-row {
+  padding: 0.85rem 0.95rem;
+}
+
+.metric-pills span,
+.market-metrics span,
+.signal-badge,
+.signal-price,
+.selection-item span {
+  background: #1b2430;
+  border: 1px solid #293548;
+}
+
+.primary-button {
+  background: #2f80ed;
+  color: #ffffff;
+}
+
+.primary-button:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+.ghost-button,
+.link-button {
+  background: #1a2230;
+  border: 1px solid #293548;
+}
+
+.ghost-button:hover,
+.link-button:hover {
+  background: #202a38;
+  border-color: #334155;
+}
+
+.modal-backdrop {
+  background: rgba(5, 8, 12, 0.76);
+  backdrop-filter: none;
+}
+
+.modal-card {
+  border-radius: 1rem;
+}
+
+.mobile-toggle {
+  background: #141b24;
+}
+
+@media (max-width: 980px) {
+  .main-shell {
+    margin-right: 0;
+    padding: 4.2rem 1rem 1rem;
+  }
+
+  .sidebar {
+    width: min(84vw, 18rem);
+  }
+}
